@@ -2,7 +2,7 @@ asyncapi: 3.0.0
 
 info:
   title: Integratieproject 2026 — CRM (Salesforce) RabbitMQ Contracts
-  version: 1.0.0
+  version: 1.1.0
   description: |
     XML-contracten voor alle 12 integraties waarbij het CRM-team (Salesforce) betrokken is.
     Elk contract legt vast wie naar wie stuurt, via welke queue en in welk XML-formaat.
@@ -16,7 +16,7 @@ servers:
   production:
     host: integrationproject-2526s2-dag02.westeurope.cloudapp.azure.com:5672
     protocol: amqp
-    description: "Azure VM — RabbitMQ broker (Infra team). Poort 5672 nog niet bevestigd open (zie infra-vm.md). RabbitMQ credentials pending bij Infra."
+    description: "Azure VM — RabbitMQ broker (Infra team). Poort 5672 nog niet bevestigd open (zie infra-vm.md). RabbitMQ credentials bij Infra."
     security:
       - $ref: "#/components/securitySchemes/rabbitmq"
 
@@ -26,7 +26,7 @@ channels:
   # ─── CONTRACT 1 ─────────────────────────────────────────────────────────────
   frontendRegistrationCreated:
     address: frontend.registration.created
-    description: "Contract 1 — Frontend → CRM: nieuwe inschrijving aanmaken (US-02, US-04, US-05, US-19 | R1)"
+    description: "Contract 1 — Frontend → CRM: nieuwe inschrijving aanmaken (US-02, US-03, US-04, US-05, US-19 | R1)"
     messages:
       registrationCreated:
         $ref: "#/components/messages/RegistrationCreated"
@@ -180,7 +180,7 @@ channels:
   # ─── CONTRACT 11 ─────────────────────────────────────────────────────────────
   planningSessionUpdated:
     address: planning.session.updated
-    description: "Contract 11 — Planning → CRM: sessiewijziging (US-23 R1, US-38 R3)"
+    description: "Contract 11 — Planning → CRM: sessiewijziging (US-23 R1). US-38 (sprekernotificatie R3) is verantwoordelijkheid van Planning/Mailing — CRM beheert geen sprekerdata."
     messages:
       sessionUpdate:
         $ref: "#/components/messages/SessionUpdate"
@@ -309,7 +309,7 @@ operations:
     action: receive
     channel:
       $ref: "#/channels/planningSessionUpdated"
-    summary: Ontvang sessiewijziging van Planning en notificeer betrokken deelnemers via Mailing
+    summary: Ontvang sessiewijziging van Planning en notificeer betrokken deelnemers via Mailing (US-23). Sprekernotificaties (US-38) zijn buiten scope voor CRM.
     tags:
       - name: planning
       - name: release-1
@@ -333,6 +333,7 @@ components:
       contentType: application/xml
       tags:
         - name: "US-02"
+        - name: "US-03"
         - name: "US-04"
         - name: "US-05"
         - name: "US-19"
@@ -473,6 +474,7 @@ components:
             <?xml version="1.0" encoding="UTF-8"?>
             <company_response>
               <requestId>REQ-001</requestId>
+              <found>true</found>
               <name>Bedrijf NV</name>
               <vatNumber>BE0123456789</vatNumber>
               <email>info@bedrijf.be</email>
@@ -483,6 +485,7 @@ components:
             <?xml version="1.0" encoding="UTF-8"?>
             <company_response>
               <requestId>REQ-001</requestId>
+              <found>false</found>
             </company_response>
 
     MailRequest:
@@ -491,8 +494,10 @@ components:
       summary: CRM stuurt per ontvanger een apart bericht — geen lijsten in één XML
       contentType: application/xml
       tags:
+        - name: "US-03"
         - name: "US-22"
         - name: "US-23"
+        - name: "US-24"
       payload:
         $ref: "#/components/schemas/MailRequest"
       examples:
@@ -659,7 +664,6 @@ components:
       contentType: application/xml
       tags:
         - name: "US-23"
-        - name: "US-38"
       payload:
         $ref: "#/components/schemas/SessionUpdate"
       examples:
@@ -679,7 +683,6 @@ components:
             <session_update>
               <sessionId>SESSION-001</sessionId>
               <sessionName>Workshop AI</sessionName>
-              <newTime>2026-04-15T15:00:00Z</newTime>
               <changeType>cancelled</changeType>
             </session_update>
 
@@ -754,6 +757,7 @@ components:
       description: |
         Bij cancelled: Contact deactiveren — geen verwijdering (US-55 GDPR = R3)
         US-46 (offline buffering R3): zelfde queue, lokale buffer in receiver
+        US-34/US-35 (R2): bij conflicterende persoonsdata beide waarden loggen als error en melding genereren — interne CRM-logica, geen apart contract
 
     CompanyCreated:
       type: object
@@ -803,23 +807,27 @@ components:
       type: object
       required:
         - requestId
+        - found
       properties:
         requestId:
           type: string
           description: Correleert met het oorspronkelijke request
+        found:
+          type: boolean
+          description: true indien bedrijf gevonden, false indien niet gevonden
         name:
           type: string
-          description: Optioneel — leeg indien bedrijf niet gevonden
+          description: Optioneel — alleen aanwezig als found=true
         vatNumber:
           type: string
-          description: Optioneel — leeg indien bedrijf niet gevonden
+          description: Optioneel — alleen aanwezig als found=true
         email:
           type: string
           format: email
-          description: Optioneel — leeg indien bedrijf niet gevonden
+          description: Optioneel — alleen aanwezig als found=true
         address:
           type: string
-          description: Optioneel — leeg indien bedrijf niet gevonden
+          description: Optioneel — alleen aanwezig als found=true
 
     MailRequest:
       type: object
@@ -988,7 +996,6 @@ components:
       required:
         - sessionId
         - sessionName
-        - newTime
         - changeType
       properties:
         sessionId:
@@ -998,7 +1005,7 @@ components:
         newTime:
           type: string
           format: date-time
-          description: ISO 8601 UTC
+          description: "ISO 8601 UTC — verplicht bij rescheduled en updated, niet van toepassing bij cancelled"
         changeType:
           type: string
           enum: [rescheduled, cancelled, updated]
