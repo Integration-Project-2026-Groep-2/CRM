@@ -18,19 +18,18 @@ servers:
     protocol: amqp
     description: "Azure VM — RabbitMQ broker (Infra team). Poort 5672 nog niet bevestigd open (zie infra-vm.md). RabbitMQ credentials pending bij Infra."
     security:
-      - $ref: '#/components/securitySchemes/rabbitmq'
+      - $ref: "#/components/securitySchemes/rabbitmq"
 
 defaultContentType: application/xml
 
 channels:
-
   # ─── CONTRACT 1 ─────────────────────────────────────────────────────────────
   frontendRegistrationCreated:
     address: frontend.registration.created
     description: "Contract 1 — Frontend → CRM: nieuwe inschrijving aanmaken (US-02, US-04, US-05, US-19 | R1)"
     messages:
       registrationCreated:
-        $ref: '#/components/messages/RegistrationCreated'
+        $ref: "#/components/messages/RegistrationCreated"
     bindings:
       amqp:
         is: queue
@@ -43,7 +42,7 @@ channels:
     description: "Contract 2 — Frontend → CRM: inschrijving wijzigen of annuleren (US-21 R1, US-33 R2)"
     messages:
       registrationChanged:
-        $ref: '#/components/messages/RegistrationChanged'
+        $ref: "#/components/messages/RegistrationChanged"
     bindings:
       amqp:
         is: queue
@@ -56,7 +55,7 @@ channels:
     description: "Contract 3 — Facturatie → CRM: nieuw bedrijf aanmaken als Account in Salesforce (US-40, US-20 | R1)"
     messages:
       companyCreated:
-        $ref: '#/components/messages/CompanyCreated'
+        $ref: "#/components/messages/CompanyCreated"
     bindings:
       amqp:
         is: queue
@@ -69,7 +68,7 @@ channels:
     description: "Contract 4 — Facturatie → CRM: bedrijfsgegevens updaten (US-41 | R2)"
     messages:
       companyUpdated:
-        $ref: '#/components/messages/CompanyUpdated'
+        $ref: "#/components/messages/CompanyUpdated"
     bindings:
       amqp:
         is: queue
@@ -82,7 +81,7 @@ channels:
     description: "Contract 5 (request) — Facturatie → CRM: bedrijfsdata opvragen via vatNumber (US-40, US-20 | R1)"
     messages:
       companyDataRequest:
-        $ref: '#/components/messages/CompanyDataRequest'
+        $ref: "#/components/messages/CompanyDataRequest"
     bindings:
       amqp:
         is: queue
@@ -94,7 +93,7 @@ channels:
     description: "Contract 5 (response) — CRM → Facturatie: bedrijfsdata terugsturen (US-40, US-20 | R1)"
     messages:
       companyDataResponse:
-        $ref: '#/components/messages/CompanyDataResponse'
+        $ref: "#/components/messages/CompanyDataResponse"
     bindings:
       amqp:
         is: queue
@@ -107,7 +106,7 @@ channels:
     description: "Contract 6 — CRM → Mailing: deelnemersnotificatie via SendGrid (US-22, US-23 | R1)"
     messages:
       mailRequest:
-        $ref: '#/components/messages/MailRequest'
+        $ref: "#/components/messages/MailRequest"
     bindings:
       amqp:
         is: queue
@@ -120,7 +119,7 @@ channels:
     description: "Contract 7 — CRM → Controlroom: heartbeat elke 1 seconde (US-25, US-26 | R1)"
     messages:
       heartbeat:
-        $ref: '#/components/messages/Heartbeat'
+        $ref: "#/components/messages/Heartbeat"
     bindings:
       amqp:
         is: queue
@@ -133,7 +132,7 @@ channels:
     description: "Contract 8 — CRM → Controlroom: periodieke statuscheck met systeemmetrieken (US-25 | R1)"
     messages:
       statusCheck:
-        $ref: '#/components/messages/StatusCheck'
+        $ref: "#/components/messages/StatusCheck"
     bindings:
       amqp:
         is: queue
@@ -146,7 +145,7 @@ channels:
     description: "Contract 9 — Controlroom → CRM: systeemwaarschuwing bij anomalie (US-26 | R1)"
     messages:
       warning:
-        $ref: '#/components/messages/Warning'
+        $ref: "#/components/messages/Warning"
     bindings:
       amqp:
         is: queue
@@ -159,7 +158,7 @@ channels:
     description: "Contract 10 (request) — Kassa → CRM: persoonscheck op basis van e-mail (US-47 | R1)"
     messages:
       personLookup:
-        $ref: '#/components/messages/PersonLookup'
+        $ref: "#/components/messages/PersonLookup"
     bindings:
       amqp:
         is: queue
@@ -171,7 +170,7 @@ channels:
     description: "Contract 10 (response) — CRM → Kassa: resultaat persoonscheck (US-47 | R1)"
     messages:
       personResponse:
-        $ref: '#/components/messages/PersonResponse'
+        $ref: "#/components/messages/PersonResponse"
     bindings:
       amqp:
         is: queue
@@ -184,7 +183,7 @@ channels:
     description: "Contract 11 — Planning → CRM: sessiewijziging (US-23 R1, US-38 R3)"
     messages:
       sessionUpdate:
-        $ref: '#/components/messages/SessionUpdate'
+        $ref: "#/components/messages/SessionUpdate"
     bindings:
       amqp:
         is: queue
@@ -197,7 +196,7 @@ channels:
     description: "Contract 12 — IoT → CRM: badge koppelen aan bezoeker via Raspberry Pi (US-28, US-29 | R2)"
     messages:
       badgeLink:
-        $ref: '#/components/messages/BadgeLink'
+        $ref: "#/components/messages/BadgeLink"
     bindings:
       amqp:
         is: queue
@@ -206,11 +205,10 @@ channels:
 
 # ─── OPERATIONS ────────────────────────────────────────────────────────────────
 operations:
-
   receiveRegistrationCreated:
     action: receive
     channel:
-      $ref: '#/channels/frontendRegistrationCreated'
+      $ref: "#/channels/frontendRegistrationCreated"
     summary: Ontvang nieuwe inschrijving van Frontend en sla op als Contact in Salesforce
     tags:
       - name: frontend
@@ -219,7 +217,7 @@ operations:
   receiveRegistrationChanged:
     action: receive
     channel:
-      $ref: '#/channels/frontendRegistrationUpdated'
+      $ref: "#/channels/frontendRegistrationUpdated"
     summary: Ontvang inschrijvingswijziging of annulering van Frontend
     tags:
       - name: frontend
@@ -228,7 +226,7 @@ operations:
   receiveCompanyCreated:
     action: receive
     channel:
-      $ref: '#/channels/facturatieCompanyCreated'
+      $ref: "#/channels/facturatieCompanyCreated"
     summary: Ontvang nieuw bedrijf van Facturatie en maak Account aan in Salesforce
     tags:
       - name: facturatie
@@ -237,7 +235,7 @@ operations:
   receiveCompanyUpdated:
     action: receive
     channel:
-      $ref: '#/channels/facturatieCompanyUpdated'
+      $ref: "#/channels/facturatieCompanyUpdated"
     summary: Ontvang bedrijfsupdate van Facturatie en pas Account aan in Salesforce
     tags:
       - name: facturatie
@@ -246,13 +244,13 @@ operations:
   receiveCompanyDataRequest:
     action: receive
     channel:
-      $ref: '#/channels/facturatieCompanyRequested'
+      $ref: "#/channels/facturatieCompanyRequested"
     summary: Ontvang bedrijfsdataverzoek van Facturatie en stuur response terug
     reply:
       channel:
-        $ref: '#/channels/crmCompanyResponded'
+        $ref: "#/channels/crmCompanyResponded"
       messages:
-        - $ref: '#/channels/crmCompanyResponded/messages/companyDataResponse'
+        - $ref: "#/channels/crmCompanyResponded/messages/companyDataResponse"
     tags:
       - name: facturatie
       - name: release-1
@@ -260,7 +258,7 @@ operations:
   sendMailRequest:
     action: send
     channel:
-      $ref: '#/channels/crmMailRequested'
+      $ref: "#/channels/crmMailRequested"
     summary: Stuur mailverzoek naar Mailing voor deelnemersnotificatie of sessiewijziging
     tags:
       - name: mailing
@@ -269,7 +267,7 @@ operations:
   sendHeartbeat:
     action: send
     channel:
-      $ref: '#/channels/crmHeartbeat'
+      $ref: "#/channels/crmHeartbeat"
     summary: Publiceer heartbeat elke 1 seconde als bewijs dat CRM actief is
     tags:
       - name: controlroom
@@ -278,7 +276,7 @@ operations:
   sendStatusCheck:
     action: send
     channel:
-      $ref: '#/channels/crmStatusChecked'
+      $ref: "#/channels/crmStatusChecked"
     summary: Stuur periodieke statuscheck met CPU-, geheugen- en schijfbelasting
     tags:
       - name: controlroom
@@ -287,7 +285,7 @@ operations:
   receiveWarning:
     action: receive
     channel:
-      $ref: '#/channels/controlroomWarningIssued'
+      $ref: "#/channels/controlroomWarningIssued"
     summary: Ontvang systeemwaarschuwing van Controlroom en log als error
     tags:
       - name: controlroom
@@ -296,13 +294,13 @@ operations:
   receivePersonLookup:
     action: receive
     channel:
-      $ref: '#/channels/kassaPersonLookupRequested'
+      $ref: "#/channels/kassaPersonLookupRequested"
     summary: Ontvang persoonscheck-verzoek van Kassa en stuur response terug
     reply:
       channel:
-        $ref: '#/channels/crmPersonLookupResponded'
+        $ref: "#/channels/crmPersonLookupResponded"
       messages:
-        - $ref: '#/channels/crmPersonLookupResponded/messages/personResponse'
+        - $ref: "#/channels/crmPersonLookupResponded/messages/personResponse"
     tags:
       - name: kassa
       - name: release-1
@@ -310,7 +308,7 @@ operations:
   receiveSessionUpdate:
     action: receive
     channel:
-      $ref: '#/channels/planningSessionUpdated'
+      $ref: "#/channels/planningSessionUpdated"
     summary: Ontvang sessiewijziging van Planning en notificeer betrokken deelnemers via Mailing
     tags:
       - name: planning
@@ -319,7 +317,7 @@ operations:
   receiveBadgeLink:
     action: receive
     channel:
-      $ref: '#/channels/iotBadgeLinked'
+      $ref: "#/channels/iotBadgeLinked"
     summary: Ontvang badge-koppeling van IoT en sla badgeId op bij Contact in Salesforce
     tags:
       - name: iot
@@ -327,9 +325,7 @@ operations:
 
 # ─── COMPONENTS ────────────────────────────────────────────────────────────────
 components:
-
   messages:
-
     RegistrationCreated:
       name: RegistrationCreated
       title: Nieuwe inschrijving
@@ -341,7 +337,7 @@ components:
         - name: "US-05"
         - name: "US-19"
       payload:
-        $ref: '#/components/schemas/RegistrationCreated'
+        $ref: "#/components/schemas/RegistrationCreated"
       examples:
         - name: individueel
           payload: |
@@ -371,7 +367,7 @@ components:
         - name: "US-21"
         - name: "US-33"
       payload:
-        $ref: '#/components/schemas/RegistrationChanged'
+        $ref: "#/components/schemas/RegistrationChanged"
       examples:
         - name: update
           payload: |
@@ -401,7 +397,7 @@ components:
         - name: "US-40"
         - name: "US-20"
       payload:
-        $ref: '#/components/schemas/CompanyCreated'
+        $ref: "#/components/schemas/CompanyCreated"
       examples:
         - name: bedrijf
           payload: |
@@ -421,7 +417,7 @@ components:
       tags:
         - name: "US-41"
       payload:
-        $ref: '#/components/schemas/CompanyUpdated'
+        $ref: "#/components/schemas/CompanyUpdated"
       examples:
         - name: naam_update
           payload: |
@@ -452,7 +448,7 @@ components:
         - name: "US-40"
         - name: "US-20"
       payload:
-        $ref: '#/components/schemas/CompanyDataRequest'
+        $ref: "#/components/schemas/CompanyDataRequest"
       examples:
         - name: request
           payload: |
@@ -470,7 +466,7 @@ components:
         - name: "US-40"
         - name: "US-20"
       payload:
-        $ref: '#/components/schemas/CompanyDataResponse'
+        $ref: "#/components/schemas/CompanyDataResponse"
       examples:
         - name: gevonden
           payload: |
@@ -498,7 +494,7 @@ components:
         - name: "US-22"
         - name: "US-23"
       payload:
-        $ref: '#/components/schemas/MailRequest'
+        $ref: "#/components/schemas/MailRequest"
       examples:
         - name: sessiebevestiging
           payload: |
@@ -529,7 +525,7 @@ components:
         - name: "US-25"
         - name: "US-26"
       payload:
-        $ref: '#/components/schemas/Heartbeat'
+        $ref: "#/components/schemas/Heartbeat"
       examples:
         - name: heartbeat
           payload: |
@@ -547,7 +543,7 @@ components:
       tags:
         - name: "US-25"
       payload:
-        $ref: '#/components/schemas/StatusCheck'
+        $ref: "#/components/schemas/StatusCheck"
       examples:
         - name: healthy
           payload: |
@@ -586,7 +582,7 @@ components:
       tags:
         - name: "US-26"
       payload:
-        $ref: '#/components/schemas/Warning'
+        $ref: "#/components/schemas/Warning"
       examples:
         - name: heartbeat_warning
           payload: |
@@ -612,7 +608,7 @@ components:
       tags:
         - name: "US-47"
       payload:
-        $ref: '#/components/schemas/PersonLookup'
+        $ref: "#/components/schemas/PersonLookup"
       examples:
         - name: lookup
           payload: |
@@ -629,7 +625,7 @@ components:
       tags:
         - name: "US-47"
       payload:
-        $ref: '#/components/schemas/PersonResponse'
+        $ref: "#/components/schemas/PersonResponse"
       examples:
         - name: gevonden_met_bedrijf
           payload: |
@@ -665,7 +661,7 @@ components:
         - name: "US-23"
         - name: "US-38"
       payload:
-        $ref: '#/components/schemas/SessionUpdate'
+        $ref: "#/components/schemas/SessionUpdate"
       examples:
         - name: verzet
           payload: |
@@ -696,7 +692,7 @@ components:
         - name: "US-28"
         - name: "US-29"
       payload:
-        $ref: '#/components/schemas/BadgeLink'
+        $ref: "#/components/schemas/BadgeLink"
       examples:
         - name: koppeling
           payload: |
@@ -708,119 +704,327 @@ components:
             </badge_link>
 
   schemas:
-    # AsyncAPI ondersteunt geen native XSD — schemas worden gedocumenteerd als
-    # type: string / format: xml. Validatie tegen XSD gebeurt in de implementatie
-    # via lxml (zie crm-technical-stack.md). XSD-schemas staan in de Git repo.
+    # Schemas zijn gedocumenteerd als type: object met properties voor leesbaarheid
+    # in renderers (AsyncAPI Studio e.d.). contentType: application/xml op message-niveau
+    # bepaalt het wire-formaat. XSD-validatie in implementatie via lxml.
+    # XSD-schemas staan in de Git repo.
 
     RegistrationCreated:
-      type: string
-      format: xml
-      description: |
-        Verplicht: firstName, lastName, email (RFC 5322), sessionId
-        Optioneel: company (niet leeg indien aanwezig)
+      type: object
+      required:
+        - firstName
+        - lastName
+        - email
+        - sessionId
+      properties:
+        firstName:
+          type: string
+        lastName:
+          type: string
+        email:
+          type: string
+          format: email
+          description: RFC 5322
+        sessionId:
+          type: string
+        company:
+          type: string
+          description: Optioneel — niet leeg indien aanwezig
 
     RegistrationChanged:
-      type: string
-      format: xml
+      type: object
+      required:
+        - email
+        - sessionId
+        - changeType
+      properties:
+        email:
+          type: string
+          format: email
+        sessionId:
+          type: string
+        changeType:
+          type: string
+          enum: [updated, cancelled]
+        updatedFields:
+          type: object
+          description: |
+            Optioneel — alleen bij changeType=updated.
+            Bevat enkel de gewijzigde velden (firstName, lastName, email, company).
       description: |
-        Verplicht: email, sessionId, changeType (updated | cancelled)
-        Optioneel: updatedFields (alleen bij updated)
         Bij cancelled: Contact deactiveren — geen verwijdering (US-55 GDPR = R3)
         US-46 (offline buffering R3): zelfde queue, lokale buffer in receiver
 
     CompanyCreated:
-      type: string
-      format: xml
-      description: |
-        Verplicht: name, vatNumber (begint met landcode: BE, NL, ...)
-        Optioneel: email, phone, address
+      type: object
+      required:
+        - name
+        - vatNumber
+      properties:
+        name:
+          type: string
+        vatNumber:
+          type: string
+          description: Begint met landcode (BE, NL, ...)
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        address:
+          type: string
 
     CompanyUpdated:
-      type: string
-      format: xml
-      description: |
-        Verplicht: vatNumber (sleutel, nooit zelf te wijzigen), updatedFields (min. 1 veld)
-        vatNumber wordt gebruikt om Account in Salesforce op te zoeken
+      type: object
+      required:
+        - vatNumber
+        - updatedFields
+      properties:
+        vatNumber:
+          type: string
+          description: Sleutel — nooit zelf te wijzigen. Wordt gebruikt om Account in Salesforce op te zoeken.
+        updatedFields:
+          type: object
+          description: Min. 1 veld verplicht. Kan name, email, phone en/of address bevatten.
 
     CompanyDataRequest:
-      type: string
-      format: xml
-      description: |
-        Verplicht: requestId, vatNumber
+      type: object
+      required:
+        - requestId
+        - vatNumber
+      properties:
+        requestId:
+          type: string
+          description: Correleert request en response
+        vatNumber:
+          type: string
 
     CompanyDataResponse:
-      type: string
-      format: xml
-      description: |
-        Verplicht: requestId
-        Optioneel: name, vatNumber, email, address (leeg indien bedrijf niet gevonden)
-        requestId correleert request en response
+      type: object
+      required:
+        - requestId
+      properties:
+        requestId:
+          type: string
+          description: Correleert met het oorspronkelijke request
+        name:
+          type: string
+          description: Optioneel — leeg indien bedrijf niet gevonden
+        vatNumber:
+          type: string
+          description: Optioneel — leeg indien bedrijf niet gevonden
+        email:
+          type: string
+          format: email
+          description: Optioneel — leeg indien bedrijf niet gevonden
+        address:
+          type: string
+          description: Optioneel — leeg indien bedrijf niet gevonden
 
     MailRequest:
-      type: string
-      format: xml
-      description: |
-        Verplicht: header.source (="CRM"), header.timestamp (ISO 8601 UTC),
-                   recipient.email, recipient.name,
-                   dynamic_data.guest_name, dynamic_data.session_name, dynamic_data.session_time
-        Optioneel: dynamic_data.session_location
-        1 bericht per ontvanger — geen lijsten
-        SendGrid Template ID: nog aan te maken door Mailing TL
+      type: object
+      required:
+        - header
+        - recipient
+        - dynamic_data
+      description: 1 bericht per ontvanger — geen lijsten. SendGrid Template ID nog aan te maken door Mailing TL.
+      properties:
+        header:
+          type: object
+          required:
+            - source
+            - timestamp
+          properties:
+            source:
+              type: string
+              enum: [CRM]
+            timestamp:
+              type: string
+              format: date-time
+              description: ISO 8601 UTC
+        recipient:
+          type: object
+          required:
+            - email
+            - name
+          properties:
+            email:
+              type: string
+              format: email
+            name:
+              type: string
+        dynamic_data:
+          type: object
+          required:
+            - guest_name
+            - session_name
+            - session_time
+          properties:
+            guest_name:
+              type: string
+            session_name:
+              type: string
+            session_time:
+              type: string
+              format: date-time
+              description: ISO 8601 UTC
+            session_location:
+              type: string
+              description: Optioneel
 
     Heartbeat:
-      type: string
-      format: xml
-      description: |
-        Verplicht: serviceId (altijd "CRM"), timestamp (ISO 8601 UTC)
-        Geen extra velden toegestaan (schema strict — Controlroom-schemas.md)
-        Frequentie: elke 1 seconde
+      type: object
+      required:
+        - serviceId
+        - timestamp
+      description: Geen extra velden toegestaan (schema strict — Controlroom-schemas.md). Frequentie elke 1 seconde.
+      properties:
+        serviceId:
+          type: string
+          enum: [CRM]
+        timestamp:
+          type: string
+          format: date-time
+          description: ISO 8601 UTC
 
     StatusCheck:
-      type: string
-      format: xml
-      description: |
-        Verplicht: serviceId, timestamp, status, uptime, systemLoad.cpu, systemLoad.memory, systemLoad.disk
-        status: healthy | degraded | unhealthy | unknown
-        uptime: seconden (integer)
-        cpu, memory, disk: decimaal 0.0–1.0
-        Frequentie: nog te bepalen (voorstel: elke 30 seconden)
+      type: object
+      required:
+        - serviceId
+        - timestamp
+        - status
+        - uptime
+        - systemLoad
+      description: Frequentie nog te bepalen (voorstel elke 30 seconden).
+      properties:
+        serviceId:
+          type: string
+          enum: [CRM]
+        timestamp:
+          type: string
+          format: date-time
+          description: ISO 8601 UTC
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy, unknown]
+        uptime:
+          type: integer
+          description: Seconden
+        systemLoad:
+          type: object
+          required:
+            - cpu
+            - memory
+            - disk
+          properties:
+            cpu:
+              type: number
+              minimum: 0.0
+              maximum: 1.0
+              description: Decimaal 0.0–1.0
+            memory:
+              type: number
+              minimum: 0.0
+              maximum: 1.0
+              description: Decimaal 0.0–1.0
+            disk:
+              type: number
+              minimum: 0.0
+              maximum: 1.0
+              description: Decimaal 0.0–1.0
 
     Warning:
-      type: string
-      format: xml
-      description: |
-        Verplicht: serviceId, message, type
-        type: heartbeat | statusCheck | user (DuplicateTypeEnum — Controlroom-schemas.md)
-        CRM logt als error in applicatielog — geen crash
+      type: object
+      required:
+        - serviceId
+        - message
+        - type
+      description: CRM logt als error in applicatielog — geen crash.
+      properties:
+        serviceId:
+          type: string
+          enum: [CRM]
+        message:
+          type: string
+        type:
+          type: string
+          enum: [heartbeat, statusCheck, user]
+          description: DuplicateTypeEnum — zie Controlroom-schemas.md
 
     PersonLookup:
-      type: string
-      format: xml
-      description: |
-        Verplicht: requestId, email (geldig formaat)
+      type: object
+      required:
+        - requestId
+        - email
+      properties:
+        requestId:
+          type: string
+          description: Correleert request en response
+        email:
+          type: string
+          format: email
 
     PersonResponse:
-      type: string
-      format: xml
-      description: |
-        Verplicht: requestId, found (boolean), linkedToCompany (boolean)
-        Optioneel: companyName (alleen als linkedToCompany = true)
-        Als found = false: linkedToCompany altijd false
+      type: object
+      required:
+        - requestId
+        - found
+        - linkedToCompany
+      properties:
+        requestId:
+          type: string
+          description: Correleert met het oorspronkelijke request
+        found:
+          type: boolean
+        linkedToCompany:
+          type: boolean
+          description: Altijd false als found=false
+        companyName:
+          type: string
+          description: Optioneel — alleen aanwezig als linkedToCompany=true
 
     SessionUpdate:
-      type: string
-      format: xml
-      description: |
-        Verplicht: sessionId, sessionName, newTime (ISO 8601 UTC), changeType
-        Optioneel: newLocation
-        changeType: rescheduled | cancelled | updated
+      type: object
+      required:
+        - sessionId
+        - sessionName
+        - newTime
+        - changeType
+      properties:
+        sessionId:
+          type: string
+        sessionName:
+          type: string
+        newTime:
+          type: string
+          format: date-time
+          description: ISO 8601 UTC
+        changeType:
+          type: string
+          enum: [rescheduled, cancelled, updated]
+        newLocation:
+          type: string
+          description: Optioneel
 
     BadgeLink:
-      type: string
-      format: xml
-      description: |
-        Verplicht: badgeId (uniek), contactEmail (bestaand Contact in Salesforce), linkedAt (ISO 8601 UTC)
-        Als contactEmail onbekend: fout loggen, geen crash
+      type: object
+      required:
+        - badgeId
+        - contactEmail
+        - linkedAt
+      description: Als contactEmail onbekend in Salesforce — fout loggen, geen crash.
+      properties:
+        badgeId:
+          type: string
+          description: Uniek badge-ID
+        contactEmail:
+          type: string
+          format: email
+          description: Moet een bestaand Contact zijn in Salesforce
+        linkedAt:
+          type: string
+          format: date-time
+          description: ISO 8601 UTC
 
   securitySchemes:
     rabbitmq:
