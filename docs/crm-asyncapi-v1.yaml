@@ -2,7 +2,7 @@ asyncapi: 3.0.0
 
 info:
   title: Integratieproject 2026 — CRM (Salesforce) RabbitMQ Contracts
-  version: 1.1.0
+  version: 1.2.0
   description: |
     XML-contracten voor alle 12 integraties waarbij het CRM-team (Salesforce) betrokken is.
     Elk contract legt vast wie naar wie stuurt, via welke queue en in welk XML-formaat.
@@ -16,7 +16,8 @@ servers:
   production:
     host: integrationproject-2526s2-dag02.westeurope.cloudapp.azure.com:5672
     protocol: amqp
-    description: "Azure VM — RabbitMQ broker (Infra team). Poort 5672 nog niet bevestigd open (zie infra-vm.md). RabbitMQ credentials bij Infra."
+    protocolVersion: "0-9-1"
+    description: "Azure VM — RabbitMQ broker (Infra team). Poort 5672 nog niet bevestigd open (zie infra-vm.md). RabbitMQ credentials pending bij Infra."
     security:
       - $ref: "#/components/securitySchemes/rabbitmq"
 
@@ -76,6 +77,9 @@ channels:
           durable: true
 
   # ─── CONTRACT 5 (request-response) ──────────────────────────────────────────
+  # Afwijking van het event-driven principe: real-time bedrijfslookup vereist
+  # synchrone query-semantiek. RPC-over-RabbitMQ blijft loosely coupled (async,
+  # durable queues) — er is geen directe API-call naar Salesforce vanuit Facturatie.
   facturatieCompanyRequested:
     address: facturatie.company.requested
     description: "Contract 5 (request) — Facturatie → CRM: bedrijfsdata opvragen via vatNumber (US-40, US-20 | R1)"
@@ -153,8 +157,11 @@ channels:
           durable: false
 
   # ─── CONTRACT 10 (request-response) ─────────────────────────────────────────
+  # Afwijking van het event-driven principe: kassamedewerker heeft op het moment
+  # van inchecken een onmiddellijk antwoord nodig. Event-driven alternatief
+  # (Kassa houdt lokale kopie bij) is buiten de scope van dit project.
   kassaPersonLookupRequested:
-    address: kassa.person.lookup_requested
+    address: kassa.person.lookup.requested
     description: "Contract 10 (request) — Kassa → CRM: persoonscheck op basis van e-mail (US-47 | R1)"
     messages:
       personLookup:
@@ -166,7 +173,7 @@ channels:
           durable: true
 
   crmPersonLookupResponded:
-    address: crm.person.lookup_responded
+    address: crm.person.lookup.responded
     description: "Contract 10 (response) — CRM → Kassa: resultaat persoonscheck (US-47 | R1)"
     messages:
       personResponse:
@@ -250,7 +257,7 @@ operations:
       channel:
         $ref: "#/channels/crmCompanyResponded"
       messages:
-        - $ref: "#/channels/crmCompanyResponded/messages/companyDataResponse"
+        - $ref: "#/components/messages/CompanyDataResponse"
     tags:
       - name: facturatie
       - name: release-1
@@ -259,10 +266,11 @@ operations:
     action: send
     channel:
       $ref: "#/channels/crmMailRequested"
-    summary: Stuur mailverzoek naar Mailing voor deelnemersnotificatie of sessiewijziging
+    summary: "Stuur mailverzoek naar Mailing. R1: registration_confirmation (US-03), bulk_event (US-22), session_change (US-23). R2: session_reminder (US-24)."
     tags:
       - name: mailing
       - name: release-1
+      - name: release-2-partial
 
   sendHeartbeat:
     action: send
@@ -300,7 +308,7 @@ operations:
       channel:
         $ref: "#/channels/crmPersonLookupResponded"
       messages:
-        - $ref: "#/channels/crmPersonLookupResponded/messages/personResponse"
+        - $ref: "#/components/messages/PersonResponse"
     tags:
       - name: kassa
       - name: release-1
@@ -344,6 +352,7 @@ components:
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
             <registration>
+              <registrationId>REG-20260415-001</registrationId>
               <firstName>Jan</firstName>
               <lastName>Janssen</lastName>
               <email>jan.janssen@example.com</email>
@@ -353,6 +362,7 @@ components:
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
             <registration>
+              <registrationId>REG-20260415-002</registrationId>
               <firstName>Jan</firstName>
               <lastName>Janssen</lastName>
               <email>jan.janssen@example.com</email>
@@ -374,6 +384,7 @@ components:
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
             <registration_change>
+              <registrationId>REG-20260415-001</registrationId>
               <email>jan.janssen@example.com</email>
               <sessionId>SESSION-001</sessionId>
               <changeType>updated</changeType>
@@ -385,6 +396,7 @@ components:
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
             <registration_change>
+              <registrationId>REG-20260415-001</registrationId>
               <email>jan.janssen@example.com</email>
               <sessionId>SESSION-001</sessionId>
               <changeType>cancelled</changeType>
@@ -437,6 +449,7 @@ components:
               <updatedFields>
                 <name>Nieuw Bedrijf NV</name>
                 <email>nieuw@bedrijf.be</email>
+                <phone>+32 3 987 65 43</phone>
                 <address>Nieuwstraat 5, 2000 Antwerpen</address>
               </updatedFields>
             </company_updated>
@@ -445,6 +458,9 @@ components:
       name: CompanyDataRequest
       title: Bedrijfsdata opvragen
       contentType: application/xml
+      correlationId:
+        location: $message.payload#/requestId
+        description: requestId correleert request en response
       tags:
         - name: "US-40"
         - name: "US-20"
@@ -463,6 +479,9 @@ components:
       name: CompanyDataResponse
       title: Bedrijfsdata response
       contentType: application/xml
+      correlationId:
+        location: $message.payload#/requestId
+        description: requestId correleert response terug naar het originele request
       tags:
         - name: "US-40"
         - name: "US-20"
@@ -478,6 +497,7 @@ components:
               <name>Bedrijf NV</name>
               <vatNumber>BE0123456789</vatNumber>
               <email>info@bedrijf.be</email>
+              <phone>+32 2 123 45 67</phone>
               <address>Hoofdstraat 1, 1000 Brussel</address>
             </company_response>
         - name: niet_gevonden
@@ -509,6 +529,7 @@ components:
                 <source>CRM</source>
                 <timestamp>2026-03-14T10:00:00Z</timestamp>
               </header>
+              <mailType>registration_confirmation</mailType>
               <recipient>
                 <email>jan.janssen@example.com</email>
                 <name>Jan Janssen</name>
@@ -518,6 +539,43 @@ components:
                 <session_name>Workshop AI</session_name>
                 <session_time>2026-04-15T14:00:00Z</session_time>
                 <session_location>Zaal A</session_location>
+              </dynamic_data>
+            </mail_request>
+        - name: sessiewijziging
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <mail_request>
+              <header>
+                <source>CRM</source>
+                <timestamp>2026-03-14T10:00:00Z</timestamp>
+              </header>
+              <mailType>session_change</mailType>
+              <recipient>
+                <email>jan.janssen@example.com</email>
+                <name>Jan Janssen</name>
+              </recipient>
+              <dynamic_data>
+                <guest_name>Jan Janssen</guest_name>
+                <session_name>Workshop AI</session_name>
+                <session_time>2026-04-15T15:00:00Z</session_time>
+                <session_location>Zaal B</session_location>
+              </dynamic_data>
+            </mail_request>
+        - name: bulk_event
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <mail_request>
+              <header>
+                <source>CRM</source>
+                <timestamp>2026-03-14T10:00:00Z</timestamp>
+              </header>
+              <mailType>bulk_event</mailType>
+              <recipient>
+                <email>jan.janssen@example.com</email>
+                <name>Jan Janssen</name>
+              </recipient>
+              <dynamic_data>
+                <guest_name>Jan Janssen</guest_name>
               </dynamic_data>
             </mail_request>
 
@@ -610,6 +668,9 @@ components:
       name: PersonLookup
       title: Persoonscheck verzoek van Kassa
       contentType: application/xml
+      correlationId:
+        location: $message.payload#/requestId
+        description: requestId correleert request en response
       tags:
         - name: "US-47"
       payload:
@@ -627,6 +688,9 @@ components:
       name: PersonResponse
       title: Persoonscheck response van CRM
       contentType: application/xml
+      correlationId:
+        location: $message.payload#/requestId
+        description: requestId correleert response terug naar het originele request
       tags:
         - name: "US-47"
       payload:
@@ -715,11 +779,15 @@ components:
     RegistrationCreated:
       type: object
       required:
+        - registrationId
         - firstName
         - lastName
         - email
         - sessionId
       properties:
+        registrationId:
+          type: string
+          description: Uniek ID per inschrijving — gegenereerd door Frontend. Gebruikt door CRM-receiver voor idempotentie (duplicaat op queue = negeren).
         firstName:
           type: string
         lastName:
@@ -741,6 +809,9 @@ components:
         - sessionId
         - changeType
       properties:
+        registrationId:
+          type: string
+          description: Optioneel — aanbevolen. Correleert met de registrationId uit RegistrationCreated. Geeft CRM een preciezere lookup dan email+sessionId alleen.
         email:
           type: string
           format: email
@@ -789,7 +860,19 @@ components:
           description: Sleutel — nooit zelf te wijzigen. Wordt gebruikt om Account in Salesforce op te zoeken.
         updatedFields:
           type: object
+          minProperties: 1
           description: Min. 1 veld verplicht. Kan name, email, phone en/of address bevatten.
+          properties:
+            name:
+              type: string
+            email:
+              type: string
+              format: email
+            phone:
+              type: string
+            address:
+              type: string
+          additionalProperties: false
 
     CompanyDataRequest:
       type: object
@@ -825,6 +908,9 @@ components:
           type: string
           format: email
           description: Optioneel — alleen aanwezig als found=true
+        phone:
+          type: string
+          description: Optioneel — alleen aanwezig als found=true. Consistent met CompanyCreated.
         address:
           type: string
           description: Optioneel — alleen aanwezig als found=true
@@ -833,9 +919,13 @@ components:
       type: object
       required:
         - header
+        - mailType
         - recipient
         - dynamic_data
-      description: 1 bericht per ontvanger — geen lijsten. SendGrid Template ID nog aan te maken door Mailing TL.
+      description: |
+        1 bericht per ontvanger — geen lijsten.
+        mailType bepaalt welk SendGrid-template Mailing selecteert.
+        US-03/US-22/US-23 zijn Release 1. US-24 (herinnering) is Release 2 — mailType=session_reminder.
       properties:
         header:
           type: object
@@ -850,6 +940,21 @@ components:
               type: string
               format: date-time
               description: ISO 8601 UTC
+        mailType:
+          type: string
+          enum:
+            [
+              registration_confirmation,
+              session_change,
+              session_reminder,
+              bulk_event,
+            ]
+          description: |
+            Bepaalt het SendGrid-template bij Mailing.
+            registration_confirmation → US-03 (R1)
+            session_change → US-23 getriggerd via Contract 11 (R1)
+            bulk_event → US-22 (R1)
+            session_reminder → US-24 (R2)
         recipient:
           type: object
           required:
@@ -865,23 +970,27 @@ components:
           type: object
           required:
             - guest_name
-            - session_name
-            - session_time
+          description: |
+            guest_name altijd verplicht.
+            session_name en session_time verplicht voor: registration_confirmation, session_change, session_reminder.
+            Niet van toepassing voor bulk_event — Mailing gebruikt dan een event-breed template zonder sessiedata.
           properties:
             guest_name:
               type: string
             session_name:
               type: string
+              description: Optioneel — verplicht voor alle mailTypes behalve bulk_event
             session_time:
               type: string
               format: date-time
-              description: ISO 8601 UTC
+              description: "ISO 8601 UTC — optioneel, verplicht voor alle mailTypes behalve bulk_event"
             session_location:
               type: string
               description: Optioneel
 
     Heartbeat:
       type: object
+      additionalProperties: false
       required:
         - serviceId
         - timestamp
@@ -1012,6 +1121,12 @@ components:
         newLocation:
           type: string
           description: Optioneel
+      if:
+        properties:
+          changeType:
+            enum: [rescheduled, updated]
+      then:
+        required: [newTime]
 
     BadgeLink:
       type: object
