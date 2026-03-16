@@ -1,33 +1,43 @@
 asyncapi: 3.0.0
-
 info:
   title: Integratieproject 2026 — CRM (Salesforce) RabbitMQ Contracts
-  version: 1.2.0
-  description: |
-    XML-contracten voor alle 12 integraties waarbij het CRM-team (Salesforce) betrokken is.
-    Elk contract legt vast wie naar wie stuurt, via welke queue en in welk XML-formaat.
-    Queue-namen zijn voorstellen — nog te bevestigen met de betrokken teams, tenzij anders vermeld.
+  version: 1.4.2
+  description: >
+    XML-contracten voor alle integraties waarbij het CRM-team (Salesforce)
+    betrokken is.
+
+    Elk contract legt vast wie naar wie stuurt, via welke queue en in welk
+    XML-formaat.
+
+    Queue-namen zijn voorstellen — nog te bevestigen met de betrokken teams,
+    tenzij anders vermeld.
+
     Alle berichten zijn XML-formaat (projectbrede afspraak, bevestigd door PMs).
   contact:
     name: Lars Cowé — CRM Team Lead
     email: lars.cowe@student.ehb.be
-
 servers:
   production:
     host: integrationproject-2526s2-dag02.westeurope.cloudapp.azure.com:5672
     protocol: amqp
-    protocolVersion: "0-9-1"
-    description: "Azure VM — RabbitMQ broker (Infra team). Poort 5672 nog niet bevestigd open (zie infra-vm.md). RabbitMQ credentials pending bij Infra."
+    protocolVersion: 0-9-1
+    description: >-
+      Azure VM — RabbitMQ broker (Infra team). Poort 5672 nog niet bevestigd
+      open (zie infra-vm.md). RabbitMQ credentials pending bij Infra.
     security:
       - $ref: "#/components/securitySchemes/rabbitmq"
-
 defaultContentType: application/xml
 
 channels:
-  # ─── CONTRACT 1 ─────────────────────────────────────────────────────────────
+  # ============================================================
+  # FRONTEND → CRM
+  # ============================================================
+
   frontendRegistrationCreated:
     address: frontend.registration.created
-    description: "Contract 1 — Frontend → CRM: nieuwe inschrijving aanmaken (US-02, US-03, US-04, US-05, US-19 | R1)"
+    description: >-
+      Contract 1 — Frontend → CRM: nieuwe inschrijving aanmaken (US-02, US-03,
+      US-04, US-05, US-19 | R1)
     messages:
       registrationCreated:
         $ref: "#/components/messages/RegistrationCreated"
@@ -37,10 +47,11 @@ channels:
         queue:
           durable: true
 
-  # ─── CONTRACT 2 ─────────────────────────────────────────────────────────────
   frontendRegistrationUpdated:
     address: frontend.registration.updated
-    description: "Contract 2 — Frontend → CRM: inschrijving wijzigen of annuleren (US-21 R1, US-33 R2)"
+    description: >-
+      Contract 2 — Frontend → CRM: inschrijving wijzigen of annuleren (US-21 R1,
+      US-33 R2)
     messages:
       registrationChanged:
         $ref: "#/components/messages/RegistrationChanged"
@@ -50,10 +61,21 @@ channels:
         queue:
           durable: true
 
-  # ─── CONTRACT 3 ─────────────────────────────────────────────────────────────
-  facturatieCompanyCreated:
-    address: facturatie.company.created
-    description: "Contract 3 — Facturatie → CRM: nieuw bedrijf aanmaken als Account in Salesforce (US-40, US-20 | R1)"
+  frontendCompanyCreated:
+    address: frontend.company.created
+    description: >-
+      Contract 3 (gecorrigeerd v1.3.0) — Frontend → CRM: nieuw bedrijf aanmaken
+      als Account in Salesforce (US-40, US-20 | R1).
+
+      ARCHITECTURELE CORRECTIE: in v1.2.0 was dit facturatie.company.created
+      (Facturatie → CRM). Dat was verkeerd — CRM is master data owner.
+      Facturatie is consumer van bedrijfsdata, geen producent. De eventbeheerder
+      maakt bedrijven aan via de Frontend; CRM verwerkt en broadcast vervolgens
+      crm.company.confirmed zodat Facturatie dat opslaat in FOSSBilling.
+
+      PM-BESLISSING VEREIST: als bedrijven rechtstreeks in Salesforce aangemaakt
+      worden (buiten Frontend om), vervalt dit inbound contract en is alleen
+      crm.company.confirmed nodig.
     messages:
       companyCreated:
         $ref: "#/components/messages/CompanyCreated"
@@ -63,26 +85,15 @@ channels:
         queue:
           durable: true
 
-  # ─── CONTRACT 4 ─────────────────────────────────────────────────────────────
-  facturatieCompanyUpdated:
-    address: facturatie.company.updated
-    description: "Contract 4 — Facturatie → CRM: bedrijfsgegevens updaten (US-41 | R2)"
-    messages:
-      companyUpdated:
-        $ref: "#/components/messages/CompanyUpdated"
-    bindings:
-      amqp:
-        is: queue
-        queue:
-          durable: true
+  # ============================================================
+  # FACTURATIE → CRM (request/response)
+  # ============================================================
 
-  # ─── CONTRACT 5 (request-response) ──────────────────────────────────────────
-  # Afwijking van het event-driven principe: real-time bedrijfslookup vereist
-  # synchrone query-semantiek. RPC-over-RabbitMQ blijft loosely coupled (async,
-  # durable queues) — er is geen directe API-call naar Salesforce vanuit Facturatie.
   facturatieCompanyRequested:
     address: facturatie.company.requested
-    description: "Contract 5 (request) — Facturatie → CRM: bedrijfsdata opvragen via vatNumber (US-40, US-20 | R1)"
+    description: >-
+      Contract 5 (request) — Facturatie → CRM: bedrijfsdata opvragen via
+      vatNumber (US-40, US-20 | R1)
     messages:
       companyDataRequest:
         $ref: "#/components/messages/CompanyDataRequest"
@@ -94,7 +105,9 @@ channels:
 
   crmCompanyResponded:
     address: crm.company.responded
-    description: "Contract 5 (response) — CRM → Facturatie: bedrijfsdata terugsturen (US-40, US-20 | R1)"
+    description: >-
+      Contract 5 (response) — CRM → Facturatie: bedrijfsdata terugsturen inclusief
+      UUID (US-40, US-20 | R1). UUID toegevoegd v1.3.0.
     messages:
       companyDataResponse:
         $ref: "#/components/messages/CompanyDataResponse"
@@ -104,10 +117,15 @@ channels:
         queue:
           durable: false
 
-  # ─── CONTRACT 6 ─────────────────────────────────────────────────────────────
+  # ============================================================
+  # CRM → MAILING
+  # ============================================================
+
   crmMailRequested:
     address: crm.mail.requested
-    description: "Contract 6 — CRM → Mailing: deelnemersnotificatie via SendGrid (US-22, US-23 | R1)"
+    description: >-
+      Contract 6 — CRM → Mailing: deelnemersnotificatie via SendGrid (US-22,
+      US-23 | R1). US-24 session_reminder is R2.
     messages:
       mailRequest:
         $ref: "#/components/messages/MailRequest"
@@ -117,10 +135,15 @@ channels:
         queue:
           durable: true
 
-  # ─── CONTRACT 7 ─────────────────────────────────────────────────────────────
+  # ============================================================
+  # CRM → CONTROLROOM
+  # ============================================================
+
   crmHeartbeat:
     address: crm.heartbeat
-    description: "Contract 7 — CRM → Controlroom: heartbeat elke 1 seconde (US-25, US-26 | R1)"
+    description: >-
+      Contract 7 — CRM → Controlroom: heartbeat elke 1 seconde (US-25, US-26 |
+      R1)
     messages:
       heartbeat:
         $ref: "#/components/messages/Heartbeat"
@@ -130,10 +153,11 @@ channels:
         queue:
           durable: false
 
-  # ─── CONTRACT 8 ─────────────────────────────────────────────────────────────
   crmStatusChecked:
     address: crm.status.checked
-    description: "Contract 8 — CRM → Controlroom: periodieke statuscheck met systeemmetrieken (US-25 | R1)"
+    description: >-
+      Contract 8 — CRM → Controlroom: periodieke statuscheck met
+      systeemmetrieken (US-25 | R1)
     messages:
       statusCheck:
         $ref: "#/components/messages/StatusCheck"
@@ -143,10 +167,15 @@ channels:
         queue:
           durable: false
 
-  # ─── CONTRACT 9 ─────────────────────────────────────────────────────────────
+  # ============================================================
+  # CONTROLROOM → CRM
+  # ============================================================
+
   controlroomWarningIssued:
     address: controlroom.warning.issued
-    description: "Contract 9 — Controlroom → CRM: systeemwaarschuwing bij anomalie (US-26 | R1)"
+    description: >-
+      Contract 9 — Controlroom → CRM: systeemwaarschuwing bij anomalie (US-26 |
+      R1)
     messages:
       warning:
         $ref: "#/components/messages/Warning"
@@ -156,13 +185,15 @@ channels:
         queue:
           durable: false
 
-  # ─── CONTRACT 10 (request-response) ─────────────────────────────────────────
-  # Afwijking van het event-driven principe: kassamedewerker heeft op het moment
-  # van inchecken een onmiddellijk antwoord nodig. Event-driven alternatief
-  # (Kassa houdt lokale kopie bij) is buiten de scope van dit project.
+  # ============================================================
+  # KASSA → CRM (request/response)
+  # ============================================================
+
   kassaPersonLookupRequested:
     address: kassa.person.lookup.requested
-    description: "Contract 10 (request) — Kassa → CRM: persoonscheck op basis van e-mail (US-47 | R1)"
+    description: >-
+      Contract 10 (request) — Kassa → CRM: persoonscheck op basis van e-mail
+      (US-47 | R1)
     messages:
       personLookup:
         $ref: "#/components/messages/PersonLookup"
@@ -174,7 +205,9 @@ channels:
 
   crmPersonLookupResponded:
     address: crm.person.lookup.responded
-    description: "Contract 10 (response) — CRM → Kassa: resultaat persoonscheck (US-47 | R1)"
+    description: >-
+      Contract 10 (response) — CRM → Kassa: resultaat persoonscheck inclusief
+      UUID (US-47 | R1). UUID + companyId toegevoegd v1.3.0.
     messages:
       personResponse:
         $ref: "#/components/messages/PersonResponse"
@@ -184,10 +217,18 @@ channels:
         queue:
           durable: false
 
-  # ─── CONTRACT 11 ─────────────────────────────────────────────────────────────
+  # ============================================================
+  # PLANNING → CRM
+  # ============================================================
+
   planningSessionUpdated:
     address: planning.session.updated
-    description: "Contract 11 — Planning → CRM: sessiewijziging (US-23 R1). US-38 (sprekernotificatie R3) is verantwoordelijkheid van Planning/Mailing — CRM beheert geen sprekerdata."
+    description: >-
+      Contract 11 — Planning → CRM: sessiewijziging (US-23 R1, US-16 R2,
+      US-53 R2). changeType=rescheduled dekt US-16 (sessie verzetten),
+      changeType=cancelled dekt US-53 (sessie verwijderen). US-38
+      (sprekernotificatie R3) is verantwoordelijkheid van Planning/Mailing — CRM
+      beheert geen sprekerdata.
     messages:
       sessionUpdate:
         $ref: "#/components/messages/SessionUpdate"
@@ -197,10 +238,15 @@ channels:
         queue:
           durable: true
 
-  # ─── CONTRACT 12 ─────────────────────────────────────────────────────────────
+  # ============================================================
+  # IOT → CRM
+  # ============================================================
+
   iotBadgeLinked:
     address: iot.badge.linked
-    description: "Contract 12 — IoT → CRM: badge koppelen aan bezoeker via Raspberry Pi (US-28, US-29 | R2)"
+    description: >-
+      Contract 12 — IoT → CRM: badge koppelen aan bezoeker via Raspberry Pi
+      (US-28, US-29 | R2)
     messages:
       badgeLink:
         $ref: "#/components/messages/BadgeLink"
@@ -210,13 +256,253 @@ channels:
         queue:
           durable: true
 
-# ─── OPERATIONS ────────────────────────────────────────────────────────────────
+  # ============================================================
+  # CRM → ALLE CONSUMERS (UUID broadcasts — toegevoegd v1.3.0)
+  # ============================================================
+
+  crmUserConfirmed:
+    address: crm.user.confirmed
+    description: >-
+      Contract 13 — CRM → alle consumers: Contact aangemaakt of bevestigd in
+      Salesforce (US-02, US-19 | R1). Bevat het door CRM gegenereerde UUID v4.
+      Consumers slaan dit op naast hun eigen native ID (Option 2 UUID-strategie).
+      E-mail is de deduplicatiesleutel — dubbele inschrijving leidt tot
+      crm.user.conflict (Contract 16).
+    messages:
+      userConfirmed:
+        $ref: "#/components/messages/UserConfirmed"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: true
+
+  crmCompanyConfirmed:
+    address: crm.company.confirmed
+    description: >-
+      Contract 14 — CRM → alle consumers: Account aangemaakt of bevestigd in
+      Salesforce (US-40, US-20 | R1). Bevat het door CRM gegenereerde UUID v4.
+      Facturatie slaat dit op naast FOSSBilling-ID. Kassa slaat dit op naast
+      Odoo-ID.
+    messages:
+      companyConfirmed:
+        $ref: "#/components/messages/CompanyConfirmed"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: true
+
+  # ============================================================
+  # CRM → CONTROLROOM/FRONTEND (conflict — toegevoegd v1.3.0)
+  # ============================================================
+
+  crmUserConflict:
+    address: crm.user.conflict
+    description: >-
+      Contract 15 — CRM → Controlroom + Frontend: dubbele inschrijving
+      gedetecteerd op basis van e-mail (US-34, US-35 | R2). CRM logt beide
+      waarden en publiceert dit event zodat de eventbeheerder manueel kan
+      beslissen welke correct is. Geen crash — bestaand Contact blijft actief.
+
+      BINDING: dit channel gebruikt een fanout exchange (geen named queue).
+      Controlroom en Frontend moeten elk een eigen queue aanmaken en die binden
+      aan de exchange 'crm.user.conflict'. Voorbeeld (RabbitMQ Management UI of
+      code): channel.queue_declare(queue='controlroom.user.conflict'),
+      channel.queue_bind(exchange='crm.user.conflict',
+      queue='controlroom.user.conflict'). Zonder binding ontvangen consumers
+      geen berichten.
+    messages:
+      userConflict:
+        $ref: "#/components/messages/UserConflict"
+    bindings:
+      amqp:
+        is: fanout
+        exchange:
+          name: crm.user.conflict
+          durable: true
+
+  # ============================================================
+  # KASSA → CRM (betaling — toegevoegd v1.3.0)
+  # ============================================================
+
+  kassaPaymentConfirmed:
+    address: kassa.payment.confirmed
+    description: >-
+      Contract 16 — Kassa → CRM: betaling bevestigd aan de inkom (US-08, US-21 |
+      R1). CRM werkt betalingsstatus bij op Contact in Salesforce. Zonder dit
+      contract weet CRM nooit dat een deelnemer betaald heeft.
+    messages:
+      paymentConfirmed:
+        $ref: "#/components/messages/PaymentConfirmed"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: true
+
+  # ============================================================
+  # KASSA → CRM (lijst niet-betaalden — toegevoegd v1.3.0)
+  # ============================================================
+
+  kassaUnpaidRequested:
+    address: kassa.unpaid.requested
+    description: >-
+      Contract 17 (request) — Kassa → CRM: lijst van niet-betaalde deelnemers
+      opvragen (US-07 | R1). PersonLookup (Contract 10) werkt per persoon —
+      voor een overzichtslijst is dit apart contract nodig.
+    messages:
+      unpaidRequest:
+        $ref: "#/components/messages/UnpaidRequest"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: true
+
+  crmUnpaidResponded:
+    address: crm.unpaid.responded
+    description: >-
+      Contract 17 (response) — CRM → Kassa: lijst van niet-betaalde deelnemers
+      (US-07 | R1).
+    messages:
+      unpaidResponse:
+        $ref: "#/components/messages/UnpaidResponse"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: false
+
+  # ============================================================
+  # CRM → ALLE CONSUMERS (updates — toegevoegd v1.3.0)
+  # ============================================================
+
+  crmUserUpdated:
+    address: crm.user.updated
+    description: >-
+      Contract 18 — CRM → alle consumers: Contact gewijzigd in Salesforce
+      (US-21, US-41 | R2). Getriggerd bij elke update van een Contact: naam,
+      adres, bedrijfskoppeling, rol. Consumers updaten hun lokale kopie.
+      Bevat altijd het volledige object — geen partial updates.
+    messages:
+      userUpdated:
+        $ref: "#/components/messages/UserUpdated"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: true
+
+  crmCompanyUpdated:
+    address: crm.company.updated
+    description: >-
+      Contract 19 — CRM → alle consumers: Account gewijzigd in Salesforce
+      (US-41 | R2). Facturatie heeft het bijgewerkte adres nodig voor correcte
+      facturen. Bevat altijd het volledige object — geen partial updates.
+    messages:
+      companyUpdated:
+        $ref: "#/components/messages/CompanyUpdated"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: true
+
+  # ============================================================
+  # MAILING → CRM (bounce — toegevoegd v1.3.0)
+  # ============================================================
+
+  mailingBounceReported:
+    address: mailing.bounce.reported
+    description: >-
+      Contract 20 — Mailing → CRM: e-mailbounce gerapporteerd door SendGrid
+      (US-39 | R2). CRM markeert het e-mailadres als onbereikbaar op het
+      Contact in Salesforce. Zonder dit contract mist US-39 de databron om
+      te bepalen wie de mail niet ontvangen heeft.
+    messages:
+      bounceReported:
+        $ref: "#/components/messages/BounceReported"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: true
+
+  # ============================================================
+  # CRM → FACTURATIE (factuurverzoek privépersoon — toegevoegd v1.3.0)
+  # ============================================================
+
+  crmInvoiceRequested:
+    address: crm.invoice.requested
+    description: >-
+      Contract 21 — CRM → Facturatie: factuurverzoek voor privépersoon (US-11 |
+      R3). Getriggerd nadat een privépersoon adresgegevens heeft ingevuld en
+      een factuur aanvraagt.
+
+      PM-BESLISSING VEREIST: crm.user.updated alleen is niet voldoende want
+      Facturatie moet het onderscheid kennen tussen een gewone adresupdate en
+      een expliciete factuurverzoek. Dit event maakt dat onderscheid expliciet.
+
+      Sad path: als Facturatie offline is, buffert CRM dit verzoek lokaal en
+      herzendt zodra Facturatie terug online is.
+    messages:
+      invoiceRequested:
+        $ref: "#/components/messages/InvoiceRequested"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: true
+
+  # ============================================================
+  # CRM → ALLE CONSUMERS (GDPR soft delete — toegevoegd v1.3.0)
+  # ============================================================
+
+  crmUserDeactivated:
+    address: crm.user.deactivated
+    description: >-
+      Contract 22 — CRM → alle consumers: Contact gedeactiveerd in Salesforce
+      (US-55 | R3). isActive=false — nooit fysiek verwijderen (GDPR audit trail).
+      Kassa verwijdert de persoon uit de niet-betaalden lijst. Mailing verwijdert
+      het adres uit mailinglijsten. Facturatie stopt met nieuwe posten voor
+      deze persoon.
+    messages:
+      userDeactivated:
+        $ref: "#/components/messages/UserDeactivated"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: true
+
+  crmCompanyDeactivated:
+    address: crm.company.deactivated
+    description: >-
+      Contract 23 — CRM → alle consumers: Account gedeactiveerd in Salesforce
+      (US-54 | R3). isActive=false. Facturatie stopt met factureren voor dit
+      bedrijf. Kassa koppelt geen nieuwe betalingen meer aan dit bedrijf.
+    messages:
+      companyDeactivated:
+        $ref: "#/components/messages/CompanyDeactivated"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: true
+
+# ============================================================
+# OPERATIONS
+# ============================================================
+
 operations:
   receiveRegistrationCreated:
     action: receive
     channel:
       $ref: "#/channels/frontendRegistrationCreated"
-    summary: Ontvang nieuwe inschrijving van Frontend en sla op als Contact in Salesforce
+    summary: >-
+      Ontvang nieuwe inschrijving van Frontend en sla op als Contact in
+      Salesforce. Na bevestiging: publiceer crm.user.confirmed.
     tags:
       - name: frontend
       - name: release-1
@@ -225,28 +511,25 @@ operations:
     action: receive
     channel:
       $ref: "#/channels/frontendRegistrationUpdated"
-    summary: Ontvang inschrijvingswijziging of annulering van Frontend
+    summary: >-
+      Ontvang inschrijvingswijziging of annulering van Frontend. Na verwerking:
+      publiceer crm.user.updated of crm.user.deactivated (bij cancelled).
     tags:
       - name: frontend
       - name: release-1
+      - name: US-33
+      - name: release-2-partial
 
   receiveCompanyCreated:
     action: receive
     channel:
-      $ref: "#/channels/facturatieCompanyCreated"
-    summary: Ontvang nieuw bedrijf van Facturatie en maak Account aan in Salesforce
+      $ref: "#/channels/frontendCompanyCreated"
+    summary: >-
+      Ontvang nieuw bedrijf van Frontend en maak Account aan in Salesforce.
+      Na bevestiging: publiceer crm.company.confirmed.
     tags:
-      - name: facturatie
+      - name: frontend
       - name: release-1
-
-  receiveCompanyUpdated:
-    action: receive
-    channel:
-      $ref: "#/channels/facturatieCompanyUpdated"
-    summary: Ontvang bedrijfsupdate van Facturatie en pas Account aan in Salesforce
-    tags:
-      - name: facturatie
-      - name: release-2
 
   receiveCompanyDataRequest:
     action: receive
@@ -266,11 +549,12 @@ operations:
     action: send
     channel:
       $ref: "#/channels/crmMailRequested"
-    summary: "Stuur mailverzoek naar Mailing. R1: registration_confirmation (US-03), bulk_event (US-22), session_change (US-23). R2: session_reminder (US-24)."
+    summary: >-
+      Stuur mailverzoek naar Mailing. R1: registration_confirmation (US-03),
+      bulk_event (US-22), session_change (US-23). R2: session_reminder (US-24).
     tags:
       - name: mailing
       - name: release-1
-      - name: release-2-partial
 
   sendHeartbeat:
     action: send
@@ -303,7 +587,7 @@ operations:
     action: receive
     channel:
       $ref: "#/channels/kassaPersonLookupRequested"
-    summary: Ontvang persoonscheck-verzoek van Kassa en stuur response terug
+    summary: Ontvang persoonscheck-verzoek van Kassa en stuur response terug inclusief UUID
     reply:
       channel:
         $ref: "#/channels/crmPersonLookupResponded"
@@ -317,7 +601,9 @@ operations:
     action: receive
     channel:
       $ref: "#/channels/planningSessionUpdated"
-    summary: Ontvang sessiewijziging van Planning en notificeer betrokken deelnemers via Mailing (US-23). Sprekernotificaties (US-38) zijn buiten scope voor CRM.
+    summary: >-
+      Ontvang sessiewijziging van Planning en notificeer betrokken deelnemers
+      via Mailing (US-23). Sprekernotificaties (US-38) zijn buiten scope voor CRM.
     tags:
       - name: planning
       - name: release-1
@@ -326,12 +612,156 @@ operations:
     action: receive
     channel:
       $ref: "#/channels/iotBadgeLinked"
-    summary: Ontvang badge-koppeling van IoT en sla badgeId op bij Contact in Salesforce
+    summary: >-
+      Ontvang badge-koppeling van IoT en sla badgeId op bij Contact in Salesforce
     tags:
       - name: iot
       - name: release-2
 
-# ─── COMPONENTS ────────────────────────────────────────────────────────────────
+  sendUserConfirmed:
+    action: send
+    channel:
+      $ref: "#/channels/crmUserConfirmed"
+    summary: >-
+      Publiceer bevestigd Contact met UUID na Salesforce-validatie. Getriggerd
+      door receiveRegistrationCreated. E-mail is deduplicatiesleutel — dubbele
+      e-mail leidt tot sendUserConflict in plaats van dit event.
+    tags:
+      - name: frontend
+      - name: facturatie
+      - name: mailing
+      - name: kassa
+      - name: release-1
+
+  sendCompanyConfirmed:
+    action: send
+    channel:
+      $ref: "#/channels/crmCompanyConfirmed"
+    summary: >-
+      Publiceer bevestigd Account met UUID na Salesforce-verwerking. Getriggerd
+      door receiveCompanyCreated. vatNumber is deduplicatiesleutel.
+    tags:
+      - name: facturatie
+      - name: kassa
+      - name: release-1
+
+  sendUserConflict:
+    action: send
+    channel:
+      $ref: "#/channels/crmUserConflict"
+    summary: >-
+      Publiceer conflictmelding wanneer een inschrijving binnenkomt met een
+      e-mail die al bestaat in Salesforce met afwijkende gegevens. Controlroom
+      logt, Frontend toont melding aan eventbeheerder.
+    tags:
+      - name: controlroom
+      - name: frontend
+      - name: release-2
+
+  receivePaymentConfirmed:
+    action: receive
+    channel:
+      $ref: "#/channels/kassaPaymentConfirmed"
+    summary: >-
+      Ontvang betalingsbevestiging van Kassa en werk betalingsstatus bij op
+      Contact in Salesforce (US-08, US-21).
+    tags:
+      - name: kassa
+      - name: release-1
+
+  receiveUnpaidRequest:
+    action: receive
+    channel:
+      $ref: "#/channels/kassaUnpaidRequested"
+    summary: >-
+      Ontvang verzoek voor lijst niet-betaalde deelnemers en stuur response
+      terug (US-07).
+    reply:
+      channel:
+        $ref: "#/channels/crmUnpaidResponded"
+      messages:
+        - $ref: "#/components/messages/UnpaidResponse"
+    tags:
+      - name: kassa
+      - name: release-1
+
+  sendUserUpdated:
+    action: send
+    channel:
+      $ref: "#/channels/crmUserUpdated"
+    summary: >-
+      Publiceer volledig bijgewerkt Contact na update in Salesforce (US-21,
+      US-41). Consumers updaten hun lokale kopie.
+    tags:
+      - name: frontend
+      - name: facturatie
+      - name: mailing
+      - name: kassa
+      - name: release-2
+
+  sendCompanyUpdated:
+    action: send
+    channel:
+      $ref: "#/channels/crmCompanyUpdated"
+    summary: >-
+      Publiceer volledig bijgewerkt Account na update in Salesforce (US-41).
+      Facturatie gebruikt bijgewerkt adres voor facturen.
+    tags:
+      - name: facturatie
+      - name: release-2
+
+  receiveBounceReported:
+    action: receive
+    channel:
+      $ref: "#/channels/mailingBounceReported"
+    summary: >-
+      Ontvang bouncerapport van Mailing en markeer e-mailadres als onbereikbaar
+      op Contact in Salesforce (US-39).
+    tags:
+      - name: mailing
+      - name: release-2
+
+  sendInvoiceRequested:
+    action: send
+    channel:
+      $ref: "#/channels/crmInvoiceRequested"
+    summary: >-
+      Publiceer factuurverzoek naar Facturatie nadat privépersoon adres heeft
+      ingevuld (US-11). Onderscheidt een factuurverzoek van een gewone
+      adresupdate.
+    tags:
+      - name: facturatie
+      - name: release-3
+
+  sendUserDeactivated:
+    action: send
+    channel:
+      $ref: "#/channels/crmUserDeactivated"
+    summary: >-
+      Publiceer deactivatie van Contact na GDPR-verwijderverzoek (US-55).
+      isActive=false — geen fysieke verwijdering.
+    tags:
+      - name: facturatie
+      - name: mailing
+      - name: kassa
+      - name: release-3
+
+  sendCompanyDeactivated:
+    action: send
+    channel:
+      $ref: "#/channels/crmCompanyDeactivated"
+    summary: >-
+      Publiceer deactivatie van Account (US-54). Consumers stoppen met
+      verwerking voor dit bedrijf.
+    tags:
+      - name: facturatie
+      - name: kassa
+      - name: release-3
+
+# ============================================================
+# COMPONENTS
+# ============================================================
+
 components:
   messages:
     RegistrationCreated:
@@ -340,11 +770,11 @@ components:
       summary: Frontend meldt een nieuwe inschrijving voor een sessie
       contentType: application/xml
       tags:
-        - name: "US-02"
-        - name: "US-03"
-        - name: "US-04"
-        - name: "US-05"
-        - name: "US-19"
+        - name: US-02
+        - name: US-03
+        - name: US-04
+        - name: US-05
+        - name: US-19
       payload:
         $ref: "#/components/schemas/RegistrationCreated"
       examples:
@@ -356,17 +786,22 @@ components:
               <firstName>Jan</firstName>
               <lastName>Janssen</lastName>
               <email>jan.janssen@example.com</email>
+              <phone>+32471234567</phone>
               <sessionId>SESSION-001</sessionId>
+              <role>VISITOR</role>
+              <gdprConsent>true</gdprConsent>
             </registration>
         - name: met_bedrijf
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
             <registration>
               <registrationId>REG-20260415-002</registrationId>
-              <firstName>Jan</firstName>
-              <lastName>Janssen</lastName>
-              <email>jan.janssen@example.com</email>
+              <firstName>Lien</firstName>
+              <lastName>Vermeersch</lastName>
+              <email>lien.vermeersch@techbedrijf.be</email>
               <sessionId>SESSION-001</sessionId>
+              <role>COMPANY_CONTACT</role>
+              <gdprConsent>true</gdprConsent>
               <company>Bedrijf NV</company>
             </registration>
 
@@ -375,8 +810,8 @@ components:
       title: Inschrijvingswijziging of annulering
       contentType: application/xml
       tags:
-        - name: "US-21"
-        - name: "US-33"
+        - name: US-21
+        - name: US-33
       payload:
         $ref: "#/components/schemas/RegistrationChanged"
       examples:
@@ -407,8 +842,8 @@ components:
       title: Nieuw bedrijf aanmaken
       contentType: application/xml
       tags:
-        - name: "US-40"
-        - name: "US-20"
+        - name: US-40
+        - name: US-20
       payload:
         $ref: "#/components/schemas/CompanyCreated"
       examples:
@@ -420,38 +855,41 @@ components:
               <vatNumber>BE0123456789</vatNumber>
               <email>info@bedrijf.be</email>
               <phone>+32 2 123 45 67</phone>
-              <address>Hoofdstraat 1, 1000 Brussel</address>
+              <street>Hoofdstraat</street>
+              <houseNumber>1</houseNumber>
+              <postalCode>1000</postalCode>
+              <city>Brussel</city>
+              <country>BE</country>
             </company_created>
 
     CompanyUpdated:
       name: CompanyUpdated
-      title: Bedrijfsgegevens updaten
+      title: Bedrijfsgegevens (volledig object — CRM broadcast)
+      summary: >-
+        Volledig bijgewerkt Account uit Salesforce. Consumers vervangen hun
+        lokale kopie volledig — geen partial merge.
       contentType: application/xml
       tags:
-        - name: "US-41"
+        - name: US-41
       payload:
-        $ref: "#/components/schemas/CompanyUpdated"
+        $ref: "#/components/schemas/CompanyUpdatedBroadcast"
       examples:
-        - name: naam_update
+        - name: update
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
             <company_updated>
+              <id>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</id>
               <vatNumber>BE0123456789</vatNumber>
-              <updatedFields>
-                <name>Nieuw Bedrijf NV</name>
-              </updatedFields>
-            </company_updated>
-        - name: volledig_update
-          payload: |
-            <?xml version="1.0" encoding="UTF-8"?>
-            <company_updated>
-              <vatNumber>BE0123456789</vatNumber>
-              <updatedFields>
-                <name>Nieuw Bedrijf NV</name>
-                <email>nieuw@bedrijf.be</email>
-                <phone>+32 3 987 65 43</phone>
-                <address>Nieuwstraat 5, 2000 Antwerpen</address>
-              </updatedFields>
+              <name>Nieuw Bedrijf NV</name>
+              <email>nieuw@bedrijf.be</email>
+              <phone>+32 3 987 65 43</phone>
+              <street>Nieuwstraat</street>
+              <houseNumber>5</houseNumber>
+              <postalCode>2000</postalCode>
+              <city>Antwerpen</city>
+              <country>BE</country>
+              <isActive>true</isActive>
+              <updatedAt>2026-04-15T14:00:00Z</updatedAt>
             </company_updated>
 
     CompanyDataRequest:
@@ -462,8 +900,8 @@ components:
         location: $message.payload#/requestId
         description: requestId correleert request en response
       tags:
-        - name: "US-40"
-        - name: "US-20"
+        - name: US-40
+        - name: US-20
       payload:
         $ref: "#/components/schemas/CompanyDataRequest"
       examples:
@@ -483,8 +921,8 @@ components:
         location: $message.payload#/requestId
         description: requestId correleert response terug naar het originele request
       tags:
-        - name: "US-40"
-        - name: "US-20"
+        - name: US-40
+        - name: US-20
       payload:
         $ref: "#/components/schemas/CompanyDataResponse"
       examples:
@@ -494,11 +932,16 @@ components:
             <company_response>
               <requestId>REQ-001</requestId>
               <found>true</found>
+              <id>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</id>
               <name>Bedrijf NV</name>
               <vatNumber>BE0123456789</vatNumber>
               <email>info@bedrijf.be</email>
               <phone>+32 2 123 45 67</phone>
-              <address>Hoofdstraat 1, 1000 Brussel</address>
+              <street>Hoofdstraat</street>
+              <houseNumber>1</houseNumber>
+              <postalCode>1000</postalCode>
+              <city>Brussel</city>
+              <country>BE</country>
             </company_response>
         - name: niet_gevonden
           payload: |
@@ -514,10 +957,10 @@ components:
       summary: CRM stuurt per ontvanger een apart bericht — geen lijsten in één XML
       contentType: application/xml
       tags:
-        - name: "US-03"
-        - name: "US-22"
-        - name: "US-23"
-        - name: "US-24"
+        - name: US-03
+        - name: US-22
+        - name: US-23
+        - name: US-24
       payload:
         $ref: "#/components/schemas/MailRequest"
       examples:
@@ -585,8 +1028,8 @@ components:
       summary: Elke seconde gepubliceerd — Controlroom alarmeert als signaal uitblijft
       contentType: application/xml
       tags:
-        - name: "US-25"
-        - name: "US-26"
+        - name: US-25
+        - name: US-26
       payload:
         $ref: "#/components/schemas/Heartbeat"
       examples:
@@ -604,7 +1047,7 @@ components:
       summary: Uitgebreider dan heartbeat — bevat CPU, memory en disk
       contentType: application/xml
       tags:
-        - name: "US-25"
+        - name: US-25
       payload:
         $ref: "#/components/schemas/StatusCheck"
       examples:
@@ -643,7 +1086,7 @@ components:
       summary: Controlroom detecteerde anomalie — CRM logt als error, geen crash
       contentType: application/xml
       tags:
-        - name: "US-26"
+        - name: US-26
       payload:
         $ref: "#/components/schemas/Warning"
       examples:
@@ -672,7 +1115,7 @@ components:
         location: $message.payload#/requestId
         description: requestId correleert request en response
       tags:
-        - name: "US-47"
+        - name: US-47
       payload:
         $ref: "#/components/schemas/PersonLookup"
       examples:
@@ -692,7 +1135,7 @@ components:
         location: $message.payload#/requestId
         description: requestId correleert response terug naar het originele request
       tags:
-        - name: "US-47"
+        - name: US-47
       payload:
         $ref: "#/components/schemas/PersonResponse"
       examples:
@@ -703,7 +1146,9 @@ components:
               <requestId>LOOKUP-001</requestId>
               <found>true</found>
               <linkedToCompany>true</linkedToCompany>
+              <id>b2c3d4e5-f6a7-4890-8c12-de3456fa7890</id>
               <companyName>Bedrijf NV</companyName>
+              <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
             </person_response>
         - name: gevonden_zonder_bedrijf
           payload: |
@@ -712,6 +1157,7 @@ components:
               <requestId>LOOKUP-001</requestId>
               <found>true</found>
               <linkedToCompany>false</linkedToCompany>
+              <id>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</id>
             </person_response>
         - name: niet_gevonden
           payload: |
@@ -727,7 +1173,7 @@ components:
       title: Sessiewijziging van Planning
       contentType: application/xml
       tags:
-        - name: "US-23"
+        - name: US-23
       payload:
         $ref: "#/components/schemas/SessionUpdate"
       examples:
@@ -753,11 +1199,13 @@ components:
     BadgeLink:
       name: BadgeLink
       title: Badge koppelen aan bezoeker
-      summary: IoT stuurt badge-ID + e-mail — CRM slaat koppeling op bij Contact in Salesforce
+      summary: >-
+        IoT stuurt badge-ID + e-mail — CRM slaat koppeling op bij Contact in
+        Salesforce
       contentType: application/xml
       tags:
-        - name: "US-28"
-        - name: "US-29"
+        - name: US-28
+        - name: US-29
       payload:
         $ref: "#/components/schemas/BadgeLink"
       examples:
@@ -770,12 +1218,310 @@ components:
               <linkedAt>2026-04-15T09:00:00Z</linkedAt>
             </badge_link>
 
-  schemas:
-    # Schemas zijn gedocumenteerd als type: object met properties voor leesbaarheid
-    # in renderers (AsyncAPI Studio e.d.). contentType: application/xml op message-niveau
-    # bepaalt het wire-formaat. XSD-validatie in implementatie via lxml.
-    # XSD-schemas staan in de Git repo.
+    UserConfirmed:
+      name: UserConfirmed
+      title: Contact bevestigd door CRM
+      summary: >-
+        CRM publiceert dit bericht nadat een Contact aangemaakt of gededupliceerd
+        is in Salesforce. Het id-veld is het canonical UUID v4 voor dit contact
+        in het gehele platform.
+      contentType: application/xml
+      tags:
+        - name: US-02
+        - name: US-19
+      payload:
+        $ref: "#/components/schemas/UserConfirmed"
+      examples:
+        - name: bevestigd
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <user_confirmed>
+              <id>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</id>
+              <email>jan.janssen@example.com</email>
+              <firstName>Jan</firstName>
+              <lastName>Janssen</lastName>
+              <phone>+32471234567</phone>
+              <role>VISITOR</role>
+              <isActive>true</isActive>
+              <gdprConsent>true</gdprConsent>
+              <confirmedAt>2026-04-15T10:00:05Z</confirmedAt>
+            </user_confirmed>
+        - name: bevestigd_met_bedrijf
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <user_confirmed>
+              <id>b2c3d4e5-f6a7-4890-8c12-de3456fa7890</id>
+              <email>lien.vermeersch@techbedrijf.be</email>
+              <firstName>Lien</firstName>
+              <lastName>Vermeersch</lastName>
+              <role>COMPANY_CONTACT</role>
+              <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
+              <isActive>true</isActive>
+              <gdprConsent>true</gdprConsent>
+              <confirmedAt>2026-04-15T10:00:07Z</confirmedAt>
+            </user_confirmed>
 
+    CompanyConfirmed:
+      name: CompanyConfirmed
+      title: Account bevestigd door CRM
+      summary: >-
+        CRM publiceert dit bericht nadat een Account aangemaakt of gededupliceerd
+        is in Salesforce. Het id-veld is het canonical UUID v4 voor dit bedrijf
+        in het gehele platform.
+      contentType: application/xml
+      tags:
+        - name: US-40
+        - name: US-20
+      payload:
+        $ref: "#/components/schemas/CompanyConfirmed"
+      examples:
+        - name: bevestigd
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <company_confirmed>
+              <id>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</id>
+              <vatNumber>BE0123456789</vatNumber>
+              <name>Bedrijf NV</name>
+              <email>facturatie@bedrijf.be</email>
+              <isActive>true</isActive>
+              <confirmedAt>2026-04-15T10:00:10Z</confirmedAt>
+            </company_confirmed>
+
+    UserConflict:
+      name: UserConflict
+      title: Conflicterende inschrijving gedetecteerd
+      summary: >-
+        CRM detecteerde een inschrijving met een e-mail die al bestaat in
+        Salesforce met afwijkende persoonsdata. Beide waarden worden
+        meegestuurd zodat de eventbeheerder kan beslissen.
+      contentType: application/xml
+      tags:
+        - name: US-34
+        - name: US-35
+      payload:
+        $ref: "#/components/schemas/UserConflict"
+      examples:
+        - name: conflict
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <user_conflict>
+              <email>jan.janssen@example.com</email>
+              <existingValue>
+                <firstName>Jan</firstName>
+                <lastName>Janssen</lastName>
+              </existingValue>
+              <incomingValue>
+                <firstName>Johan</firstName>
+                <lastName>Janssen</lastName>
+              </incomingValue>
+              <detectedAt>2026-04-15T10:01:00Z</detectedAt>
+            </user_conflict>
+
+    PaymentConfirmed:
+      name: PaymentConfirmed
+      title: Betaling bevestigd door Kassa
+      summary: >-
+        Kassa meldt dat een deelnemer betaald heeft aan de inkom. CRM werkt
+        betalingsstatus bij op Contact in Salesforce.
+      contentType: application/xml
+      tags:
+        - name: US-08
+        - name: US-21
+      payload:
+        $ref: "#/components/schemas/PaymentConfirmed"
+      examples:
+        - name: betaling
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <payment_confirmed>
+              <userId>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</userId>
+              <email>jan.janssen@example.com</email>
+              <registrationId>REG-20260415-001</registrationId>
+              <amount>25.00</amount>
+              <currency>EUR</currency>
+              <paidAt>2026-04-15T09:30:00Z</paidAt>
+            </payment_confirmed>
+
+    UnpaidRequest:
+      name: UnpaidRequest
+      title: Verzoek lijst niet-betaalde deelnemers
+      contentType: application/xml
+      correlationId:
+        location: $message.payload#/requestId
+        description: requestId correleert request en response
+      tags:
+        - name: US-07
+      payload:
+        $ref: "#/components/schemas/UnpaidRequest"
+      examples:
+        - name: request
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <unpaid_request>
+              <requestId>UNPAID-001</requestId>
+            </unpaid_request>
+
+    UnpaidResponse:
+      name: UnpaidResponse
+      title: Lijst niet-betaalde deelnemers
+      contentType: application/xml
+      correlationId:
+        location: $message.payload#/requestId
+      tags:
+        - name: US-07
+      payload:
+        $ref: "#/components/schemas/UnpaidResponse"
+      examples:
+        - name: lijst
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <unpaid_response>
+              <requestId>UNPAID-001</requestId>
+              <persons>
+                <person>
+                  <id>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</id>
+                  <firstName>Jan</firstName>
+                  <lastName>Janssen</lastName>
+                  <email>jan.janssen@example.com</email>
+                  <linkedToCompany>false</linkedToCompany>
+                </person>
+                <person>
+                  <id>b2c3d4e5-f6a7-4890-8c12-de3456fa7890</id>
+                  <firstName>Lien</firstName>
+                  <lastName>Vermeersch</lastName>
+                  <email>lien.vermeersch@techbedrijf.be</email>
+                  <linkedToCompany>true</linkedToCompany>
+                  <companyName>Bedrijf NV</companyName>
+                </person>
+              </persons>
+            </unpaid_response>
+
+    UserUpdated:
+      name: UserUpdated
+      title: Contact bijgewerkt door CRM
+      summary: >-
+        Volledig bijgewerkt Contact na update in Salesforce. Consumers vervangen
+        hun lokale kopie volledig — geen partial merge.
+      contentType: application/xml
+      tags:
+        - name: US-21
+        - name: US-41
+      payload:
+        $ref: "#/components/schemas/UserUpdated"
+      examples:
+        - name: update
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <user_updated>
+              <id>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</id>
+              <email>jan.janssen@example.com</email>
+              <firstName>Johan</firstName>
+              <lastName>Janssen</lastName>
+              <role>VISITOR</role>
+              <isActive>true</isActive>
+              <gdprConsent>true</gdprConsent>
+              <updatedAt>2026-04-15T12:00:00Z</updatedAt>
+            </user_updated>
+
+    BounceReported:
+      name: BounceReported
+      title: E-mailbounce gerapporteerd
+      summary: >-
+        Mailing meldt dat een e-mail niet afgeleverd kon worden. CRM markeert
+        het adres als onbereikbaar op Contact in Salesforce.
+      contentType: application/xml
+      tags:
+        - name: US-39
+      payload:
+        $ref: "#/components/schemas/BounceReported"
+      examples:
+        - name: bounce
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <bounce_reported>
+              <email>jan.janssen@example.com</email>
+              <bounceType>hard</bounceType>
+              <reason>User unknown</reason>
+              <bouncedAt>2026-04-15T11:00:00Z</bouncedAt>
+            </bounce_reported>
+
+    InvoiceRequested:
+      name: InvoiceRequested
+      title: Factuurverzoek privépersoon
+      summary: >-
+        CRM meldt aan Facturatie dat een privépersoon een factuur aanvraagt.
+        Adresgegevens zijn ingevuld op het Contact in Salesforce. Facturatie
+        maakt factuur aan in FOSSBilling op basis van de meegestuurde gegevens.
+      contentType: application/xml
+      tags:
+        - name: US-11
+      payload:
+        $ref: "#/components/schemas/InvoiceRequested"
+      examples:
+        - name: factuurverzoek
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <invoice_requested>
+              <userId>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</userId>
+              <email>jan.janssen@example.com</email>
+              <firstName>Jan</firstName>
+              <lastName>Janssen</lastName>
+              <street>Nijverheidskaai</street>
+              <houseNumber>170</houseNumber>
+              <postalCode>1070</postalCode>
+              <city>Anderlecht</city>
+              <country>BE</country>
+              <requestedAt>2026-04-15T14:05:00Z</requestedAt>
+            </invoice_requested>
+
+    UserDeactivated:
+      name: UserDeactivated
+      title: Contact gedeactiveerd (GDPR)
+      summary: >-
+        CRM meldt dat een Contact gedeactiveerd is. isActive=false — nooit
+        fysiek verwijderen (GDPR audit trail). Consumers stoppen met verwerking
+        voor deze persoon.
+      contentType: application/xml
+      tags:
+        - name: US-55
+      payload:
+        $ref: "#/components/schemas/UserDeactivated"
+      examples:
+        - name: deactivatie
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <user_deactivated>
+              <id>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</id>
+              <email>jan.janssen@example.com</email>
+              <deactivatedAt>2026-04-15T16:00:00Z</deactivatedAt>
+            </user_deactivated>
+
+    CompanyDeactivated:
+      name: CompanyDeactivated
+      title: Account gedeactiveerd
+      summary: >-
+        CRM meldt dat een Account gedeactiveerd is. isActive=false. Consumers
+        stoppen met verwerking voor dit bedrijf.
+      contentType: application/xml
+      tags:
+        - name: US-54
+      payload:
+        $ref: "#/components/schemas/CompanyDeactivated"
+      examples:
+        - name: deactivatie
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <company_deactivated>
+              <id>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</id>
+              <vatNumber>BE0123456789</vatNumber>
+              <deactivatedAt>2026-04-15T16:00:00Z</deactivatedAt>
+            </company_deactivated>
+
+  # ============================================================
+  # SCHEMAS
+  # ============================================================
+
+  schemas:
     RegistrationCreated:
       type: object
       required:
@@ -784,10 +1530,14 @@ components:
         - lastName
         - email
         - sessionId
+        - role
+        - gdprConsent
       properties:
         registrationId:
           type: string
-          description: Uniek ID per inschrijving — gegenereerd door Frontend. Gebruikt door CRM-receiver voor idempotentie (duplicaat op queue = negeren).
+          description: >-
+            Uniek ID per inschrijving — gegenereerd door Frontend. Gebruikt door
+            CRM-receiver voor idempotentie (duplicaat op queue = negeren).
         firstName:
           type: string
         lastName:
@@ -796,11 +1546,30 @@ components:
           type: string
           format: email
           description: RFC 5322
+        phone:
+          type: string
+          description: Optioneel — internationaal formaat (+32...)
         sessionId:
           type: string
+        role:
+          type: string
+          enum:
+            - VISITOR
+            - COMPANY_CONTACT
+          description: >-
+            Verplicht — VISITOR voor privépersonen, COMPANY_CONTACT als company
+            meegegeven wordt. CRM leidt de Salesforce-rol hieruit af.
+        gdprConsent:
+          type: boolean
+          description: >-
+            Verplicht — moet true zijn. CRM weigert aanmaak als false.
+            Mailing gebruikt dit om te bepalen of mail verstuurd mag worden.
         company:
           type: string
-          description: Optioneel — niet leeg indien aanwezig
+          description: >-
+            Optioneel — verplicht als role=COMPANY_CONTACT. Niet leeg indien
+            aanwezig. CRM zoekt of maakt het bijhorende Account op basis van
+            deze naam.
 
     RegistrationChanged:
       type: object
@@ -808,10 +1577,17 @@ components:
         - email
         - sessionId
         - changeType
+      description: >
+        Bij cancelled: Contact deactiveren — geen verwijdering (US-55 GDPR R3).
+        Na verwerking publiceert CRM crm.user.updated of crm.user.deactivated.
+        US-46 (offline buffering R3): zelfde queue, lokale buffer in receiver.
+        US-34/US-35 (R2): bij conflicterende data crm.user.conflict publiceren.
       properties:
         registrationId:
           type: string
-          description: Optioneel — aanbevolen. Correleert met de registrationId uit RegistrationCreated. Geeft CRM een preciezere lookup dan email+sessionId alleen.
+          description: >-
+            Optioneel — aanbevolen. Correleert met registrationId uit
+            RegistrationCreated.
         email:
           type: string
           format: email
@@ -819,16 +1595,30 @@ components:
           type: string
         changeType:
           type: string
-          enum: [updated, cancelled]
+          enum:
+            - updated
+            - cancelled
         updatedFields:
           type: object
-          description: |
-            Optioneel — alleen bij changeType=updated.
-            Bevat enkel de gewijzigde velden (firstName, lastName, email, company).
-      description: |
-        Bij cancelled: Contact deactiveren — geen verwijdering (US-55 GDPR = R3)
-        US-46 (offline buffering R3): zelfde queue, lokale buffer in receiver
-        US-34/US-35 (R2): bij conflicterende persoonsdata beide waarden loggen als error en melding genereren — interne CRM-logica, geen apart contract
+          description: Optioneel — alleen bij changeType=updated.
+          properties:
+            firstName:
+              type: string
+            lastName:
+              type: string
+            email:
+              type: string
+              format: email
+            phone:
+              type: string
+              description: Optioneel — internationaal formaat (+32...)
+            role:
+              type: string
+              enum:
+                - VISITOR
+                - COMPANY_CONTACT
+            company:
+              type: string
 
     CompanyCreated:
       type: object
@@ -840,39 +1630,71 @@ components:
           type: string
         vatNumber:
           type: string
-          description: Begint met landcode (BE, NL, ...)
+          description: Belgisch formaat BE + 10 cijfers
+          pattern: "^BE[0-9]{10}$"
         email:
           type: string
           format: email
         phone:
           type: string
-        address:
+        street:
           type: string
+        houseNumber:
+          type: string
+          description: Inclusief bus indien van toepassing
+        postalCode:
+          type: string
+        city:
+          type: string
+        country:
+          type: string
+          pattern: "^[A-Z]{2}$"
+          description: ISO 3166-1 alpha-2. Standaard BE.
 
-    CompanyUpdated:
+    CompanyUpdatedBroadcast:
       type: object
       required:
+        - id
         - vatNumber
-        - updatedFields
+        - name
+        - isActive
+        - updatedAt
+      description: >-
+        Volledig object — consumers vervangen lokale kopie volledig.
+        Wordt gepubliceerd op crm.company.updated door CRM na update in Salesforce.
       properties:
+        id:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
         vatNumber:
           type: string
-          description: Sleutel — nooit zelf te wijzigen. Wordt gebruikt om Account in Salesforce op te zoeken.
-        updatedFields:
-          type: object
-          minProperties: 1
-          description: Min. 1 veld verplicht. Kan name, email, phone en/of address bevatten.
-          properties:
-            name:
-              type: string
-            email:
-              type: string
-              format: email
-            phone:
-              type: string
-            address:
-              type: string
-          additionalProperties: false
+          pattern: "^BE[0-9]{10}$"
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        street:
+          type: string
+        houseNumber:
+          type: string
+          description: Inclusief bus indien van toepassing
+        postalCode:
+          type: string
+        city:
+          type: string
+        country:
+          type: string
+          pattern: "^[A-Z]{2}$"
+          description: ISO 3166-1 alpha-2
+        isActive:
+          type: boolean
+        updatedAt:
+          type: string
+          format: date-time
 
     CompanyDataRequest:
       type: object
@@ -882,9 +1704,10 @@ components:
       properties:
         requestId:
           type: string
-          description: Correleert request en response
         vatNumber:
           type: string
+          description: Belgisch formaat BE + 10 cijfers
+          pattern: "^BE[0-9]{10}$"
 
     CompanyDataResponse:
       type: object
@@ -894,26 +1717,43 @@ components:
       properties:
         requestId:
           type: string
-          description: Correleert met het oorspronkelijke request
         found:
           type: boolean
-          description: true indien bedrijf gevonden, false indien niet gevonden
+        id:
+          type: string
+          format: uuid
+          description: UUID v4 van Account in Salesforce — alleen aanwezig als found=true
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
         name:
           type: string
           description: Optioneel — alleen aanwezig als found=true
         vatNumber:
           type: string
-          description: Optioneel — alleen aanwezig als found=true
+          description: Optioneel — alleen aanwezig als found=true. Belgisch formaat BE + 10 cijfers.
+          pattern: "^BE[0-9]{10}$"
         email:
           type: string
           format: email
           description: Optioneel — alleen aanwezig als found=true
         phone:
           type: string
-          description: Optioneel — alleen aanwezig als found=true. Consistent met CompanyCreated.
-        address:
+          description: Optioneel — alleen aanwezig als found=true
+        street:
           type: string
           description: Optioneel — alleen aanwezig als found=true
+        houseNumber:
+          type: string
+          description: Optioneel — alleen aanwezig als found=true. Inclusief bus.
+        postalCode:
+          type: string
+          description: Optioneel — alleen aanwezig als found=true
+        city:
+          type: string
+          description: Optioneel — alleen aanwezig als found=true
+        country:
+          type: string
+          pattern: "^[A-Z]{2}$"
+          description: Optioneel — alleen aanwezig als found=true. ISO 3166-1 alpha-2.
 
     MailRequest:
       type: object
@@ -922,10 +1762,10 @@ components:
         - mailType
         - recipient
         - dynamic_data
-      description: |
+      description: >
         1 bericht per ontvanger — geen lijsten.
         mailType bepaalt welk SendGrid-template Mailing selecteert.
-        US-03/US-22/US-23 zijn Release 1. US-24 (herinnering) is Release 2 — mailType=session_reminder.
+        US-03/US-22/US-23 R1. US-24 (herinnering) R2 — mailType=session_reminder.
       properties:
         header:
           type: object
@@ -935,26 +1775,18 @@ components:
           properties:
             source:
               type: string
-              enum: [CRM]
+              enum:
+                - CRM
             timestamp:
               type: string
               format: date-time
-              description: ISO 8601 UTC
         mailType:
           type: string
           enum:
-            [
-              registration_confirmation,
-              session_change,
-              session_reminder,
-              bulk_event,
-            ]
-          description: |
-            Bepaalt het SendGrid-template bij Mailing.
-            registration_confirmation → US-03 (R1)
-            session_change → US-23 getriggerd via Contract 11 (R1)
-            bulk_event → US-22 (R1)
-            session_reminder → US-24 (R2)
+            - registration_confirmation
+            - session_change
+            - session_reminder
+            - bulk_event
         recipient:
           type: object
           required:
@@ -970,23 +1802,18 @@ components:
           type: object
           required:
             - guest_name
-          description: |
-            guest_name altijd verplicht.
-            session_name en session_time verplicht voor: registration_confirmation, session_change, session_reminder.
-            Niet van toepassing voor bulk_event — Mailing gebruikt dan een event-breed template zonder sessiedata.
           properties:
             guest_name:
               type: string
             session_name:
               type: string
-              description: Optioneel — verplicht voor alle mailTypes behalve bulk_event
+              description: Verplicht voor alle mailTypes behalve bulk_event
             session_time:
               type: string
               format: date-time
-              description: "ISO 8601 UTC — optioneel, verplicht voor alle mailTypes behalve bulk_event"
+              description: Verplicht voor alle mailTypes behalve bulk_event
             session_location:
               type: string
-              description: Optioneel
 
     Heartbeat:
       type: object
@@ -994,15 +1821,15 @@ components:
       required:
         - serviceId
         - timestamp
-      description: Geen extra velden toegestaan (schema strict — Controlroom-schemas.md). Frequentie elke 1 seconde.
+      description: Geen extra velden toegestaan. Frequentie elke 1 seconde.
       properties:
         serviceId:
           type: string
-          enum: [CRM]
+          enum:
+            - CRM
         timestamp:
           type: string
           format: date-time
-          description: ISO 8601 UTC
 
     StatusCheck:
       type: object
@@ -1016,14 +1843,18 @@ components:
       properties:
         serviceId:
           type: string
-          enum: [CRM]
+          enum:
+            - CRM
         timestamp:
           type: string
           format: date-time
-          description: ISO 8601 UTC
         status:
           type: string
-          enum: [healthy, degraded, unhealthy, unknown]
+          enum:
+            - healthy
+            - degraded
+            - unhealthy
+            - unknown
         uptime:
           type: integer
           description: Seconden
@@ -1036,19 +1867,16 @@ components:
           properties:
             cpu:
               type: number
-              minimum: 0.0
-              maximum: 1.0
-              description: Decimaal 0.0–1.0
+              minimum: 0
+              maximum: 1
             memory:
               type: number
-              minimum: 0.0
-              maximum: 1.0
-              description: Decimaal 0.0–1.0
+              minimum: 0
+              maximum: 1
             disk:
               type: number
-              minimum: 0.0
-              maximum: 1.0
-              description: Decimaal 0.0–1.0
+              minimum: 0
+              maximum: 1
 
     Warning:
       type: object
@@ -1060,13 +1888,16 @@ components:
       properties:
         serviceId:
           type: string
-          enum: [CRM]
+          enum:
+            - CRM
         message:
           type: string
         type:
           type: string
-          enum: [heartbeat, statusCheck, user]
-          description: DuplicateTypeEnum — zie Controlroom-schemas.md
+          enum:
+            - heartbeat
+            - statusCheck
+            - user
 
     PersonLookup:
       type: object
@@ -1076,7 +1907,6 @@ components:
       properties:
         requestId:
           type: string
-          description: Correleert request en response
         email:
           type: string
           format: email
@@ -1090,15 +1920,24 @@ components:
       properties:
         requestId:
           type: string
-          description: Correleert met het oorspronkelijke request
         found:
           type: boolean
         linkedToCompany:
           type: boolean
           description: Altijd false als found=false
+        id:
+          type: string
+          format: uuid
+          description: UUID v4 van Contact in Salesforce — alleen aanwezig als found=true
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
         companyName:
           type: string
           description: Optioneel — alleen aanwezig als linkedToCompany=true
+        companyId:
+          type: string
+          format: uuid
+          description: UUID v4 van Account — alleen aanwezig als linkedToCompany=true
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 
     SessionUpdate:
       type: object
@@ -1114,19 +1953,24 @@ components:
         newTime:
           type: string
           format: date-time
-          description: "ISO 8601 UTC — verplicht bij rescheduled en updated, niet van toepassing bij cancelled"
+          description: Verplicht bij rescheduled en updated
         changeType:
           type: string
-          enum: [rescheduled, cancelled, updated]
+          enum:
+            - rescheduled
+            - cancelled
+            - updated
         newLocation:
           type: string
-          description: Optioneel
       if:
         properties:
           changeType:
-            enum: [rescheduled, updated]
+            enum:
+              - rescheduled
+              - updated
       then:
-        required: [newTime]
+        required:
+          - newTime
 
     BadgeLink:
       type: object
@@ -1138,15 +1982,387 @@ components:
       properties:
         badgeId:
           type: string
-          description: Uniek badge-ID
         contactEmail:
           type: string
           format: email
-          description: Moet een bestaand Contact zijn in Salesforce
         linkedAt:
           type: string
           format: date-time
-          description: ISO 8601 UTC
+
+    UserConfirmed:
+      type: object
+      required:
+        - id
+        - email
+        - firstName
+        - lastName
+        - role
+        - isActive
+        - gdprConsent
+        - confirmedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: UUID v4 — gegenereerd door CRM. Canonical identifier voor dit contact.
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        email:
+          type: string
+          format: email
+          description: RFC 5322 — deduplicatiesleutel in Salesforce
+        firstName:
+          type: string
+        lastName:
+          type: string
+        phone:
+          type: string
+          description: Optioneel — internationaal formaat (+32...)
+        role:
+          type: string
+          enum:
+            - VISITOR
+            - COMPANY_CONTACT
+            - SPEAKER
+            - EVENT_MANAGER
+            - CASHIER
+            - BAR_STAFF
+            - ADMIN
+        companyId:
+          type: string
+          format: uuid
+          description: Optioneel — alleen aanwezig als role=COMPANY_CONTACT
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        badgeCode:
+          type: string
+          description: >-
+            Optioneel — null tot badge uitgereikt aan inkom. Nodig voor US-49
+            (automatische factuur op basis van badge-data na event).
+          maxLength: 32
+        isActive:
+          type: boolean
+        gdprConsent:
+          type: boolean
+          description: >-
+            Verplicht — Mailing gebruikt dit om te bepalen of een mail verstuurd
+            mag worden. Moet true zijn bij inschrijving.
+        confirmedAt:
+          type: string
+          format: date-time
+
+    CompanyConfirmed:
+      type: object
+      required:
+        - id
+        - vatNumber
+        - name
+        - email
+        - isActive
+        - confirmedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: UUID v4 — gegenereerd door CRM. Canonical identifier voor dit bedrijf.
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        vatNumber:
+          type: string
+          pattern: "^BE[0-9]{10}$"
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+          description: >-
+            Facturatie-e-mailadres. Nodig voor FOSSBilling bij aanmaak —
+            voorkomt extra roundtrip via Contract 5.
+        isActive:
+          type: boolean
+        confirmedAt:
+          type: string
+          format: date-time
+
+    UserConflict:
+      type: object
+      required:
+        - email
+        - existingValue
+        - incomingValue
+        - detectedAt
+      properties:
+        email:
+          type: string
+          format: email
+          description: E-mail die als deduplicatiesleutel gebruikt werd
+        existingValue:
+          type: object
+          description: Huidige waarden in Salesforce
+          properties:
+            firstName:
+              type: string
+            lastName:
+              type: string
+            company:
+              type: string
+        incomingValue:
+          type: object
+          description: Binnenkomende waarden die afwijken
+          properties:
+            firstName:
+              type: string
+            lastName:
+              type: string
+            company:
+              type: string
+        detectedAt:
+          type: string
+          format: date-time
+
+    PaymentConfirmed:
+      type: object
+      required:
+        - email
+        - amount
+        - currency
+        - paidAt
+      properties:
+        userId:
+          type: string
+          format: uuid
+          description: Optioneel — UUID v4 als Kassa dit al heeft via crm.user.confirmed
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        email:
+          type: string
+          format: email
+          description: Fallback lookup als userId niet beschikbaar is
+        registrationId:
+          type: string
+          description: >-
+            Optioneel, aanbevolen — correleert met registrationId uit
+            RegistrationCreated. Nodig als een persoon voor meerdere sessies
+            is ingeschreven zodat CRM de juiste inschrijving kan markeren
+            als betaald.
+        amount:
+          type: number
+          minimum: 0
+        currency:
+          type: string
+          enum:
+            - EUR
+        paidAt:
+          type: string
+          format: date-time
+
+    UnpaidRequest:
+      type: object
+      required:
+        - requestId
+      properties:
+        requestId:
+          type: string
+
+    UnpaidResponse:
+      type: object
+      required:
+        - requestId
+        - persons
+      properties:
+        requestId:
+          type: string
+        persons:
+          type: array
+          items:
+            type: object
+            required:
+              - id
+              - firstName
+              - lastName
+              - email
+              - linkedToCompany
+            properties:
+              id:
+                type: string
+                format: uuid
+                pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              firstName:
+                type: string
+              lastName:
+                type: string
+              email:
+                type: string
+                format: email
+              linkedToCompany:
+                type: boolean
+              companyName:
+                type: string
+                description: Optioneel — alleen aanwezig als linkedToCompany=true
+
+    UserUpdated:
+      type: object
+      required:
+        - id
+        - email
+        - firstName
+        - lastName
+        - role
+        - isActive
+        - gdprConsent
+        - updatedAt
+      description: Volledig object — consumers vervangen lokale kopie volledig.
+      properties:
+        id:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        email:
+          type: string
+          format: email
+        firstName:
+          type: string
+        lastName:
+          type: string
+        phone:
+          type: string
+          description: Optioneel — internationaal formaat (+32...)
+        role:
+          type: string
+          enum:
+            - VISITOR
+            - COMPANY_CONTACT
+            - SPEAKER
+            - EVENT_MANAGER
+            - CASHIER
+            - BAR_STAFF
+            - ADMIN
+        companyId:
+          type: string
+          format: uuid
+          description: Optioneel — alleen aanwezig als role=COMPANY_CONTACT
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        badgeCode:
+          type: string
+          description: >-
+            Optioneel — null tot badge uitgereikt aan inkom. Nodig voor US-49
+            (automatische factuur op basis van badge-data na event).
+          maxLength: 32
+        street:
+          type: string
+          description: Optioneel — ingevuld bij factuurverzoek privépersoon
+        houseNumber:
+          type: string
+        postalCode:
+          type: string
+        city:
+          type: string
+        country:
+          type: string
+          pattern: "^[A-Z]{2}$"
+        isActive:
+          type: boolean
+        gdprConsent:
+          type: boolean
+          description: Mailing gebruikt dit om te bepalen of een mail verstuurd mag worden.
+        updatedAt:
+          type: string
+          format: date-time
+
+    BounceReported:
+      type: object
+      required:
+        - email
+        - bounceType
+        - bouncedAt
+      properties:
+        email:
+          type: string
+          format: email
+        bounceType:
+          type: string
+          enum:
+            - hard
+            - soft
+          description: hard = permanent onbereikbaar, soft = tijdelijk
+        reason:
+          type: string
+          description: Optioneel — foutbericht van SendGrid
+        bouncedAt:
+          type: string
+          format: date-time
+
+    InvoiceRequested:
+      type: object
+      required:
+        - userId
+        - email
+        - firstName
+        - lastName
+        - street
+        - houseNumber
+        - postalCode
+        - city
+        - country
+        - requestedAt
+      properties:
+        userId:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        email:
+          type: string
+          format: email
+        firstName:
+          type: string
+        lastName:
+          type: string
+        street:
+          type: string
+        houseNumber:
+          type: string
+        postalCode:
+          type: string
+        city:
+          type: string
+        country:
+          type: string
+          pattern: "^[A-Z]{2}$"
+        requestedAt:
+          type: string
+          format: date-time
+
+    UserDeactivated:
+      type: object
+      required:
+        - id
+        - email
+        - deactivatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        email:
+          type: string
+          format: email
+        deactivatedAt:
+          type: string
+          format: date-time
+
+    CompanyDeactivated:
+      type: object
+      required:
+        - id
+        - vatNumber
+        - deactivatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        vatNumber:
+          type: string
+          pattern: "^BE[0-9]{10}$"
+        deactivatedAt:
+          type: string
+          format: date-time
 
   securitySchemes:
     rabbitmq:
