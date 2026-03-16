@@ -1,7 +1,7 @@
-asyncapi: 3.0.0
+asyncapi: 3.1.0
 info:
   title: Integratieproject 2026 — CRM (Salesforce) RabbitMQ Contracts
-  version: 1.4.2
+  version: 1.5.0
   description: >
     XML-contracten voor alle integraties waarbij het CRM-team (Salesforce)
     betrokken is.
@@ -317,9 +317,10 @@ channels:
         $ref: "#/components/messages/UserConflict"
     bindings:
       amqp:
-        is: fanout
+        is: routingKey
         exchange:
           name: crm.user.conflict
+          type: fanout
           durable: true
 
   # ============================================================
@@ -500,6 +501,8 @@ operations:
     action: receive
     channel:
       $ref: "#/channels/frontendRegistrationCreated"
+    messages:
+      - $ref: "#/channels/frontendRegistrationCreated/messages/registrationCreated"
     summary: >-
       Ontvang nieuwe inschrijving van Frontend en sla op als Contact in
       Salesforce. Na bevestiging: publiceer crm.user.confirmed.
@@ -511,6 +514,8 @@ operations:
     action: receive
     channel:
       $ref: "#/channels/frontendRegistrationUpdated"
+    messages:
+      - $ref: "#/channels/frontendRegistrationUpdated/messages/registrationChanged"
     summary: >-
       Ontvang inschrijvingswijziging of annulering van Frontend. Na verwerking:
       publiceer crm.user.updated of crm.user.deactivated (bij cancelled).
@@ -524,6 +529,8 @@ operations:
     action: receive
     channel:
       $ref: "#/channels/frontendCompanyCreated"
+    messages:
+      - $ref: "#/channels/frontendCompanyCreated/messages/companyCreated"
     summary: >-
       Ontvang nieuw bedrijf van Frontend en maak Account aan in Salesforce.
       Na bevestiging: publiceer crm.company.confirmed.
@@ -535,6 +542,8 @@ operations:
     action: receive
     channel:
       $ref: "#/channels/facturatieCompanyRequested"
+    messages:
+      - $ref: "#/channels/facturatieCompanyRequested/messages/companyDataRequest"
     summary: Ontvang bedrijfsdataverzoek van Facturatie en stuur response terug
     reply:
       channel:
@@ -549,6 +558,8 @@ operations:
     action: send
     channel:
       $ref: "#/channels/crmMailRequested"
+    messages:
+      - $ref: "#/channels/crmMailRequested/messages/mailRequest"
     summary: >-
       Stuur mailverzoek naar Mailing. R1: registration_confirmation (US-03),
       bulk_event (US-22), session_change (US-23). R2: session_reminder (US-24).
@@ -560,6 +571,8 @@ operations:
     action: send
     channel:
       $ref: "#/channels/crmHeartbeat"
+    messages:
+      - $ref: "#/channels/crmHeartbeat/messages/heartbeat"
     summary: Publiceer heartbeat elke 1 seconde als bewijs dat CRM actief is
     tags:
       - name: controlroom
@@ -569,6 +582,8 @@ operations:
     action: send
     channel:
       $ref: "#/channels/crmStatusChecked"
+    messages:
+      - $ref: "#/channels/crmStatusChecked/messages/statusCheck"
     summary: Stuur periodieke statuscheck met CPU-, geheugen- en schijfbelasting
     tags:
       - name: controlroom
@@ -578,6 +593,8 @@ operations:
     action: receive
     channel:
       $ref: "#/channels/controlroomWarningIssued"
+    messages:
+      - $ref: "#/channels/controlroomWarningIssued/messages/warning"
     summary: Ontvang systeemwaarschuwing van Controlroom en log als error
     tags:
       - name: controlroom
@@ -587,6 +604,8 @@ operations:
     action: receive
     channel:
       $ref: "#/channels/kassaPersonLookupRequested"
+    messages:
+      - $ref: "#/channels/kassaPersonLookupRequested/messages/personLookup"
     summary: Ontvang persoonscheck-verzoek van Kassa en stuur response terug inclusief UUID
     reply:
       channel:
@@ -601,6 +620,8 @@ operations:
     action: receive
     channel:
       $ref: "#/channels/planningSessionUpdated"
+    messages:
+      - $ref: "#/channels/planningSessionUpdated/messages/sessionUpdate"
     summary: >-
       Ontvang sessiewijziging van Planning en notificeer betrokken deelnemers
       via Mailing (US-23). Sprekernotificaties (US-38) zijn buiten scope voor CRM.
@@ -612,6 +633,8 @@ operations:
     action: receive
     channel:
       $ref: "#/channels/iotBadgeLinked"
+    messages:
+      - $ref: "#/channels/iotBadgeLinked/messages/badgeLink"
     summary: >-
       Ontvang badge-koppeling van IoT en sla badgeId op bij Contact in Salesforce
     tags:
@@ -622,6 +645,8 @@ operations:
     action: send
     channel:
       $ref: "#/channels/crmUserConfirmed"
+    messages:
+      - $ref: "#/channels/crmUserConfirmed/messages/userConfirmed"
     summary: >-
       Publiceer bevestigd Contact met UUID na Salesforce-validatie. Getriggerd
       door receiveRegistrationCreated. E-mail is deduplicatiesleutel — dubbele
@@ -637,6 +662,8 @@ operations:
     action: send
     channel:
       $ref: "#/channels/crmCompanyConfirmed"
+    messages:
+      - $ref: "#/channels/crmCompanyConfirmed/messages/companyConfirmed"
     summary: >-
       Publiceer bevestigd Account met UUID na Salesforce-verwerking. Getriggerd
       door receiveCompanyCreated. vatNumber is deduplicatiesleutel.
@@ -649,6 +676,8 @@ operations:
     action: send
     channel:
       $ref: "#/channels/crmUserConflict"
+    messages:
+      - $ref: "#/channels/crmUserConflict/messages/userConflict"
     summary: >-
       Publiceer conflictmelding wanneer een inschrijving binnenkomt met een
       e-mail die al bestaat in Salesforce met afwijkende gegevens. Controlroom
@@ -662,6 +691,8 @@ operations:
     action: receive
     channel:
       $ref: "#/channels/kassaPaymentConfirmed"
+    messages:
+      - $ref: "#/channels/kassaPaymentConfirmed/messages/paymentConfirmed"
     summary: >-
       Ontvang betalingsbevestiging van Kassa en werk betalingsstatus bij op
       Contact in Salesforce (US-08, US-21).
@@ -673,6 +704,8 @@ operations:
     action: receive
     channel:
       $ref: "#/channels/kassaUnpaidRequested"
+    messages:
+      - $ref: "#/channels/kassaUnpaidRequested/messages/unpaidRequest"
     summary: >-
       Ontvang verzoek voor lijst niet-betaalde deelnemers en stuur response
       terug (US-07).
@@ -689,6 +722,8 @@ operations:
     action: send
     channel:
       $ref: "#/channels/crmUserUpdated"
+    messages:
+      - $ref: "#/channels/crmUserUpdated/messages/userUpdated"
     summary: >-
       Publiceer volledig bijgewerkt Contact na update in Salesforce (US-21,
       US-41). Consumers updaten hun lokale kopie.
@@ -703,6 +738,8 @@ operations:
     action: send
     channel:
       $ref: "#/channels/crmCompanyUpdated"
+    messages:
+      - $ref: "#/channels/crmCompanyUpdated/messages/companyUpdated"
     summary: >-
       Publiceer volledig bijgewerkt Account na update in Salesforce (US-41).
       Facturatie gebruikt bijgewerkt adres voor facturen.
@@ -714,6 +751,8 @@ operations:
     action: receive
     channel:
       $ref: "#/channels/mailingBounceReported"
+    messages:
+      - $ref: "#/channels/mailingBounceReported/messages/bounceReported"
     summary: >-
       Ontvang bouncerapport van Mailing en markeer e-mailadres als onbereikbaar
       op Contact in Salesforce (US-39).
@@ -725,6 +764,8 @@ operations:
     action: send
     channel:
       $ref: "#/channels/crmInvoiceRequested"
+    messages:
+      - $ref: "#/channels/crmInvoiceRequested/messages/invoiceRequested"
     summary: >-
       Publiceer factuurverzoek naar Facturatie nadat privépersoon adres heeft
       ingevuld (US-11). Onderscheidt een factuurverzoek van een gewone
@@ -737,6 +778,8 @@ operations:
     action: send
     channel:
       $ref: "#/channels/crmUserDeactivated"
+    messages:
+      - $ref: "#/channels/crmUserDeactivated/messages/userDeactivated"
     summary: >-
       Publiceer deactivatie van Contact na GDPR-verwijderverzoek (US-55).
       isActive=false — geen fysieke verwijdering.
@@ -750,6 +793,8 @@ operations:
     action: send
     channel:
       $ref: "#/channels/crmCompanyDeactivated"
+    messages:
+      - $ref: "#/channels/crmCompanyDeactivated/messages/companyDeactivated"
     summary: >-
       Publiceer deactivatie van Account (US-54). Consumers stoppen met
       verwerking voor dit bedrijf.
