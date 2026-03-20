@@ -1,0 +1,5 @@
+aio-pika>=9.5,<10
+lxml>=6.0,<7
+psutil>=6.0,<7
+simple-salesforce>=1.12,<2
+python-dotenv>=1.0,<2

@@ -831,10 +831,10 @@ components:
               <firstName>Jan</firstName>
               <lastName>Janssen</lastName>
               <email>jan.janssen@example.com</email>
-              <phone>+32471234567</phone>
               <sessionId>SESSION-001</sessionId>
               <role>VISITOR</role>
               <gdprConsent>true</gdprConsent>
+              <phone>+32471234567</phone>
             </registration>
         - name: met_bedrijf
           payload: |
@@ -1933,8 +1933,7 @@ components:
       properties:
         serviceId:
           type: string
-          enum:
-            - CRM
+          description: ID van het systeem waarover de warning gaat (niet beperkt tot CRM)
         message:
           type: string
         type:
@@ -2141,6 +2140,9 @@ components:
         existingValue:
           type: object
           description: Huidige waarden in Salesforce
+          required:
+            - firstName
+            - lastName
           properties:
             firstName:
               type: string
@@ -2151,6 +2153,9 @@ components:
         incomingValue:
           type: object
           description: Binnenkomende waarden die afwijken
+          required:
+            - firstName
+            - lastName
           properties:
             firstName:
               type: string
