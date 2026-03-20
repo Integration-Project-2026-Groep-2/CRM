@@ -36,14 +36,14 @@ pytest -v
 
 ## Architectuur
 
-Eén Docker container → één Python process → 4 asyncio tasks:
+Eén Docker container → één Python process → 3 asyncio tasks + sender utility:
 
-| Task | Verantwoordelijkheid |
+| Module | Verantwoordelijkheid |
 |---|---|
 | `heartbeat.py` | XML heartbeat elke seconde → `crm.heartbeat` (Contract 7) |
 | `status.py` | CPU/mem/disk → `crm.status.checked` (Contract 8) |
 | `receiver.py` | Luistert op 11 queues van andere teams |
-| `sender.py` | Publiceert events vanuit Salesforce |
+| `sender.py` | Utility module — receiver handlers roepen publish functies aan |
 
 ## Contracten
 

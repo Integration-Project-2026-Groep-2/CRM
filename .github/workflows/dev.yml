@@ -4,11 +4,25 @@ on:
   push:
     branches: [dev]
   pull_request:
-    branches: [main, dev]
+    branches: [dev]
 
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    services:
+      rabbitmq:
+        image: rabbitmq:3.13-management
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      RABBITMQ_URL: amqp://guest:guest@localhost:5672/
 
     steps:
       - uses: actions/checkout@v4
@@ -21,10 +35,17 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
+      - name: Lint
+        run: ruff check src/ tests/
+
+      - name: Security audit
+        run: pip-audit -r requirements.txt
+
       - name: Run tests
         run: pytest -v
 
   docker-build:
+    needs: test
     runs-on: ubuntu-latest
 
     steps:

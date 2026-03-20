@@ -18,7 +18,7 @@ class TestLoadSchema:
             load_schema(fake_path)
 
     @pytest.mark.skipif(
-        not (Path(__file__).parent.parent / "src" / "schema" / "crm_v1.1.xsd").exists(),
+        not (Path(__file__).parent.parent.parent / "src" / "schema" / "crm-schema-v1.xsd").exists(),
         reason="XSD schema file not yet provided",
     )
     def test_loads_valid_schema(self, schema_path: Path) -> None:

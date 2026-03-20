@@ -8,7 +8,7 @@ import pytest
 @pytest.fixture()
 def schema_path() -> Path:
     """Path to the XSD schema file."""
-    return Path(__file__).parent.parent / "src" / "schema" / "crm_v1.1.xsd"
+    return Path(__file__).parent.parent / "src" / "schema" / "crm-schema-v1.xsd"
 
 
 @pytest.fixture()
