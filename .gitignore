@@ -1,0 +1,5 @@
+# Project context (local reference files, not tracked)
+context/
+.claude/
+CLAUDE.md
+
