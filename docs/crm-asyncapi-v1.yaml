@@ -1141,7 +1141,7 @@ components:
             <Warning>
               <serviceId>CRM</serviceId>
               <message>Duplicate heartbeat detected</message>
-              <type>heartbeat</type>
+              <Type>heartbeat</Type>
             </Warning>
         - name: statuscheck_warning
           payload: |
@@ -1149,7 +1149,7 @@ components:
             <Warning>
               <serviceId>CRM</serviceId>
               <message>StatusCheck interval exceeded</message>
-              <type>statusCheck</type>
+              <Type>statusCheck</Type>
             </Warning>
 
     PersonLookup:
@@ -1928,7 +1928,7 @@ components:
       required:
         - serviceId
         - message
-        - type
+        - Type
       description: CRM logt als error in applicatielog — geen crash.
       properties:
         serviceId:
@@ -1937,7 +1937,7 @@ components:
             - CRM
         message:
           type: string
-        type:
+        Type:
           type: string
           enum:
             - heartbeat
