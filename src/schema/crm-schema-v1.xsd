@@ -119,7 +119,7 @@
        CONTRACT 1 — Frontend → CRM: nieuwe inschrijving
        Queue: frontend.registration.created | durable: true
   ============================================================ -->
-  <xs:element name="registration">
+  <xs:element name="Registration">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="registrationId" type="xs:string"/>
@@ -139,7 +139,7 @@
        CONTRACT 2 — Frontend → CRM: inschrijving wijzigen/annuleren
        Queue: frontend.registration.updated | durable: true
   ============================================================ -->
-  <xs:element name="registration_change">
+  <xs:element name="RegistrationChange">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="registrationId" type="xs:string" minOccurs="0"/>
@@ -173,7 +173,7 @@
        CONTRACT 3 — Frontend → CRM: nieuw bedrijf aanmaken
        Queue: frontend.company.created | durable: true
   ============================================================ -->
-  <xs:element name="company_created">
+  <xs:element name="CompanyCreated">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="name"        type="xs:string"/>
@@ -193,7 +193,7 @@
        CONTRACT 5a — Facturatie → CRM: bedrijfsdata opvragen
        Queue: facturatie.company.requested | durable: true
   ============================================================ -->
-  <xs:element name="company_request">
+  <xs:element name="CompanyRequest">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="requestId" type="xs:string"/>
@@ -206,7 +206,7 @@
        CONTRACT 5b — CRM → Facturatie: bedrijfsdata response
        Queue: crm.company.responded | durable: false
   ============================================================ -->
-  <xs:element name="company_response">
+  <xs:element name="CompanyResponse">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="requestId"   type="xs:string"/>
@@ -229,7 +229,7 @@
        CONTRACT 6 — CRM → Mailing: deelnemersnotificatie
        Queue: crm.mail.requested | durable: true
   ============================================================ -->
-  <xs:element name="mail_request">
+  <xs:element name="MailRequest">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="header">
@@ -383,7 +383,7 @@
        CONTRACT 10a — Kassa → CRM: persoonscheck request
        Queue: kassa.person.lookup.requested | durable: true
   ============================================================ -->
-  <xs:element name="person_lookup">
+  <xs:element name="PersonLookup">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="requestId" type="xs:string"/>
@@ -396,7 +396,7 @@
        CONTRACT 10b — CRM → Kassa: persoonscheck response
        Queue: crm.person.lookup.responded | durable: false
   ============================================================ -->
-  <xs:element name="person_response">
+  <xs:element name="PersonResponse">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="requestId"       type="xs:string"/>
@@ -413,7 +413,7 @@
        CONTRACT 11 — Planning → CRM: sessiewijziging
        Queue: planning.session.updated | durable: true
   ============================================================ -->
-  <xs:element name="session_update">
+  <xs:element name="SessionUpdate">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="sessionId"   type="xs:string"/>
@@ -437,7 +437,7 @@
        CONTRACT 12 — IoT → CRM: badge koppelen aan bezoeker
        Queue: iot.badge.linked | durable: true
   ============================================================ -->
-  <xs:element name="badge_link">
+  <xs:element name="BadgeLink">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="badgeId"      type="xs:string"/>
@@ -451,7 +451,7 @@
        CONTRACT 13 — CRM → consumers: user confirmed
        Queue: crm.user.confirmed | durable: true
   ============================================================ -->
-  <xs:element name="user_confirmed">
+  <xs:element name="UserConfirmed">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="id"          type="UUIDType"/>
@@ -473,7 +473,7 @@
        CONTRACT 14 — CRM → consumers: company confirmed
        Queue: crm.company.confirmed | durable: true
   ============================================================ -->
-  <xs:element name="company_confirmed">
+  <xs:element name="CompanyConfirmed">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="id"          type="UUIDType"/>
@@ -490,7 +490,7 @@
        CONTRACT 15 — CRM → Controlroom+Frontend: user conflict (fanout)
        Exchange: crm.user.conflict | type: fanout | durable: true
   ============================================================ -->
-  <xs:element name="user_conflict">
+  <xs:element name="UserConflict">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="email" type="EmailType"/>
@@ -521,7 +521,7 @@
        CONTRACT 16 — Kassa → CRM: betaling bevestigd
        Queue: kassa.payment.confirmed | durable: true
   ============================================================ -->
-  <xs:element name="payment_confirmed">
+  <xs:element name="PaymentConfirmed">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="userId"         type="UUIDType"  minOccurs="0"/>
@@ -544,7 +544,7 @@
        CONTRACT 17a — Kassa → CRM: lijst niet-betaalden opvragen
        Queue: kassa.unpaid.requested | durable: true
   ============================================================ -->
-  <xs:element name="unpaid_request">
+  <xs:element name="UnpaidRequest">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="requestId" type="xs:string"/>
@@ -556,7 +556,7 @@
        CONTRACT 17b — CRM → Kassa: lijst niet-betaalden response
        Queue: crm.unpaid.responded | durable: false
   ============================================================ -->
-  <xs:element name="unpaid_response">
+  <xs:element name="UnpaidResponse">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="requestId" type="xs:string"/>
@@ -586,7 +586,7 @@
        CONTRACT 18 — CRM → consumers: user updated
        Queue: crm.user.updated | durable: true
   ============================================================ -->
-  <xs:element name="user_updated">
+  <xs:element name="UserUpdated">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="id"          type="UUIDType"/>
@@ -613,7 +613,7 @@
        CONTRACT 19 — CRM → consumers: company updated
        Queue: crm.company.updated | durable: true
   ============================================================ -->
-  <xs:element name="company_updated">
+  <xs:element name="CompanyUpdated">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="id"          type="UUIDType"/>
@@ -636,7 +636,7 @@
        CONTRACT 20 — Mailing → CRM: e-mailbounce gerapporteerd
        Queue: mailing.bounce.reported | durable: true
   ============================================================ -->
-  <xs:element name="bounce_reported">
+  <xs:element name="BounceReported">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="email" type="EmailType"/>
@@ -658,7 +658,7 @@
        CONTRACT 21 — CRM → Facturatie: factuurverzoek privépersoon
        Queue: crm.invoice.requested | durable: true
   ============================================================ -->
-  <xs:element name="invoice_requested">
+  <xs:element name="InvoiceRequested">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="userId"      type="UUIDType"/>
@@ -679,7 +679,7 @@
        CONTRACT 22 — CRM → consumers: user deactivated (GDPR)
        Queue: crm.user.deactivated | durable: true
   ============================================================ -->
-  <xs:element name="user_deactivated">
+  <xs:element name="UserDeactivated">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="id"            type="UUIDType"/>
@@ -693,7 +693,7 @@
        CONTRACT 23 — CRM → consumers: company deactivated
        Queue: crm.company.deactivated | durable: true
   ============================================================ -->
-  <xs:element name="company_deactivated">
+  <xs:element name="CompanyDeactivated">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="id"            type="UUIDType"/>

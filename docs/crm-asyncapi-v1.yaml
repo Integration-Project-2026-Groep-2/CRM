@@ -826,7 +826,7 @@ components:
         - name: individueel
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <registration>
+            <Registration>
               <registrationId>REG-20260415-001</registrationId>
               <firstName>Jan</firstName>
               <lastName>Janssen</lastName>
@@ -835,11 +835,11 @@ components:
               <role>VISITOR</role>
               <gdprConsent>true</gdprConsent>
               <phone>+32471234567</phone>
-            </registration>
+            </Registration>
         - name: met_bedrijf
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <registration>
+            <Registration>
               <registrationId>REG-20260415-002</registrationId>
               <firstName>Lien</firstName>
               <lastName>Vermeersch</lastName>
@@ -848,7 +848,7 @@ components:
               <role>COMPANY_CONTACT</role>
               <gdprConsent>true</gdprConsent>
               <company>Bedrijf NV</company>
-            </registration>
+            </Registration>
 
     RegistrationChanged:
       name: RegistrationChanged
@@ -863,7 +863,7 @@ components:
         - name: update
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <registration_change>
+            <RegistrationChange>
               <registrationId>REG-20260415-001</registrationId>
               <email>jan.janssen@example.com</email>
               <sessionId>SESSION-001</sessionId>
@@ -871,16 +871,16 @@ components:
               <updatedFields>
                 <firstName>Johan</firstName>
               </updatedFields>
-            </registration_change>
+            </RegistrationChange>
         - name: annulering
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <registration_change>
+            <RegistrationChange>
               <registrationId>REG-20260415-001</registrationId>
               <email>jan.janssen@example.com</email>
               <sessionId>SESSION-001</sessionId>
               <changeType>cancelled</changeType>
-            </registration_change>
+            </RegistrationChange>
 
     CompanyCreated:
       name: CompanyCreated
@@ -895,7 +895,7 @@ components:
         - name: bedrijf
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <company_created>
+            <CompanyCreated>
               <name>Bedrijf NV</name>
               <vatNumber>BE0123456789</vatNumber>
               <email>info@bedrijf.be</email>
@@ -905,7 +905,7 @@ components:
               <postalCode>1000</postalCode>
               <city>Brussel</city>
               <country>BE</country>
-            </company_created>
+            </CompanyCreated>
 
     CompanyUpdated:
       name: CompanyUpdated
@@ -922,7 +922,7 @@ components:
         - name: update
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <company_updated>
+            <CompanyUpdated>
               <id>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</id>
               <vatNumber>BE0123456789</vatNumber>
               <name>Nieuw Bedrijf NV</name>
@@ -935,7 +935,7 @@ components:
               <country>BE</country>
               <isActive>true</isActive>
               <updatedAt>2026-04-15T14:00:00Z</updatedAt>
-            </company_updated>
+            </CompanyUpdated>
 
     CompanyDataRequest:
       name: CompanyDataRequest
@@ -953,10 +953,10 @@ components:
         - name: request
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <company_request>
+            <CompanyRequest>
               <requestId>REQ-001</requestId>
               <vatNumber>BE0123456789</vatNumber>
-            </company_request>
+            </CompanyRequest>
 
     CompanyDataResponse:
       name: CompanyDataResponse
@@ -974,7 +974,7 @@ components:
         - name: gevonden
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <company_response>
+            <CompanyResponse>
               <requestId>REQ-001</requestId>
               <found>true</found>
               <id>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</id>
@@ -987,14 +987,14 @@ components:
               <postalCode>1000</postalCode>
               <city>Brussel</city>
               <country>BE</country>
-            </company_response>
+            </CompanyResponse>
         - name: niet_gevonden
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <company_response>
+            <CompanyResponse>
               <requestId>REQ-001</requestId>
               <found>false</found>
-            </company_response>
+            </CompanyResponse>
 
     MailRequest:
       name: MailRequest
@@ -1012,7 +1012,7 @@ components:
         - name: sessiebevestiging
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <mail_request>
+            <MailRequest>
               <header>
                 <source>CRM</source>
                 <timestamp>2026-03-14T10:00:00Z</timestamp>
@@ -1028,11 +1028,11 @@ components:
                 <session_time>2026-04-15T14:00:00Z</session_time>
                 <session_location>Zaal A</session_location>
               </dynamic_data>
-            </mail_request>
+            </MailRequest>
         - name: sessiewijziging
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <mail_request>
+            <MailRequest>
               <header>
                 <source>CRM</source>
                 <timestamp>2026-03-14T10:00:00Z</timestamp>
@@ -1048,11 +1048,11 @@ components:
                 <session_time>2026-04-15T15:00:00Z</session_time>
                 <session_location>Zaal B</session_location>
               </dynamic_data>
-            </mail_request>
+            </MailRequest>
         - name: bulk_event
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <mail_request>
+            <MailRequest>
               <header>
                 <source>CRM</source>
                 <timestamp>2026-03-14T10:00:00Z</timestamp>
@@ -1065,7 +1065,7 @@ components:
               <dynamic_data>
                 <guest_name>Jan Janssen</guest_name>
               </dynamic_data>
-            </mail_request>
+            </MailRequest>
 
     Heartbeat:
       name: Heartbeat
@@ -1167,10 +1167,10 @@ components:
         - name: lookup
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <person_lookup>
+            <PersonLookup>
               <requestId>LOOKUP-001</requestId>
               <email>jan.janssen@example.com</email>
-            </person_lookup>
+            </PersonLookup>
 
     PersonResponse:
       name: PersonResponse
@@ -1187,31 +1187,31 @@ components:
         - name: gevonden_met_bedrijf
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <person_response>
+            <PersonResponse>
               <requestId>LOOKUP-001</requestId>
               <found>true</found>
               <linkedToCompany>true</linkedToCompany>
               <id>b2c3d4e5-f6a7-4890-8c12-de3456fa7890</id>
               <companyName>Bedrijf NV</companyName>
               <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
-            </person_response>
+            </PersonResponse>
         - name: gevonden_zonder_bedrijf
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <person_response>
+            <PersonResponse>
               <requestId>LOOKUP-001</requestId>
               <found>true</found>
               <linkedToCompany>false</linkedToCompany>
               <id>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</id>
-            </person_response>
+            </PersonResponse>
         - name: niet_gevonden
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <person_response>
+            <PersonResponse>
               <requestId>LOOKUP-001</requestId>
               <found>false</found>
               <linkedToCompany>false</linkedToCompany>
-            </person_response>
+            </PersonResponse>
 
     SessionUpdate:
       name: SessionUpdate
@@ -1225,21 +1225,21 @@ components:
         - name: verzet
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <session_update>
+            <SessionUpdate>
               <sessionId>SESSION-001</sessionId>
               <sessionName>Workshop AI</sessionName>
               <newTime>2026-04-15T15:00:00Z</newTime>
               <newLocation>Zaal B</newLocation>
               <changeType>rescheduled</changeType>
-            </session_update>
+            </SessionUpdate>
         - name: geannuleerd
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <session_update>
+            <SessionUpdate>
               <sessionId>SESSION-001</sessionId>
               <sessionName>Workshop AI</sessionName>
               <changeType>cancelled</changeType>
-            </session_update>
+            </SessionUpdate>
 
     BadgeLink:
       name: BadgeLink
@@ -1257,11 +1257,11 @@ components:
         - name: koppeling
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <badge_link>
+            <BadgeLink>
               <badgeId>BADGE-12345</badgeId>
               <contactEmail>jan.janssen@example.com</contactEmail>
               <linkedAt>2026-04-15T09:00:00Z</linkedAt>
-            </badge_link>
+            </BadgeLink>
 
     UserConfirmed:
       name: UserConfirmed
@@ -1280,7 +1280,7 @@ components:
         - name: bevestigd
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <user_confirmed>
+            <UserConfirmed>
               <id>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</id>
               <email>jan.janssen@example.com</email>
               <firstName>Jan</firstName>
@@ -1290,11 +1290,11 @@ components:
               <isActive>true</isActive>
               <gdprConsent>true</gdprConsent>
               <confirmedAt>2026-04-15T10:00:05Z</confirmedAt>
-            </user_confirmed>
+            </UserConfirmed>
         - name: bevestigd_met_bedrijf
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <user_confirmed>
+            <UserConfirmed>
               <id>b2c3d4e5-f6a7-4890-8c12-de3456fa7890</id>
               <email>lien.vermeersch@techbedrijf.be</email>
               <firstName>Lien</firstName>
@@ -1304,7 +1304,7 @@ components:
               <isActive>true</isActive>
               <gdprConsent>true</gdprConsent>
               <confirmedAt>2026-04-15T10:00:07Z</confirmedAt>
-            </user_confirmed>
+            </UserConfirmed>
 
     CompanyConfirmed:
       name: CompanyConfirmed
@@ -1323,14 +1323,14 @@ components:
         - name: bevestigd
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <company_confirmed>
+            <CompanyConfirmed>
               <id>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</id>
               <vatNumber>BE0123456789</vatNumber>
               <name>Bedrijf NV</name>
               <email>facturatie@bedrijf.be</email>
               <isActive>true</isActive>
               <confirmedAt>2026-04-15T10:00:10Z</confirmedAt>
-            </company_confirmed>
+            </CompanyConfirmed>
 
     UserConflict:
       name: UserConflict
@@ -1349,7 +1349,7 @@ components:
         - name: conflict
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <user_conflict>
+            <UserConflict>
               <email>jan.janssen@example.com</email>
               <existingValue>
                 <firstName>Jan</firstName>
@@ -1360,7 +1360,7 @@ components:
                 <lastName>Janssen</lastName>
               </incomingValue>
               <detectedAt>2026-04-15T10:01:00Z</detectedAt>
-            </user_conflict>
+            </UserConflict>
 
     PaymentConfirmed:
       name: PaymentConfirmed
@@ -1378,14 +1378,14 @@ components:
         - name: betaling
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <payment_confirmed>
+            <PaymentConfirmed>
               <userId>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</userId>
               <email>jan.janssen@example.com</email>
               <registrationId>REG-20260415-001</registrationId>
               <amount>25.00</amount>
               <currency>EUR</currency>
               <paidAt>2026-04-15T09:30:00Z</paidAt>
-            </payment_confirmed>
+            </PaymentConfirmed>
 
     UnpaidRequest:
       name: UnpaidRequest
@@ -1402,9 +1402,9 @@ components:
         - name: request
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <unpaid_request>
+            <UnpaidRequest>
               <requestId>UNPAID-001</requestId>
-            </unpaid_request>
+            </UnpaidRequest>
 
     UnpaidResponse:
       name: UnpaidResponse
@@ -1420,7 +1420,7 @@ components:
         - name: lijst
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <unpaid_response>
+            <UnpaidResponse>
               <requestId>UNPAID-001</requestId>
               <persons>
                 <person>
@@ -1439,7 +1439,7 @@ components:
                   <companyName>Bedrijf NV</companyName>
                 </person>
               </persons>
-            </unpaid_response>
+            </UnpaidResponse>
 
     UserUpdated:
       name: UserUpdated
@@ -1457,7 +1457,7 @@ components:
         - name: update
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <user_updated>
+            <UserUpdated>
               <id>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</id>
               <email>jan.janssen@example.com</email>
               <firstName>Johan</firstName>
@@ -1466,7 +1466,7 @@ components:
               <isActive>true</isActive>
               <gdprConsent>true</gdprConsent>
               <updatedAt>2026-04-15T12:00:00Z</updatedAt>
-            </user_updated>
+            </UserUpdated>
 
     BounceReported:
       name: BounceReported
@@ -1483,12 +1483,12 @@ components:
         - name: bounce
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <bounce_reported>
+            <BounceReported>
               <email>jan.janssen@example.com</email>
               <bounceType>hard</bounceType>
               <reason>User unknown</reason>
               <bouncedAt>2026-04-15T11:00:00Z</bouncedAt>
-            </bounce_reported>
+            </BounceReported>
 
     InvoiceRequested:
       name: InvoiceRequested
@@ -1506,7 +1506,7 @@ components:
         - name: factuurverzoek
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <invoice_requested>
+            <InvoiceRequested>
               <userId>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</userId>
               <email>jan.janssen@example.com</email>
               <firstName>Jan</firstName>
@@ -1517,7 +1517,7 @@ components:
               <city>Anderlecht</city>
               <country>BE</country>
               <requestedAt>2026-04-15T14:05:00Z</requestedAt>
-            </invoice_requested>
+            </InvoiceRequested>
 
     UserDeactivated:
       name: UserDeactivated
@@ -1535,11 +1535,11 @@ components:
         - name: deactivatie
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <user_deactivated>
+            <UserDeactivated>
               <id>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</id>
               <email>jan.janssen@example.com</email>
               <deactivatedAt>2026-04-15T16:00:00Z</deactivatedAt>
-            </user_deactivated>
+            </UserDeactivated>
 
     CompanyDeactivated:
       name: CompanyDeactivated
@@ -1556,11 +1556,11 @@ components:
         - name: deactivatie
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <company_deactivated>
+            <CompanyDeactivated>
               <id>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</id>
               <vatNumber>BE0123456789</vatNumber>
               <deactivatedAt>2026-04-15T16:00:00Z</deactivatedAt>
-            </company_deactivated>
+            </CompanyDeactivated>
 
   # ============================================================
   # SCHEMAS
