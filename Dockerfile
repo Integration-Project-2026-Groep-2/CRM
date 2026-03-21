@@ -16,4 +16,4 @@ USER appuser
 HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
   CMD python -c "import sys; sys.exit(0)"
 
-CMD ["python", "src/main.py"]
+CMD ["python", "-m", "src.main"]
