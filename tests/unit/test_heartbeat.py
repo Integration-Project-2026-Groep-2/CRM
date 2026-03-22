@@ -6,24 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from lxml import etree
 
+from src import xml_validator
 from src.config import Config
 from src.heartbeat import _build_heartbeat_xml, run_heartbeat
-
-
-@pytest.fixture()
-def config() -> Config:
-    """Fixture providing a default Config instance."""
-    return Config(
-        rabbitmq_url="amqp://test",
-        salesforce_username="test",
-        salesforce_password="test",
-        salesforce_security_token="test",
-        salesforce_domain="login",
-        heartbeat_interval_seconds=0,  # 0 for fast tests
-        system_name="CRM",
-        status_check_interval_seconds=30,
-        log_level="INFO",
-    )
 
 
 class TestBuildHeartbeatXml:
@@ -41,6 +26,12 @@ class TestBuildHeartbeatXml:
         assert root.findtext("timestamp") is not None
         assert root.findtext("timestamp").endswith("Z")  # Verify UTC suffix
 
+    def test_heartbeat_xml_passes_xsd(self) -> None:
+        """_build_heartbeat_xml output passes strict XSD validation."""
+        xml_bytes = _build_heartbeat_xml("CRM")
+        # Should not raise any ValueError
+        xml_validator.validate(xml_bytes)
+
 
 class TestRunHeartbeat:
     """Tests for run_heartbeat()."""
@@ -53,23 +44,18 @@ class TestRunHeartbeat:
         mock_channel = AsyncMock()
         mock_connection.channel.return_value = mock_channel
         
-        # We need to stop the infinite loop to test it. We'll run it as a task,
-        # let it execute once, and then cancel it.
-        task = asyncio.create_task(run_heartbeat(mock_connection, config))
-        
-        # Give it a moment to run at least one iteration
-        await asyncio.sleep(0.01)
-        task.cancel()
+        # Terminate iteration cleanly when publish is called
+        mock_channel.default_exchange.publish.side_effect = asyncio.CancelledError()
         
         try:
-            await task
+            await run_heartbeat(mock_connection, config)
         except asyncio.CancelledError:
             pass
 
         # Verification
-        mock_connection.channel.assert_called()
-        mock_channel.declare_queue.assert_called_with("crm.heartbeat", durable=False)
-        mock_channel.default_exchange.publish.assert_called()
+        mock_connection.channel.assert_called_once()
+        mock_channel.declare_queue.assert_called_once_with("crm.heartbeat", durable=False)
+        mock_channel.default_exchange.publish.assert_called_once()
         
         # Verify the published message is what we expect
         args, kwargs = mock_channel.default_exchange.publish.call_args
@@ -92,22 +78,22 @@ class TestRunHeartbeat:
         # Make build_xml fail on the first call, succeed on the second
         mock_build.side_effect = [Exception("Simulation of failure"), b"<Heartbeat></Heartbeat>"]
         
+        # Terminate loop on the second iteration when publish is called
+        mock_channel.default_exchange.publish.side_effect = asyncio.CancelledError()
+        
         # We patch xml_validator so it doesn't crash on the fake bytes
         with patch("src.heartbeat.xml_validator.validate"):
-            task = asyncio.create_task(run_heartbeat(mock_connection, config))
-            
-            # Let it run twice (interval is 0 in test config)
-            await asyncio.sleep(0.01)
-            task.cancel()
-            
             try:
-                await task
+                await run_heartbeat(mock_connection, config)
             except asyncio.CancelledError:
                 pass
 
         # Since it ran multiple iterations and failed on the first,
-        # it should have called build_xml more than once
-        assert mock_build.call_count >= 2
+        # it should have called build_xml exactly twice
+        assert mock_build.call_count == 2
         
         # Connection channel should be called again after failure to recover
-        assert mock_connection.channel.call_count >= 2
+        assert mock_connection.channel.call_count == 2
+        
+        # Verify publish was indeed called after recovery
+        mock_channel.default_exchange.publish.assert_called_once()

@@ -56,7 +56,7 @@ async def run_heartbeat(connection: AbstractRobustConnection, config: Config) ->
                 logger.info("Opening heartbeat channel...")
                 channel = await _get_channel(connection)
 
-            xml_bytes = _build_heartbeat_xml(config.system_name)
+            xml_bytes = _build_heartbeat_xml("CRM")
             xml_validator.validate(xml_bytes)
 
             await channel.default_exchange.publish(
