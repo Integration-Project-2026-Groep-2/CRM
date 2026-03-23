@@ -5,9 +5,9 @@ import logging
 import time
 from datetime import datetime, timezone
 
-import psutil
 import aio_pika
-from aio_pika.abc import AbstractRobustConnection, AbstractChannel
+import psutil
+from aio_pika.abc import AbstractChannel, AbstractRobustConnection
 from lxml import etree
 
 from src import xml_validator
