@@ -1,14 +1,14 @@
 """Tests for src.status."""
 
 import asyncio
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 from lxml import etree
-import time
 
 from src import xml_validator
 from src.config import Config
-from src.status import _determine_status, _get_system_metrics, _build_status_xml, run_status
+from src.status import _build_status_xml, _determine_status, _get_system_metrics, run_status
 
 
 class TestDetermineStatus:
