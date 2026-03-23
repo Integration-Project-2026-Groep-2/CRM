@@ -14,6 +14,8 @@ import logging
 from collections.abc import Coroutine
 from typing import Any
 
+from dotenv import load_dotenv
+
 from src import sender
 from src.config import load_config, setup_logging
 from src.connection import get_rabbitmq_connection
@@ -34,6 +36,7 @@ async def _supervised_task(name: str, coro: Coroutine[Any, Any, None]) -> None:
 
 async def main() -> None:
     """Start all CRM integration tasks."""
+    load_dotenv()
     config = load_config()
     setup_logging(config.log_level)
 
