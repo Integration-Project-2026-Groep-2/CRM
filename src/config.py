@@ -4,8 +4,6 @@ import logging
 import os
 from dataclasses import dataclass
 
-from dotenv import load_dotenv
-
 
 @dataclass(frozen=True)
 class Config:
@@ -28,8 +26,6 @@ def load_config() -> Config:
     Raises:
         ValueError: If a required environment variable is missing.
     """
-    load_dotenv()
-
     required = {
         "RABBITMQ_URL": os.getenv("RABBITMQ_URL"),
         "SALESFORCE_USERNAME": os.getenv("SALESFORCE_USERNAME"),
