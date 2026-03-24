@@ -34,6 +34,7 @@ async def _supervised_task(name: str, coro: Coroutine[Any, Any, None]) -> None:
     except Exception:
         logger.exception("Task '%s' crashed", name)
 
+
 def _install_signal_handlers(loop: asyncio.AbstractEventLoop, shutdown_event: asyncio.Event) -> None:
     def handle_signal(sig: signal.Signals) -> None:
         logger.info("Signal %s received, shutting down...", sig.name)
@@ -44,6 +45,7 @@ def _install_signal_handlers(loop: asyncio.AbstractEventLoop, shutdown_event: as
             loop.add_signal_handler(sig, handle_signal, sig)
         except (NotImplementedError, RuntimeError):
             logger.warning("Could not install signal handler for %s", sig.name)
+
 
 async def main() -> None:
     """Start all CRM integration tasks."""
@@ -57,18 +59,22 @@ async def main() -> None:
     shutdown_event = asyncio.Event()
     _install_signal_handlers(loop, shutdown_event)
 
-    connection = await get_rabbitmq_connection(config.rabbitmq_url)
+    connection = await get_rabbitmq_connection(config.rabbitmq_url, shutdown_event)
     channel = await connection.channel()
     await sender.init(channel)
 
+    # Keep references to background tasks so we can cancel them during shutdown.
+    tasks = [
+        asyncio.create_task(_supervised_task("heartbeat", run_heartbeat(connection, config))),
+        asyncio.create_task(_supervised_task("status", run_status(connection, config))),
+        asyncio.create_task(_supervised_task("receiver", run_receiver(connection, config))),
+    ]
     try:
-        await asyncio.gather(
-            _supervised_task("heartbeat", run_heartbeat(connection, config)),
-            _supervised_task("status", run_status(connection, config)),
-            _supervised_task("receiver", run_receiver(connection, config)),
-            shutdown_event.wait(),  # Wait until shutdown signal is received
-        )
+        await shutdown_event.wait()  # Wait until shutdown signal is received
     finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         await connection.close()
         logger.info("CRM integration service stopped.")
 
