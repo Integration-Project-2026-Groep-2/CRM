@@ -85,6 +85,7 @@ async def main() -> None:
             _supervised_task("heartbeat", run_heartbeat(connection, config)),
             _supervised_task("status", run_status(connection, config)),
             _supervised_task("receiver", run_receiver(connection, config)),
+            shutdown_event.wait(),  # Wait until shutdown signal is received
         )
     finally:
         await connection.close()
