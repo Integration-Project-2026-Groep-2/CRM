@@ -12,8 +12,7 @@ call sender.publish_*() functions to publish outbound messages.
 import asyncio
 import logging
 import signal
-from collections.abc import Coroutine
-from typing import Any
+from collections.abc import Awaitable, Callable
 
 from dotenv import load_dotenv
 
@@ -27,10 +26,13 @@ from src.status import run_status
 logger = logging.getLogger(__name__)
 
 
-async def _supervised_task(name: str, coro: Coroutine[Any, Any, None]) -> None:
+async def _supervised_task(
+    name: str,
+    task_factory: Callable[[], Awaitable[None]],
+) -> None:
     """Run a task with crash isolation — log errors, never propagate."""
     try:
-        await coro
+        await task_factory()
     except Exception:
         logger.exception("Task '%s' crashed", name)
 
@@ -65,9 +67,15 @@ async def main() -> None:
 
     # Keep references to background tasks so we can cancel them during shutdown.
     tasks = [
-        asyncio.create_task(_supervised_task("heartbeat", run_heartbeat(connection, config))),
-        asyncio.create_task(_supervised_task("status", run_status(connection, config))),
-        asyncio.create_task(_supervised_task("receiver", run_receiver(connection, config))),
+        asyncio.create_task(
+            _supervised_task("heartbeat", lambda: run_heartbeat(connection, config))
+        ),
+        asyncio.create_task(
+            _supervised_task("status", lambda: run_status(connection, config))
+        ),
+        asyncio.create_task(
+            _supervised_task("receiver", lambda: run_receiver(connection, config))
+        ),
     ]
     try:
         await shutdown_event.wait()  # Wait until shutdown signal is received
