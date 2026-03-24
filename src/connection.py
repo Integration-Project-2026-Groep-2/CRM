@@ -9,7 +9,6 @@ from aio_pika.abc import AbstractRobustConnection
 logger = logging.getLogger(__name__)
 
 STARTUP_DELAY: float = 1.0 # seconds before retrying RabbitMQ connection on failure
-STARTUP_MAX_ATTEMPTS: int = 10
 STARTUP_MAX_DELAY: float = 60.0 # seconds
 
 async def get_rabbitmq_connection(rabbitmq_url: str, shutdown_event: asyncio.Event = None) -> AbstractRobustConnection:
