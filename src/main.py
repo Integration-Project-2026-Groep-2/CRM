@@ -12,7 +12,7 @@ call sender.publish_*() functions to publish outbound messages.
 import asyncio
 import logging
 from collections.abc import Coroutine
-from signal import signal
+import signal
 from typing import Any
 
 from dotenv import load_dotenv
@@ -53,9 +53,9 @@ async def connect_with_retry(rabbitmq_url: str):
             await asyncio.sleep(delay)
             delay = min(delay * 2, STARTUP_MAX_DELAY)
 
-def _install_exception_handler(loop: asyncio.AbstractEventLoop, shutdown_event: asyncio.Event) -> None:
+def _install_signal_handlers(loop: asyncio.AbstractEventLoop, shutdown_event: asyncio.Event) -> None:
     def handle_signal(sig: signal.Signals) -> None:
-        logger.info("Shutdown signal received, stopping tasks...", sig.name)
+        logger.info("Signal %s received, shutting down...", sig.name)
         shutdown_event.set()
 
     for sig in (signal.SIGTERM, signal.SIGINT):
