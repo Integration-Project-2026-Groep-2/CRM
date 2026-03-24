@@ -12,6 +12,7 @@ call sender.publish_*() functions to publish outbound messages.
 import asyncio
 import logging
 from collections.abc import Coroutine
+from signal import signal
 from typing import Any
 
 from dotenv import load_dotenv
@@ -51,6 +52,17 @@ async def connect_with_retry(rabbitmq_url: str):
             logger.warning("RabbitMQ connection attempt %d failed: %s. Retrying in %.1f seconds...", attempt, e, delay)
             await asyncio.sleep(delay)
             delay = min(delay * 2, STARTUP_MAX_DELAY)
+
+def _install_exception_handler(loop: asyncio.AbstractEventLoop, shutdown_event: asyncio.Event) -> None:
+    def handle_signal(sig: signal.Signals) -> None:
+        logger.info("Shutdown signal received, stopping tasks...", sig.name)
+        shutdown_event.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, handle_signal, sig)
+        except (NotImplementedError, RuntimeError):
+            logger.warning("Could not install signal handler for %s", sig.name)
 
 async def main() -> None:
     """Start all CRM integration tasks."""
