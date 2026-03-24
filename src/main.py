@@ -11,8 +11,8 @@ call sender.publish_*() functions to publish outbound messages.
 
 import asyncio
 import logging
-from collections.abc import Coroutine
 import signal
+from collections.abc import Coroutine
 from typing import Any
 
 from dotenv import load_dotenv

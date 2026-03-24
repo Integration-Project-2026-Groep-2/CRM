@@ -1,7 +1,7 @@
 """RabbitMQ connection management using aio-pika."""
 
-import logging
 import asyncio
+import logging
 
 import aio_pika
 from aio_pika.abc import AbstractRobustConnection
