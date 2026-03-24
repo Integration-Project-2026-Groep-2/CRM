@@ -64,6 +64,9 @@ async def run_heartbeat(connection: AbstractRobustConnection, config: Config) ->
                 routing_key="crm.heartbeat",
             )
             logger.debug("Heartbeat published")
+        except (ValueError, etree.XMLSyntaxError):
+            logger.exception("Heartbeat XML validation failed")
+            # Validation errors shouldn't force channel re-creation
         except Exception:
             logger.exception("Heartbeat iteration failed")
             # Force channel re-creation on next iteration
