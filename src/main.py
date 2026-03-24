@@ -34,25 +34,6 @@ async def _supervised_task(name: str, coro: Coroutine[Any, Any, None]) -> None:
     except Exception:
         logger.exception("Task '%s' crashed", name)
 
-STARTUP_DELAY = 2.0 # seconnds before retrying RabbitMQ connection on failure
-STARTUP_MAX_ATTEMPTS = 10
-STARTUP_MAX_DELAY = 60.0 # seconds
-
-async def connect_with_retry(rabbitmq_url: str):
-    delay = STARTUP_DELAY
-    for attempt in range(1, STARTUP_MAX_ATTEMPTS + 1):  # Try up to 5 times
-        try:
-            connection = await get_rabbitmq_connection(rabbitmq_url)
-            logger.info("Successfully connected to RabbitMQ on attempt %d", attempt)
-            return connection
-        except Exception as e:
-            if attempt == STARTUP_MAX_ATTEMPTS:
-                logger.critical("RabbitMQ connection failed after %d attempts: %s", attempt, e)
-                raise
-            logger.warning("RabbitMQ connection attempt %d failed: %s. Retrying in %.1f seconds...", attempt, e, delay)
-            await asyncio.sleep(delay)
-            delay = min(delay * 2, STARTUP_MAX_DELAY)
-
 def _install_signal_handlers(loop: asyncio.AbstractEventLoop, shutdown_event: asyncio.Event) -> None:
     def handle_signal(sig: signal.Signals) -> None:
         logger.info("Signal %s received, shutting down...", sig.name)
@@ -76,7 +57,7 @@ async def main() -> None:
     shutdown_event = asyncio.Event()
     _install_signal_handlers(loop, shutdown_event)
 
-    connection = await connect_with_retry(config.rabbitmq_url)
+    connection = await get_rabbitmq_connection(config.rabbitmq_url)
     channel = await connection.channel()
     await sender.init(channel)
 

@@ -44,7 +44,7 @@ async def test_main_stops_on_shutdown_signal():
     
     with patch("src.main.load_config"), \
          patch("src.main.setup_logging"), \
-         patch("src.main.connect_with_retry", new_callable=AsyncMock), \
+         patch("src.main.get_rabbitmq_connection", new_callable=AsyncMock), \
          patch("src.main.sender.init", new_callable=AsyncMock), \
          patch("src.main.asyncio.gather", side_effect=fake_gather), \
          patch("src.main._install_signal_handlers"):
