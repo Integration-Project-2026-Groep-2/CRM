@@ -3,9 +3,10 @@
 import asyncio
 from unittest.mock import AsyncMock
 
+import aio_pika
 import pytest
 
-from src.connection import _wait_retry_or_shutdown, get_rabbitmq_connection
+from src.connection import STARTUP_MAX_DELAY, _wait_retry_or_shutdown, get_rabbitmq_connection
 
 
 class TestWaitRetryOrShutdown:
@@ -79,7 +80,7 @@ class TestGetRabbitMqConnection:
         shutdown_event.set()
 
         with pytest.raises(
-            RuntimeError, match="Shutdown requested before RabbitMQ connection established."
+            aio_pika.exceptions.AMQPConnectionError, match="Shutdown requested before RabbitMQ connection established."
         ):
             await get_rabbitmq_connection("amqp://test", shutdown_event=shutdown_event)
 
@@ -94,8 +95,31 @@ class TestGetRabbitMqConnection:
         monkeypatch.setattr("src.connection.aio_pika.connect_robust", connect_mock)
         monkeypatch.setattr("src.connection._wait_retry_or_shutdown", wait_mock)
 
-        with pytest.raises(RuntimeError, match="Shutdown requested during RabbitMQ retry backoff."):
+        with pytest.raises(aio_pika.exceptions.AMQPConnectionError, match="Shutdown requested during RabbitMQ retry backoff."):
             await get_rabbitmq_connection("amqp://test", shutdown_event=shutdown_event)
 
         connect_mock.assert_awaited_once_with("amqp://test")
         wait_mock.assert_awaited_once_with(1.0, shutdown_event)
+
+    @pytest.mark.asyncio
+    async def test_backoff_caps_at_max_delay(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """After exponential growth, retry wait uses STARTUP_MAX_DELAY (60s)."""
+        mock_connection = AsyncMock()
+        # Fails with waits: 1, 2, 4, 8, 16, 32, 60 — then two more failures at cap 60 before success.
+        fail_count = 9
+        connect_mock = AsyncMock(
+            side_effect=[*(Exception("fail"),) * fail_count, mock_connection]
+        )
+        wait_mock = AsyncMock(return_value=False)
+        monkeypatch.setattr("src.connection.aio_pika.connect_robust", connect_mock)
+        monkeypatch.setattr("src.connection._wait_retry_or_shutdown", wait_mock)
+
+        connection = await get_rabbitmq_connection("amqp://test")
+
+        assert connection is mock_connection
+        assert connect_mock.await_count == fail_count + 1
+        waits = [call.args[0] for call in wait_mock.await_args_list]
+        assert waits == [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 60.0, 60.0, 60.0]
+        assert all(w <= STARTUP_MAX_DELAY for w in waits)

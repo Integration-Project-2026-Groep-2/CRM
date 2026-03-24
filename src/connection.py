@@ -42,17 +42,17 @@ async def get_rabbitmq_connection(rabbitmq_url: str, shutdown_event: asyncio.Eve
     while True:
         # Stop retrying if shutdown requested
         if shutdown_event and shutdown_event.is_set():
-            raise RuntimeError("Shutdown requested before RabbitMQ connection established.")
-        
+            raise aio_pika.exceptions.AMQPConnectionError("Shutdown requested before RabbitMQ connection established.")
+
         try:
             logger.info("Connecting to RabbitMQ...")
             connection = await aio_pika.connect_robust(rabbitmq_url)
             logger.info("Connected to RabbitMQ.")
             return connection
         except Exception as e:
-            logger.warning("Failed to connect to RabbitMQ: %s. Retrying in %f seconds.", e, delay)
+            logger.warning("Failed to connect to RabbitMQ: %s. Retrying in %.1f seconds.", e, delay)
             shutdown_requested = await _wait_retry_or_shutdown(delay, shutdown_event)
             if shutdown_requested:
-                raise RuntimeError("Shutdown requested during RabbitMQ retry backoff.")
+                raise aio_pika.exceptions.AMQPConnectionError("Shutdown requested during RabbitMQ retry backoff.")
             delay = min(delay * 2, STARTUP_MAX_DELAY)  # Exponential backoff: 1 → 2 → 4 → ... → 60
 
