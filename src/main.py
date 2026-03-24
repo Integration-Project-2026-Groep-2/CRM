@@ -72,6 +72,10 @@ async def main() -> None:
 
     logger.info("Starting CRM integration service...")
 
+    loop = asyncio.get_running_loop()
+    shutdown_event = asyncio.Event()
+    _install_signal_handlers(loop, shutdown_event)
+
     connection = await connect_with_retry(config.rabbitmq_url)
     channel = await connection.channel()
     await sender.init(channel)
