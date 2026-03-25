@@ -68,6 +68,8 @@ async def create_contact(sf: Salesforce, data: dict[str, Any]) -> dict[str, Any]
         SalesforceError: If Contact creation fails.
     """
     try:
+        # Shallow copy to avoid mutating input dict
+        data = {**data}
         # Generate UUID v4 for crm.user.confirmed (Contract 13)
         crm_id = str(uuid.uuid4())
         data["CRM_ID__c"] = crm_id
@@ -90,8 +92,10 @@ async def upsert_contact_by_email(
 ) -> dict[str, Any]:
     """Create or update a Contact by email (Contract 2).
 
-    Uses SOQL to find existing Contact, then updates or creates.
+    Uses native Salesforce upsert with Email as external ID to avoid race conditions.
     Returns complete record for XML serialization.
+
+    REQUIREMENT: Email must be configured as External ID in Salesforce Setup.
 
     Args:
         sf: Authenticated Salesforce client.
@@ -105,25 +109,19 @@ async def upsert_contact_by_email(
         SalesforceError: If operation fails.
     """
     try:
-        # SOQL query to find by email (escaped)
-        escaped_email = _escape_soql(email)
-        query = f"SELECT Id FROM Contact WHERE Email = '{escaped_email}'"
-        result = await asyncio.to_thread(sf.query, query)
+        # Shallow copy to avoid mutating input dict
+        data = {**data}
+        # Ensure Email is in data
+        data["Email"] = email
+        # Generate UUID v4 for crm.user.confirmed (Contract 13)
+        crm_id = str(uuid.uuid4())
+        data["CRM_ID__c"] = crm_id
 
-        if result["totalSize"] > 0:
-            # Contact exists — update it
-            contact_id = result["records"][0]["Id"]
-            await asyncio.to_thread(sf.Contact.update, contact_id, data)
-            logger.info("Updated Contact by email %s (ID: %s)", email, contact_id)
-        else:
-            # Contact does not exist — create it
-            crm_id = str(uuid.uuid4())
-            data["CRM_ID__c"] = crm_id
-            data["Email"] = email
-            create_result = await asyncio.to_thread(sf.Contact.create, data)
-            contact_id = create_result["id"]
-            logger.info("Created Contact by email %s (ID: %s, CRM_ID: %s)",
-                        email, contact_id, crm_id)
+        # Upsert Contact (atomic, prevents race conditions)
+        result = await asyncio.to_thread(sf.Contact.upsert, "Email", data)
+        contact_id = result["id"]
+        logger.info("Upserted Contact by email %s (ID: %s, CRM_ID: %s)",
+                    email, contact_id, crm_id)
 
         # Retrieve and return complete record
         contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
@@ -183,6 +181,8 @@ async def create_account(sf: Salesforce, data: dict[str, Any]) -> dict[str, Any]
         SalesforceError: If Account creation fails.
     """
     try:
+        # Shallow copy to avoid mutating input dict
+        data = {**data}
         # Generate UUID v4 for crm.company.confirmed (Contract 14)
         crm_id = str(uuid.uuid4())
         data["CRM_ID__c"] = crm_id
@@ -205,7 +205,7 @@ async def upsert_account_by_vat(
 ) -> dict[str, Any]:
     """Create or update an Account by VAT number (Contracts 3, 5a).
 
-    Uses SOQL to find existing Account, then updates or creates.
+    Uses native Salesforce upsert with VAT_Number__c as external ID to avoid race conditions.
     Returns complete record for XML serialization.
 
     REQUIREMENT: VAT_Number__c must be configured as External ID in Salesforce Setup.
@@ -222,27 +222,19 @@ async def upsert_account_by_vat(
         SalesforceError: If operation fails.
     """
     try:
+        # Shallow copy to avoid mutating input dict
+        data = {**data}
         # Ensure VAT_Number__c is in data
         data["VAT_Number__c"] = vat_number
+        # Generate UUID v4 for crm.company.confirmed (Contract 14)
+        crm_id = str(uuid.uuid4())
+        data["CRM_ID__c"] = crm_id
 
-        # SOQL query to find by VAT (escaped)
-        escaped_vat = _escape_soql(vat_number)
-        query = f"SELECT Id FROM Account WHERE VAT_Number__c = '{escaped_vat}'"
-        result = await asyncio.to_thread(sf.query, query)
-
-        if result["totalSize"] > 0:
-            # Account exists — update it
-            account_id = result["records"][0]["Id"]
-            await asyncio.to_thread(sf.Account.update, account_id, data)
-            logger.info("Updated Account by VAT %s (ID: %s)", vat_number, account_id)
-        else:
-            # Account does not exist — create it
-            crm_id = str(uuid.uuid4())
-            data["CRM_ID__c"] = crm_id
-            create_result = await asyncio.to_thread(sf.Account.create, data)
-            account_id = create_result["id"]
-            logger.info("Created Account by VAT %s (ID: %s, CRM_ID: %s)",
-                        vat_number, account_id, crm_id)
+        # Upsert Account (atomic, prevents race conditions)
+        result = await asyncio.to_thread(sf.Account.upsert, "VAT_Number__c", data)
+        account_id = result["id"]
+        logger.info("Upserted Account by VAT %s (ID: %s, CRM_ID: %s)",
+                    vat_number, account_id, crm_id)
 
         # Retrieve and return complete record
         account_record = await asyncio.to_thread(sf.Account.get, account_id)

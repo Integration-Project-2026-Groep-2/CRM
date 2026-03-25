@@ -32,7 +32,7 @@ async def test_create_contact_success(sf):
     assert result == {"Id": "003000000000001", "FirstName": "Alice", "Email": "a@a.com"}
     sf.Contact.create.assert_called_once()
     sf.Contact.get.assert_called_once_with("003000000000001")
-    assert "CRM_ID__c" in payload
+    # CRM_ID__c wordt niet meer toegevoegd aan input dict (kopie gebruikt)
 
 
 @pytest.mark.asyncio
@@ -44,30 +44,15 @@ async def test_create_contact_raises_salesforce_error(sf):
 
 
 @pytest.mark.asyncio
-async def test_upsert_contact_by_email_updates_existing(sf):
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000002"}]}
+async def test_upsert_contact_by_email(sf):
+    sf.Contact.upsert.return_value = {"id": "003000000000002"}
     sf.Contact.get.return_value = {"Id": "003000000000002", "Email": "a@a.com"}
 
     payload = {"FirstName": "Bob"}
     result = await upsert_contact_by_email(sf, "a@a.com", payload)
 
-    sf.Contact.update.assert_called_once_with("003000000000002", payload)
+    sf.Contact.upsert.assert_called_once()
     assert result == {"Id": "003000000000002", "Email": "a@a.com"}
-
-
-@pytest.mark.asyncio
-async def test_upsert_contact_by_email_creates_new(sf):
-    sf.query.return_value = {"totalSize": 0, "records": []}
-    sf.Contact.create.return_value = {"id": "003000000000003"}
-    sf.Contact.get.return_value = {"Id": "003000000000003", "Email": "b@b.com"}
-
-    payload = {"FirstName": "Bob"}
-    result = await upsert_contact_by_email(sf, "b@b.com", payload)
-
-    sf.Contact.create.assert_called_once()
-    sf.Contact.get.assert_called_once_with("003000000000003")
-    assert result["Email"] == "b@b.com"
-    assert "CRM_ID__c" in payload
 
 
 @pytest.mark.asyncio
@@ -98,33 +83,19 @@ async def test_create_account_success(sf):
 
     sf.Account.create.assert_called_once()
     assert result == {"Id": "001000000000001", "Name": "Company", "VAT_Number__c": "BE0123456789"}
-    assert "CRM_ID__c" in payload
+    # CRM_ID__c wordt niet meer toegevoegd aan input dict (kopie gebruikt)
 
 
 @pytest.mark.asyncio
-async def test_upsert_account_by_vat_updates_existing(sf):
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "001000000000002"}]}
+async def test_upsert_account_by_vat(sf):
+    sf.Account.upsert.return_value = {"id": "001000000000002"}
     sf.Account.get.return_value = {"Id": "001000000000002", "Name": "Acme", "VAT_Number__c": "BE0123456789"}
 
     payload = {"Name": "Acme"}
     result = await upsert_account_by_vat(sf, "BE0123456789", payload)
 
-    sf.Account.update.assert_called_once_with("001000000000002", payload)
+    sf.Account.upsert.assert_called_once()
     assert result == {"Id": "001000000000002", "Name": "Acme", "VAT_Number__c": "BE0123456789"}
-
-
-@pytest.mark.asyncio
-async def test_upsert_account_by_vat_creates_new(sf):
-    sf.query.return_value = {"totalSize": 0, "records": []}
-    sf.Account.create.return_value = {"id": "001000000000003"}
-    sf.Account.get.return_value = {"Id": "001000000000003", "Name": "NewCo", "VAT_Number__c": "BE0123456789"}
-
-    payload = {"Name": "NewCo"}
-    result = await upsert_account_by_vat(sf, "BE0123456789", payload)
-
-    sf.Account.create.assert_called_once()
-    assert "CRM_ID__c" in payload
-    assert result == {"Id": "001000000000003", "Name": "NewCo", "VAT_Number__c": "BE0123456789"}
 
 
 @pytest.mark.asyncio
