@@ -1,318 +1,406 @@
-"""Tests for src.sender publisher utilities."""
+"""
+Unit tests — sender.py
+Contracten 13, 14, 5b, 10b, 17b, 6
+"""
 
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
-
-import pytest
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 from lxml import etree
+import pytest
 
 from src import sender
 
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
 
-class TestSenderInit:
-    """Tests for sender.init()."""
+@pytest.fixture(autouse=True)
+def setup_sender():
+    mock_channel = MagicMock()
+    mock_channel.default_exchange = MagicMock()
+    mock_channel.default_exchange.publish = AsyncMock()
+    sender._channel = mock_channel
+    yield mock_channel
 
-    @pytest.mark.asyncio
-    async def test_init_sets_global_channel_and_logs(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        mock_channel = AsyncMock()
 
-        await sender.init(mock_channel)
+def _get_published_xml(mock_channel) -> etree._Element:
+    call_args = mock_channel.default_exchange.publish.call_args
+    message = call_args[0][0]
+    return etree.fromstring(message.body)
 
-        # Global _channel should now point to our mock instance
-        assert sender._channel is mock_channel  # type: ignore[attr-defined]
 
+def _get_routing_key(mock_channel) -> str:
+    return mock_channel.default_exchange.publish.call_args[1]["routing_key"]
+
+
+def _get_delivery_mode(mock_channel):
+    message = mock_channel.default_exchange.publish.call_args[0][0]
+    return message.delivery_mode
+
+
+# ---------------------------------------------------------------------------
+# Contract 13 — publish_user_confirmed
+# ---------------------------------------------------------------------------
 
 class TestPublishUserConfirmed:
-    """Tests for publish_user_confirmed()."""
+
+    # role must be a valid UserRoleType enum value per the XSD
+    BASE_DATA = {
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "email": "jan@example.com",
+        "firstName": "Jan",
+        "lastName": "Janssen",
+        "role": "VISITOR",  # valid enum value — not ATTENDEE
+        "isActive": True,
+        "gdprConsent": True,
+        "confirmedAt": "2025-01-01T10:00:00Z",
+    }
 
     @pytest.mark.asyncio
-    async def test_builds_valid_xml_and_publishes_correct_queue(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Arrange: fake channel and xml_validator
-        mock_channel = AsyncMock()
-        mock_exchange = AsyncMock()
-        mock_channel.default_exchange = mock_exchange
-        monkeypatch.setattr(sender, "_channel", mock_channel)
+    async def test_publishes_to_correct_queue(self, setup_sender):
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_user_confirmed(self.BASE_DATA)
+        assert _get_routing_key(setup_sender) == "crm.user.confirmed"
 
-        validate_calls: list[bytes] = []
+    @pytest.mark.asyncio
+    async def test_message_is_persistent(self, setup_sender):
+        """durable queue — message must survive broker restart."""
+        from aio_pika import DeliveryMode
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_user_confirmed(self.BASE_DATA)
+        assert _get_delivery_mode(setup_sender) == DeliveryMode.PERSISTENT
 
-        def fake_validate(xml_bytes: bytes):  # type: ignore[override]
-            validate_calls.append(xml_bytes)
+    @pytest.mark.asyncio
+    async def test_root_element_is_user_confirmed(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_confirmed(self.BASE_DATA)
+        assert _get_published_xml(setup_sender).tag == "UserConfirmed"
 
-        monkeypatch.setattr("src.sender.xml_validator.validate", fake_validate)
+    @pytest.mark.asyncio
+    async def test_required_fields_present(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_confirmed(self.BASE_DATA)
+        xml = _get_published_xml(setup_sender)
+        for field in ["id", "email", "firstName", "lastName", "role",
+                      "isActive", "gdprConsent", "confirmedAt"]:
+            assert xml.find(field) is not None, f"Required field '{field}' missing"
 
-        user_data = {
-            "id": 123,
-            "email": "user@example.com",
-            "firstName": "Alice",
-            "lastName": "Doe",
-            "role": "ATTENDEE",
-            "isActive": True,
-            "gdprConsent": False,
-            "confirmedAt": "2026-03-25T10:00:00Z",
-            "phone": "+3212345678",
-            "companyId": 42,
-            "badgeCode": "ABC123",
-        }
+    @pytest.mark.asyncio
+    async def test_optional_fields_present_when_provided(self, setup_sender):
+        data = {**self.BASE_DATA, "phone": "0499123456",
+                "companyId": "123e4567-e89b-42d3-a456-556642440001", "badgeCode": "B001"}
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_confirmed(data)
+        xml = _get_published_xml(setup_sender)
+        assert xml.findtext("phone") == "0499123456"
+        assert xml.findtext("companyId") == "123e4567-e89b-42d3-a456-556642440001"
+        assert xml.findtext("badgeCode") == "B001"
 
-        # Act
-        await sender.publish_user_confirmed(user_data)
+    @pytest.mark.asyncio
+    async def test_optional_fields_absent_when_not_provided(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_confirmed(self.BASE_DATA)
+        xml = _get_published_xml(setup_sender)
+        assert xml.find("phone") is None
+        assert xml.find("companyId") is None
+        assert xml.find("badgeCode") is None
 
-        # Assert: xml_validator.validate called once with the built XML
-        assert len(validate_calls) == 1
-        xml_bytes = validate_calls[0]
+    @pytest.mark.asyncio
+    async def test_booleans_serialized_as_lowercase(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_confirmed(self.BASE_DATA)
+        xml = _get_published_xml(setup_sender)
+        assert xml.findtext("isActive") == "true"
+        assert xml.findtext("gdprConsent") == "true"
 
-        # XML structure checks
-        root = etree.fromstring(xml_bytes)
-        assert root.tag == "UserConfirmed"
-        assert root.findtext("id") == "123"
-        assert root.findtext("email") == "user@example.com"
-        assert root.findtext("firstName") == "Alice"
-        assert root.findtext("lastName") == "Doe"
-        assert root.findtext("role") == "ATTENDEE"
-        assert root.findtext("isActive") == "true"
-        assert root.findtext("gdprConsent") == "false"
-        assert root.findtext("confirmedAt") == "2026-03-25T10:00:00Z"
-        assert root.findtext("phone") == "+3212345678"
-        assert root.findtext("companyId") == "42"
-        assert root.findtext("badgeCode") == "ABC123"
+    @pytest.mark.asyncio
+    async def test_xsd_field_order_optional_fields_after_required(self, setup_sender):
+        """XSD xs:sequence is strict — phone before role, confirmedAt last."""
+        data = {**self.BASE_DATA, "phone": "0499123456", "badgeCode": "B001"}
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_confirmed(data)
+        xml = _get_published_xml(setup_sender)
+        tags = [child.tag for child in xml]
+        assert tags.index("phone") < tags.index("role")
+        assert tags.index("confirmedAt") == len(tags) - 1
 
-        # Publish called with correct routing key and body
-        mock_exchange.publish.assert_awaited_once()
-        args, kwargs = mock_exchange.publish.call_args
-        message = args[0]
-        assert kwargs["routing_key"] == "crm.user.confirmed"
-        assert message.body == xml_bytes
 
+# ---------------------------------------------------------------------------
+# Contract 14 — publish_company_confirmed
+# ---------------------------------------------------------------------------
 
 class TestPublishCompanyConfirmed:
-    """Tests for publish_company_confirmed()."""
+
+    BASE_DATA = {
+        "id": "660e8400-e29b-41d4-a716-446655440001",
+        "vatNumber": "BE0123456789",
+        "name": "Acme NV",
+        "email": "info@acme.be",
+        "isActive": True,
+        "confirmedAt": "2025-01-01T10:00:00Z",
+    }
 
     @pytest.mark.asyncio
-    async def test_company_confirmed_uses_expected_structure(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        mock_channel = AsyncMock()
-        mock_exchange = AsyncMock()
-        mock_channel.default_exchange = mock_exchange
-        monkeypatch.setattr(sender, "_channel", mock_channel)
+    async def test_publishes_to_correct_queue(self, setup_sender):
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_company_confirmed(self.BASE_DATA)
+        assert _get_routing_key(setup_sender) == "crm.company.confirmed"
 
-        with patch("src.sender.xml_validator.validate") as mock_validate:
-            company = {
-                "id": 7,
-                "vatNumber": "BE0123456789",
-                "name": "Example Corp",
-                "email": "info@example.com",
-                "isActive": True,
-                "confirmedAt": "2026-03-25T11:00:00Z",
-            }
+    @pytest.mark.asyncio
+    async def test_message_is_persistent(self, setup_sender):
+        from aio_pika import DeliveryMode
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_company_confirmed(self.BASE_DATA)
+        assert _get_delivery_mode(setup_sender) == DeliveryMode.PERSISTENT
 
-            await sender.publish_company_confirmed(company)
+    @pytest.mark.asyncio
+    async def test_root_element_is_company_confirmed(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_company_confirmed(self.BASE_DATA)
+        assert _get_published_xml(setup_sender).tag == "CompanyConfirmed"
 
-            # Validation called once
-            mock_validate.assert_called_once()
-            xml_bytes = mock_validate.call_args.args[0]
+    @pytest.mark.asyncio
+    async def test_required_fields_present(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_company_confirmed(self.BASE_DATA)
+        xml = _get_published_xml(setup_sender)
+        for field in ["id", "vatNumber", "name", "email", "isActive", "confirmedAt"]:
+            assert xml.find(field) is not None, f"Required field '{field}' missing"
 
-        root = etree.fromstring(xml_bytes)
-        assert root.tag == "CompanyConfirmed"
-        assert root.findtext("id") == "7"
-        assert root.findtext("vatNumber") == "BE0123456789"
-        assert root.findtext("name") == "Example Corp"
-        assert root.findtext("email") == "info@example.com"
-        assert root.findtext("isActive") == "true"
-        assert root.findtext("confirmedAt") == "2026-03-25T11:00:00Z"
 
-        mock_exchange.publish.assert_awaited_once()
-        _, kwargs = mock_exchange.publish.call_args
-        assert kwargs["routing_key"] == "crm.company.confirmed"
-
+# ---------------------------------------------------------------------------
+# Contract 5b — publish_company_responded
+# ---------------------------------------------------------------------------
 
 class TestPublishCompanyResponded:
-    """Tests for publish_company_responded()."""
 
     @pytest.mark.asyncio
-    async def test_includes_optional_fields_when_found(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        mock_channel = AsyncMock()
-        mock_exchange = AsyncMock()
-        mock_channel.default_exchange = mock_exchange
-        monkeypatch.setattr(sender, "_channel", mock_channel)
+    async def test_publishes_to_correct_queue(self, setup_sender):
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_company_responded("req-001", {"found": False})
+        assert _get_routing_key(setup_sender) == "crm.company.responded"
 
-        with patch("src.sender.xml_validator.validate") as mock_validate:
-            data = {
-                "found": True,
-                "id": 10,
-                "name": "Found Co",
-                "vatNumber": "VAT123",
-                "email": "contact@found.co",
-                "phone": "+3200000000",
-                "street": "Main St",
-                "houseNumber": "1A",
-                "postalCode": "1000",
-                "city": "Brussels",
-                "country": "BE",
-            }
+    @pytest.mark.asyncio
+    async def test_message_is_not_persistent(self, setup_sender):
+        """durable: false — no need for persistence."""
+        from aio_pika import DeliveryMode
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_company_responded("req-001", {"found": False})
+        assert _get_delivery_mode(setup_sender) == DeliveryMode.NOT_PERSISTENT
 
-            await sender.publish_company_responded("REQ-1", data)
+    @pytest.mark.asyncio
+    async def test_root_element_is_company_response(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_company_responded("req-001", {"found": False})
+        assert _get_published_xml(setup_sender).tag == "CompanyResponse"
 
-            mock_validate.assert_called_once()
-            xml_bytes = mock_validate.call_args.args[0]
+    @pytest.mark.asyncio
+    async def test_found_false_sends_no_company_fields(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_company_responded("req-001", {"found": False})
+        xml = _get_published_xml(setup_sender)
+        assert xml.findtext("found") == "false"
+        assert xml.find("vatNumber") is None
+        assert xml.find("name") is None
 
-        root = etree.fromstring(xml_bytes)
-        assert root.tag == "CompanyResponse"
-        assert root.findtext("requestId") == "REQ-1"
-        assert root.findtext("found") == "true"
-        assert root.findtext("name") == "Found Co"
-        assert root.findtext("city") == "Brussels"
+    @pytest.mark.asyncio
+    async def test_found_true_includes_company_fields(self, setup_sender):
+        data = {"found": True, "id": "uuid-1", "name": "Acme NV",
+                "vatNumber": "BE0123456789", "email": "info@acme.be"}
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_company_responded("req-001", data)
+        xml = _get_published_xml(setup_sender)
+        assert xml.findtext("found") == "true"
+        assert xml.findtext("name") == "Acme NV"
 
-        mock_exchange.publish.assert_awaited_once()
-        _, kwargs = mock_exchange.publish.call_args
-        assert kwargs["routing_key"] == "crm.company.responded"
+    @pytest.mark.asyncio
+    async def test_request_id_in_response(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_company_responded("req-xyz", {"found": False})
+        assert _get_published_xml(setup_sender).findtext("requestId") == "req-xyz"
 
+
+# ---------------------------------------------------------------------------
+# Contract 10b — publish_person_lookup_responded
+# ---------------------------------------------------------------------------
 
 class TestPublishPersonLookupResponded:
-    """Tests for publish_person_lookup_responded()."""
 
     @pytest.mark.asyncio
-    async def test_linked_person_includes_company_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        mock_channel = AsyncMock()
-        mock_exchange = AsyncMock()
-        mock_channel.default_exchange = mock_exchange
-        monkeypatch.setattr(sender, "_channel", mock_channel)
+    async def test_publishes_to_correct_queue(self, setup_sender):
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_person_lookup_responded(
+                "req-001", {"found": False, "linkedToCompany": False})
+        assert _get_routing_key(setup_sender) == "crm.person.lookup.responded"
 
-        with patch("src.sender.xml_validator.validate") as mock_validate:
-            person = {
-                "found": True,
-                "linkedToCompany": True,
-                "id": 5,
-                "companyName": "Partner BV",
-                "companyId": 99,
-            }
+    @pytest.mark.asyncio
+    async def test_message_is_not_persistent(self, setup_sender):
+        from aio_pika import DeliveryMode
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_person_lookup_responded(
+                "req-001", {"found": False, "linkedToCompany": False})
+        assert _get_delivery_mode(setup_sender) == DeliveryMode.NOT_PERSISTENT
 
-            await sender.publish_person_lookup_responded("REQ-2", person)
+    @pytest.mark.asyncio
+    async def test_not_found_excludes_optional_fields(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_person_lookup_responded(
+                "req-001", {"found": False, "linkedToCompany": False})
+        xml = _get_published_xml(setup_sender)
+        assert xml.findtext("found") == "false"
+        assert xml.findtext("linkedToCompany") == "false"
+        assert xml.find("id") is None
+        assert xml.find("companyName") is None
 
-            mock_validate.assert_called_once()
-            xml_bytes = mock_validate.call_args.args[0]
+    @pytest.mark.asyncio
+    async def test_found_with_company_includes_company_id(self, setup_sender):
+        data = {"found": True, "linkedToCompany": True,
+                "id": "uuid-p1", "companyName": "Acme NV", "companyId": "uuid-c1"}
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_person_lookup_responded("req-001", data)
+        xml = _get_published_xml(setup_sender)
+        assert xml.findtext("companyId") == "uuid-c1"
+        assert xml.findtext("companyName") == "Acme NV"
 
-        root = etree.fromstring(xml_bytes)
-        assert root.tag == "PersonResponse"
-        assert root.findtext("requestId") == "REQ-2"
-        assert root.findtext("found") == "true"
-        assert root.findtext("linkedToCompany") == "true"
-        assert root.findtext("companyName") == "Partner BV"
-        assert root.findtext("companyId") == "99"
 
-        mock_exchange.publish.assert_awaited_once()
-        _, kwargs = mock_exchange.publish.call_args
-        assert kwargs["routing_key"] == "crm.person.lookup.responded"
-
+# ---------------------------------------------------------------------------
+# Contract 17b — publish_unpaid_responded
+# ---------------------------------------------------------------------------
 
 class TestPublishUnpaidResponded:
-    """Tests for publish_unpaid_responded()."""
+
+    PERSONS = [
+        {"id": "uuid-1", "firstName": "Anna", "lastName": "Peeters",
+         "email": "anna@example.com", "linkedToCompany": False},
+        {"id": "uuid-2", "firstName": "Bob", "lastName": "Smeets",
+         "email": "bob@example.com", "linkedToCompany": True, "companyName": "Acme NV"},
+    ]
 
     @pytest.mark.asyncio
-    async def test_builds_person_list_payload(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        mock_channel = AsyncMock()
-        mock_exchange = AsyncMock()
-        mock_channel.default_exchange = mock_exchange
-        monkeypatch.setattr(sender, "_channel", mock_channel)
+    async def test_publishes_to_correct_queue(self, setup_sender):
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_unpaid_responded("req-001", self.PERSONS)
+        assert _get_routing_key(setup_sender) == "crm.unpaid.responded"
 
-        with patch("src.sender.xml_validator.validate") as mock_validate:
-            persons = [
-                {
-                    "id": 1,
-                    "firstName": "John",
-                    "lastName": "Doe",
-                    "email": "john@example.com",
-                    "linkedToCompany": False,
-                },
-                {
-                    "id": 2,
-                    "firstName": "Jane",
-                    "lastName": "Roe",
-                    "email": "jane@example.com",
-                    "linkedToCompany": True,
-                    "companyName": "Acme NV",
-                },
-            ]
+    @pytest.mark.asyncio
+    async def test_message_is_not_persistent(self, setup_sender):
+        from aio_pika import DeliveryMode
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_unpaid_responded("req-001", self.PERSONS)
+        assert _get_delivery_mode(setup_sender) == DeliveryMode.NOT_PERSISTENT
 
-            await sender.publish_unpaid_responded("REQ-3", persons)
+    @pytest.mark.asyncio
+    async def test_persons_count_matches(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_unpaid_responded("req-001", self.PERSONS)
+        xml = _get_published_xml(setup_sender)
+        assert len(xml.find("persons")) == 2
 
-            mock_validate.assert_called_once()
-            xml_bytes = mock_validate.call_args.args[0]
+    @pytest.mark.asyncio
+    async def test_company_name_present_when_linked(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_unpaid_responded("req-001", self.PERSONS)
+        bob = _get_published_xml(setup_sender).findall("persons/person")[1]
+        assert bob.findtext("companyName") == "Acme NV"
 
-        root = etree.fromstring(xml_bytes)
-        assert root.tag == "UnpaidResponse"
-        assert root.findtext("requestId") == "REQ-3"
+    @pytest.mark.asyncio
+    async def test_company_name_absent_when_not_linked(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_unpaid_responded("req-001", self.PERSONS)
+        anna = _get_published_xml(setup_sender).findall("persons/person")[0]
+        assert anna.find("companyName") is None
 
-        persons_el = root.find("persons")
-        assert persons_el is not None
-        person_elems = persons_el.findall("person")
-        assert len(person_elems) == 2
+    @pytest.mark.asyncio
+    async def test_empty_persons_list(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_unpaid_responded("req-001", [])
+        assert len(_get_published_xml(setup_sender).find("persons")) == 0
 
-        first = person_elems[0]
-        assert first.findtext("id") == "1"
-        assert first.findtext("linkedToCompany") == "false"
-        assert first.find("companyName") is None
 
-        second = person_elems[1]
-        assert second.findtext("id") == "2"
-        assert second.findtext("linkedToCompany") == "true"
-        assert second.findtext("companyName") == "Acme NV"
-
-        mock_exchange.publish.assert_awaited_once()
-        _, kwargs = mock_exchange.publish.call_args
-        assert kwargs["routing_key"] == "crm.unpaid.responded"
-
+# ---------------------------------------------------------------------------
+# Contract 6 — publish_mail_requested
+# ---------------------------------------------------------------------------
 
 class TestPublishMailRequested:
-    """Tests for publish_mail_requested()."""
+
+    RECIPIENT = {"email": "jan@example.com", "name": "Jan Janssen"}
 
     @pytest.mark.asyncio
-    async def test_mail_request_includes_header_and_dynamic_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        mock_channel = AsyncMock()
-        mock_exchange = AsyncMock()
-        mock_channel.default_exchange = mock_exchange
-        monkeypatch.setattr(sender, "_channel", mock_channel)
-
-        # Freeze time so timestamp is predictable
-        fixed_dt = datetime(2026, 3, 25, 12, 0, 0, tzinfo=timezone.utc)
-        with patch("src.sender.datetime") as mock_datetime, patch(
-            "src.sender.xml_validator.validate"
-        ) as mock_validate:
-            mock_datetime.now.return_value = fixed_dt
-            mock_datetime.timezone = timezone  # for attribute access
-
-            recipient = {"email": "user@example.com", "name": "User"}
-            dynamic = {
-                "guest_name": "Guest",
-                "session_name": "Session A",
-                "session_time": "2026-04-01T09:00:00Z",
-            }
-
+    async def test_publishes_to_correct_queue(self, setup_sender):
+        dynamic = {"guest_name": "Jan", "session_name": "Keynote",
+                   "session_time": "2025-06-01T09:00:00Z"}
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
             await sender.publish_mail_requested(
-                "session_reminder", recipient, dynamic
-            )
+                "registration_confirmation", self.RECIPIENT, dynamic)
+        assert _get_routing_key(setup_sender) == "crm.mail.requested"
 
-            mock_validate.assert_called_once()
-            xml_bytes = mock_validate.call_args.args[0]
+    @pytest.mark.asyncio
+    async def test_message_is_persistent(self, setup_sender):
+        from aio_pika import DeliveryMode
+        dynamic = {"guest_name": "Jan", "session_name": "K",
+                   "session_time": "2025-06-01T09:00:00Z"}
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_mail_requested(
+                "registration_confirmation", self.RECIPIENT, dynamic)
+        assert _get_delivery_mode(setup_sender) == DeliveryMode.PERSISTENT
 
-        root = etree.fromstring(xml_bytes)
-        assert root.tag == "MailRequest"
-        assert root.findtext("mailType") == "session_reminder"
+    @pytest.mark.asyncio
+    async def test_header_source_is_crm(self, setup_sender):
+        dynamic = {"guest_name": "Jan", "session_name": "K",
+                   "session_time": "2025-06-01T09:00:00Z"}
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_mail_requested(
+                "registration_confirmation", self.RECIPIENT, dynamic)
+        assert _get_published_xml(setup_sender).findtext("header/source") == "CRM"
 
-        header = root.find("header")
-        assert header is not None
-        assert header.findtext("source") == "CRM"
-        assert header.findtext("timestamp") == "2026-03-25T12:00:00Z"
+    @pytest.mark.asyncio
+    async def test_bulk_event_has_no_session_fields(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_mail_requested(
+                "bulk_event", self.RECIPIENT, {"guest_name": "Jan"})
+        xml = _get_published_xml(setup_sender)
+        assert xml.find("dynamic_data/session_name") is None
+        assert xml.find("dynamic_data/session_time") is None
 
-        recipient_el = root.find("recipient")
-        assert recipient_el is not None
-        assert recipient_el.findtext("email") == "user@example.com"
-        assert recipient_el.findtext("name") == "User"
+    @pytest.mark.asyncio
+    async def test_session_change_has_session_fields(self, setup_sender):
+        dynamic = {"guest_name": "Jan", "session_name": "Keynote",
+                   "session_time": "2025-06-01T09:00:00Z"}
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_mail_requested("session_change", self.RECIPIENT, dynamic)
+        xml = _get_published_xml(setup_sender)
+        assert xml.findtext("dynamic_data/session_name") == "Keynote"
+        assert xml.findtext("dynamic_data/session_time") is not None
 
-        dynamic_el = root.find("dynamic_data")
-        assert dynamic_el is not None
-        assert dynamic_el.findtext("guest_name") == "Guest"
-        assert dynamic_el.findtext("session_name") == "Session A"
-        assert dynamic_el.findtext("session_time") == "2026-04-01T09:00:00Z"
-
-        mock_exchange.publish.assert_awaited_once()
-        _, kwargs = mock_exchange.publish.call_args
-        assert kwargs["routing_key"] == "crm.mail.requested"
+    @pytest.mark.asyncio
+    async def test_recipient_fields_correct(self, setup_sender):
+        dynamic = {"guest_name": "Jan", "session_name": "K",
+                   "session_time": "2025-06-01T09:00:00Z"}
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_mail_requested(
+                "registration_confirmation", self.RECIPIENT, dynamic)
+        xml = _get_published_xml(setup_sender)
+        assert xml.findtext("recipient/email") == "jan@example.com"
+        assert xml.findtext("recipient/name") == "Jan Janssen"

@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import aio_pika
+from aio_pika import DeliveryMode
 from aio_pika.abc import AbstractChannel
 from lxml import etree
 
@@ -42,16 +43,23 @@ async def init(channel: AbstractChannel) -> None:
 # Internal helper
 # ---------------------------------------------------------------------------
 
-async def _publish(queue_name: str, xml_bytes: bytes) -> None:
+async def _publish(queue_name: str, xml_bytes: bytes, persistent: bool = False) -> None:
     """Publish xml_bytes to the given queue via the default exchange.
+
+    Args:
+        queue_name: Routing key (= queue name) to publish to.
+        xml_bytes:  Validated XML payload as bytes.
+        persistent: If True, sets delivery_mode=PERSISTENT so the message
+                    survives a broker restart. Use for durable queues.
 
     The sender never declares queues — the consuming team creates their own.
     """
+    delivery_mode = DeliveryMode.PERSISTENT if persistent else DeliveryMode.NOT_PERSISTENT
     await _channel.default_exchange.publish(
-        aio_pika.Message(body=xml_bytes),
+        aio_pika.Message(body=xml_bytes, delivery_mode=delivery_mode),
         routing_key=queue_name,
     )
-    logger.debug("Message published to queue '%s'.", queue_name)
+    logger.debug("Message published to queue '%s' (persistent=%s).", queue_name, persistent)
 
 
 # ---------------------------------------------------------------------------
@@ -66,28 +74,35 @@ async def publish_user_confirmed(user_data: dict[str, Any]) -> None:
         id, email, firstName, lastName, role, isActive, gdprConsent, confirmedAt
     Optional keys:
         phone, companyId (only if role=COMPANY_CONTACT), badgeCode
+
+    Field order follows XSD xs:sequence exactly:
+        id, email, firstName, lastName, [phone], role, [companyId], [badgeCode],
+        isActive, gdprConsent, confirmedAt
     """
     root = etree.Element("UserConfirmed")
 
+    # Fields — in XSD xs:sequence order
     etree.SubElement(root, "id").text = str(user_data["id"])
     etree.SubElement(root, "email").text = user_data["email"]
     etree.SubElement(root, "firstName").text = user_data["firstName"]
     etree.SubElement(root, "lastName").text = user_data["lastName"]
-    etree.SubElement(root, "role").text = user_data["role"]
-    etree.SubElement(root, "isActive").text = str(user_data["isActive"]).lower()
-    etree.SubElement(root, "gdprConsent").text = str(user_data["gdprConsent"]).lower()
-    etree.SubElement(root, "confirmedAt").text = user_data["confirmedAt"]
-
     if "phone" in user_data:
         etree.SubElement(root, "phone").text = user_data["phone"]
+
+    etree.SubElement(root, "role").text = user_data["role"]
+
     if "companyId" in user_data:
         etree.SubElement(root, "companyId").text = str(user_data["companyId"])
     if "badgeCode" in user_data:
         etree.SubElement(root, "badgeCode").text = user_data["badgeCode"]
 
+    etree.SubElement(root, "isActive").text = str(user_data["isActive"]).lower()
+    etree.SubElement(root, "gdprConsent").text = str(user_data["gdprConsent"]).lower()
+    etree.SubElement(root, "confirmedAt").text = user_data["confirmedAt"]
+
     xml_bytes = etree.tostring(root, encoding="utf-8", xml_declaration=True)
     xml_validator.validate(xml_bytes)
-    await _publish("crm.user.confirmed", xml_bytes)
+    await _publish("crm.user.confirmed", xml_bytes, persistent=True)
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +127,7 @@ async def publish_company_confirmed(company_data: dict[str, Any]) -> None:
 
     xml_bytes = etree.tostring(root, encoding="utf-8", xml_declaration=True)
     xml_validator.validate(xml_bytes)
-    await _publish("crm.company.confirmed", xml_bytes)
+    await _publish("crm.company.confirmed", xml_bytes, persistent=True)
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +163,7 @@ async def publish_company_responded(request_id: str, company_data: dict[str, Any
 
     xml_bytes = etree.tostring(root, encoding="utf-8", xml_declaration=True)
     xml_validator.validate(xml_bytes)
-    await _publish("crm.company.responded", xml_bytes)
+    await _publish("crm.company.responded", xml_bytes, persistent=False)
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +200,7 @@ async def publish_person_lookup_responded(request_id: str, person_data: dict[str
 
     xml_bytes = etree.tostring(root, encoding="utf-8", xml_declaration=True)
     xml_validator.validate(xml_bytes)
-    await _publish("crm.person.lookup.responded", xml_bytes)
+    await _publish("crm.person.lookup.responded", xml_bytes, persistent=False)
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +235,7 @@ async def publish_unpaid_responded(request_id: str, persons: list[dict[str, Any]
 
     xml_bytes = etree.tostring(root, encoding="utf-8", xml_declaration=True)
     xml_validator.validate(xml_bytes)
-    await _publish("crm.unpaid.responded", xml_bytes)
+    await _publish("crm.unpaid.responded", xml_bytes, persistent=False)
 
 
 # ---------------------------------------------------------------------------
@@ -270,4 +285,4 @@ async def publish_mail_requested(
 
     xml_bytes = etree.tostring(root, encoding="utf-8", xml_declaration=True)
     xml_validator.validate(xml_bytes)
-    await _publish("crm.mail.requested", xml_bytes)
+    await _publish("crm.mail.requested", xml_bytes, persistent=True)

@@ -96,11 +96,18 @@ async def handle_warning(message: aio_pika.IncomingMessage) -> None:
     - Validates incoming XML against XSD
     - Logs as logger.error() — no crash
     - No Salesforce action required
-    - Invalid XML: exception caught by message.process(), message is requeued
+    - Invalid XML: exception is caught, logged, and the message is rejected
+      (not requeued — a structurally invalid message will never become valid)
     """
-    async with message.process():
+    try:
         xml = xml_validator.validate(message.body)
-        logger.error(
-            "Controlroom warning received: %s",
-            etree.tostring(xml, encoding="unicode"),
-        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Controlroom warning — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    logger.error(
+        "Controlroom warning received: %s",
+        etree.tostring(xml, encoding="unicode"),
+    )
+    await message.ack()
