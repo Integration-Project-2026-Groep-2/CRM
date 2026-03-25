@@ -3,7 +3,6 @@ Unit tests — receiver.py
 Contract 9: controlroom.warning.issued
 """
 
-import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 

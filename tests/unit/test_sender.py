@@ -3,10 +3,10 @@ Unit tests — sender.py
 Contracten 13, 14, 5b, 10b, 17b, 6
 """
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-from lxml import etree
+
 import pytest
+from lxml import etree
 
 from src import sender
 
