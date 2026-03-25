@@ -108,24 +108,19 @@ async def upsert_contact_by_email(
     Raises:
         SalesforceError: If operation fails.
     """
-    try:
-        # Shallow copy to avoid mutating input dict
-        data = {**data}
-        # Ensure Email is in data
-        data["Email"] = email
-        # Generate UUID v4 for crm.user.confirmed (Contract 13)
-        crm_id = str(uuid.uuid4())
-        data["CRM_ID__c"] = crm_id
+    data = {**data}
+    data["Email"] = email
 
-        # Upsert Contact (atomic, prevents race conditions)
+    existing = await get_contact_by_email(sf, email)
+    if existing and existing.get("CRM_ID__c"):
+        data["CRM_ID__c"] = existing["CRM_ID__c"]
+    else:
+        data["CRM_ID__c"] = str(uuid.uuid4())
+
+    try:
         result = await asyncio.to_thread(sf.Contact.upsert, "Email", data)
         contact_id = result["id"]
-        logger.info("Upserted Contact by email %s (ID: %s, CRM_ID: %s)",
-                    email, contact_id, crm_id)
-
-        # Retrieve and return complete record
-        contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
-        return contact_record
+        return await asyncio.to_thread(sf.Contact.get, contact_id)
     except SalesforceError as e:
         logger.error("Failed to upsert contact by email %s: %s", email, str(e))
         raise
@@ -221,24 +216,19 @@ async def upsert_account_by_vat(
     Raises:
         SalesforceError: If operation fails.
     """
-    try:
-        # Shallow copy to avoid mutating input dict
-        data = {**data}
-        # Ensure VAT_Number__c is in data
-        data["VAT_Number__c"] = vat_number
-        # Generate UUID v4 for crm.company.confirmed (Contract 14)
-        crm_id = str(uuid.uuid4())
-        data["CRM_ID__c"] = crm_id
+    data = {**data}
+    data["VAT_Number__c"] = vat_number
 
-        # Upsert Account (atomic, prevents race conditions)
+    existing = await get_account_by_vat(sf, vat_number)
+    if existing and existing.get("CRM_ID__c"):
+        data["CRM_ID__c"] = existing["CRM_ID__c"]
+    else:
+        data["CRM_ID__c"] = str(uuid.uuid4())
+
+    try:
         result = await asyncio.to_thread(sf.Account.upsert, "VAT_Number__c", data)
         account_id = result["id"]
-        logger.info("Upserted Account by VAT %s (ID: %s, CRM_ID: %s)",
-                    vat_number, account_id, crm_id)
-
-        # Retrieve and return complete record
-        account_record = await asyncio.to_thread(sf.Account.get, account_id)
-        return account_record
+        return await asyncio.to_thread(sf.Account.get, account_id)
     except SalesforceError as e:
         logger.error("Failed to upsert account by VAT %s: %s", vat_number, str(e))
         raise

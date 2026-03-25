@@ -46,6 +46,7 @@ async def test_create_contact_raises_salesforce_error(sf):
 
 @pytest.mark.asyncio
 async def test_upsert_contact_by_email(sf):
+    sf.query.return_value = {"totalSize": 0, "records": []}
     sf.Contact.upsert.return_value = {"id": "003000000000002"}
     sf.Contact.get.return_value = {"Id": "003000000000002", "Email": "a@a.com"}
 
@@ -89,6 +90,7 @@ async def test_create_account_success(sf):
 
 @pytest.mark.asyncio
 async def test_upsert_account_by_vat(sf):
+    sf.query.return_value = {"totalSize": 0, "records": []}
     sf.Account.upsert.return_value = {"id": "001000000000002"}
     sf.Account.get.return_value = {"Id": "001000000000002", "Name": "Acme", "VAT_Number__c": "BE0123456789"}
 
@@ -115,3 +117,27 @@ async def test_get_account_by_vat_not_found(sf):
     result = await get_account_by_vat(sf, "BE0123456789")
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_upsert_contact_preserves_existing_crm_id(sf):
+    sf.Contact.upsert.return_value = {"id": "003000000000010"}
+    sf.Contact.get.return_value = {"Id": "003000000000010", "Email": "a@a.com", "CRM_ID__c": "FIXED-UUID"}
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000010"}]}
+
+    result = await upsert_contact_by_email(sf, "a@a.com", {"FirstName": "Bob"})
+    assert result["CRM_ID__c"] == "FIXED-UUID"
+    sf.Contact.upsert.assert_called_once()
+    assert sf.Contact.upsert.call_args.args[1]["CRM_ID__c"] == "FIXED-UUID"
+
+
+@pytest.mark.asyncio
+async def test_upsert_account_preserves_existing_crm_id(sf):
+    sf.Account.upsert.return_value = {"id": "001000000000010"}
+    sf.Account.get.return_value = {"Id": "001000000000010", "VAT_Number__c": "BE123", "CRM_ID__c": "FIXED-UUID"}
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "001000000000010"}]}
+
+    result = await upsert_account_by_vat(sf, "BE123", {"Name": "Acme"})
+    assert result["CRM_ID__c"] == "FIXED-UUID"
+    sf.Account.upsert.assert_called_once()
+    assert sf.Account.upsert.call_args.args[1]["CRM_ID__c"] == "FIXED-UUID"
