@@ -1,14 +1,15 @@
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 from simple_salesforce import SalesforceError
 
 from src.salesforce_client import (
-    create_contact,
-    upsert_contact_by_email,
-    get_contact_by_email,
     create_account,
-    upsert_account_by_vat,
+    create_contact,
     get_account_by_vat,
+    get_contact_by_email,
+    upsert_account_by_vat,
+    upsert_contact_by_email,
 )
 
 
