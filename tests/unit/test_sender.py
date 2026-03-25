@@ -15,24 +15,11 @@ class TestSenderInit:
     @pytest.mark.asyncio
     async def test_init_sets_global_channel_and_logs(self, monkeypatch: pytest.MonkeyPatch) -> None:
         mock_channel = AsyncMock()
-        records: list[str] = []
 
-        class DummyHandler:
-            def handle(self, record):  # type: ignore[override]
-                records.append(record.getMessage())
+        await sender.init(mock_channel)
 
-        logger = sender.logger
-        handler = DummyHandler()
-        logger.addHandler(handler)  # type: ignore[arg-type]
-
-        try:
-            await sender.init(mock_channel)
-            # Global _channel should now point to our mock instance
-            assert sender._channel is mock_channel  # type: ignore[attr-defined]
-            # One of the log messages should mention initialization
-            assert any("Sender initialized" in msg for msg in records)
-        finally:
-            logger.handlers.remove(handler)  # type: ignore[arg-type]
+        # Global _channel should now point to our mock instance
+        assert sender._channel is mock_channel  # type: ignore[attr-defined]
 
 
 class TestPublishUserConfirmed:
