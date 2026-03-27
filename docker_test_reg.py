@@ -1,18 +1,22 @@
 import asyncio
+import os
+import random
 
 import aio_pika
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 async def main():
-    connection = await aio_pika.connect_robust("amqp://guest:guest@localhost/")
+    rmq_url = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost/")
+    connection = await aio_pika.connect_robust(rmq_url)
     async with connection:
         channel = await connection.channel()
 
-        confirmed_q = await channel.declare_queue("crm.user.confirmed", durable=True)
+        confirmed_q = await channel.declare_queue("crm.user.confirmed", durable=True, exclusive=True)
 
         # Generate a unique email every run
-        import random
-
         r = random.randint(1000, 9999)
         email = f"docker.test.user.{r}@example.com"
 

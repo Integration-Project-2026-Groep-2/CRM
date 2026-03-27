@@ -111,7 +111,6 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_valid_registration_flow_success(self, sf_mock):
-        sf_mock.query = AsyncMock(return_value={"totalSize": 0, "records": []})
 
         parsed_xml = etree.fromstring(VALID_REG_XML)
 
@@ -121,7 +120,7 @@ class TestHandleRegistration:
             patch(
                 "src.receiver.create_contact",
                 return_value={
-                    "CRM_ID__c": "UUID-123",
+                    "CRM_ID__c": "123e4567-e89b-12d3-a456-426614174000",
                     "Email": "john.doe@example.com",
                     "FirstName": "John",
                     "LastName": "Doe",
@@ -139,17 +138,22 @@ class TestHandleRegistration:
 
             mock_publish.assert_called_once()
             user_data = mock_publish.call_args[0][0]
-            assert user_data["id"] == "UUID-123"
+            assert user_data["id"] == "123e4567-e89b-12d3-a456-426614174000"
             assert user_data["email"] == "john.doe@example.com"
+            assert user_data["firstName"] == "John"
+            assert user_data["lastName"] == "Doe"
+            assert user_data["role"] == "VISITOR"
+            assert user_data["gdprConsent"] is True
+            assert "confirmedAt" in user_data
             assert user_data["isActive"] is True
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_duplicate_email_logged(self, sf_mock, caplog):
+    async def test_duplicate_email_logged_and_ignored(self, sf_mock, caplog):
         parsed_xml = etree.fromstring(VALID_REG_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_by_email", return_value={"Id": "003xxx"}),
+            patch("src.receiver.get_contact_by_email", return_value={"Id": "003xxx", "Registration_ID__c": "OTHER"}),
             patch("src.receiver.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             caplog.at_level(logging.WARNING),
@@ -162,14 +166,15 @@ class TestHandleRegistration:
             mock_create.assert_not_called()
             mock_publish.assert_not_called()
             msg.ack.assert_called_once()
-            assert "Conflict: Registration for existing email" in caplog.text
+            assert "Conflict: email john.doe@example.com exists with different registrationId" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_salesforce_failure_requeues(self, sf_mock):
+    async def test_salesforce_create_failure_requeues(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_REG_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_by_email", side_effect=Exception("SF Down")),
+            patch("src.receiver.get_contact_by_email", return_value=None),
+            patch("src.receiver.create_contact", side_effect=Exception("SF Create Down")),
             patch("src.sender.publish_user_confirmed") as mock_publish,
         ):
             from src.receiver import handle_registration
@@ -189,3 +194,38 @@ class TestHandleRegistration:
             await handle_registration(msg, sf_mock)
 
             msg.reject.assert_called_once_with(requeue=False)
+
+    @pytest.mark.asyncio
+    async def test_gdpr_consent_false_rejected(self, sf_mock, caplog):
+        invalid_gdpr_xml = VALID_REG_XML.replace(b"<gdprConsent>true</gdprConsent>", b"<gdprConsent>false</gdprConsent>")
+        parsed_xml = etree.fromstring(invalid_gdpr_xml)
+        with patch("src.xml_validator.validate", return_value=parsed_xml), caplog.at_level(logging.WARNING):
+            from src.receiver import handle_registration
+
+            msg = _make_message(invalid_gdpr_xml)
+            await handle_registration(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+            assert "Registration refused — gdprConsent=false" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_retry_publish_user_confirmed_on_existing_registration_id(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_REG_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_by_email", return_value={
+                "CRM_ID__c": "123e4567-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+                "Email": "john.doe@example.com",
+                "Registration_ID__c": "REG-12345"
+            }),
+            patch("src.receiver.create_contact") as mock_create,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+        ):
+            from src.receiver import handle_registration
+
+            msg = _make_message(VALID_REG_XML)
+            await handle_registration(msg, sf_mock)
+
+            mock_create.assert_not_called()
+            mock_publish.assert_called_once()
+            msg.ack.assert_called_once()

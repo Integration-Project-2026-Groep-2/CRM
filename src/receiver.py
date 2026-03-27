@@ -120,11 +120,11 @@ async def handle_warning(message: aio_pika.IncomingMessage) -> None:
 async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
     """Contract 1 — Frontend -> CRM: new registration.
 
-    Queue: frontend.registration.created | durable: true | US-02, US-04
+    Queue: frontend.registration.created | durable: true | US-02, US-04, US-05, US-19
 
     Behaviour:
     - Validate XML against schema.
-    - Check if email exists in Salesforce (R2 conflict handling: log only).
+    - Check if email exists in Salesforce (R1 scope: log only. R2 adds C15 publish).
     - If new, create Contact in Salesforce mapping fields.
     - Publish crm.user.confirmed via sender.
     - Invalid XML: rejected without requeue.
@@ -139,11 +139,47 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
 
     try:
         email = xml.findtext("email")
+
+        gdpr_text = xml.findtext("gdprConsent")
+        if gdpr_text not in ("true", "1"):
+            logger.warning("Registration refused — gdprConsent=%s for email %s", gdpr_text, email)
+            await message.reject(requeue=False)
+            return
+
+        role = xml.findtext("role")
+        company = xml.findtext("company")
+        if role == "COMPANY_CONTACT" and not company:
+            logger.warning("COMPANY_CONTACT registration without company field for %s", email)
+
         existing_contact = await get_contact_by_email(sf, email)
 
         if existing_contact:
-            logger.warning("Conflict: Registration for existing email %s", email)
-            # R2 requires us to only log the conflict, but not propagate a new user confirmation.
+            reg_id_incoming = xml.findtext("registrationId")
+            reg_id_existing = existing_contact.get("Registration_ID__c")
+            
+            if reg_id_incoming == reg_id_existing:
+                # Retry na publish failure -> opnieuw publishen
+                logger.info("Retry for registrationId %s — republishing", reg_id_incoming)
+                
+                # Rebuild user_data payload from existing contact
+                user_data = {
+                    "id": existing_contact["CRM_ID__c"],
+                    "email": existing_contact["Email"],
+                    "firstName": existing_contact.get("FirstName", ""),
+                    "lastName": existing_contact.get("LastName", ""),
+                    "role": existing_contact.get("Role__c", "VISITOR"),
+                    "isActive": True,
+                    "gdprConsent": existing_contact.get("GDPR_Consent__c", True),
+                    "confirmedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                }
+                if existing_contact.get("Phone"):
+                    user_data["phone"] = existing_contact["Phone"]
+
+                await sender.publish_user_confirmed(user_data)
+                await message.ack()
+                return
+
+            logger.warning("Conflict: email %s exists with different registrationId", email)
             await message.ack()
             return
 
@@ -161,8 +197,8 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
         if phone:
             contact_data["Phone"] = phone
 
-        # Company mapping could go to Account, but Contract 1 payload allows string
-        # Not creating an Account here as per Contract 1 (only User flow)
+        # Company mapping deferred to Contract 3 (aparte taak)
+        # TODO: sessionId mapping needed for Contract 2
 
         logger.info("Creating new Salesforce Contact for %s", email)
         contact = await create_contact(sf, contact_data)
