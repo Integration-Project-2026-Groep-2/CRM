@@ -4,6 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from functools import partial
+from typing import TYPE_CHECKING
 
 import aio_pika
 from aio_pika.abc import AbstractRobustConnection
@@ -12,6 +13,9 @@ from lxml import etree
 from src import sender, xml_validator
 from src.config import Config
 from src.salesforce_client import create_contact, get_contact_by_email, get_salesforce_client
+
+if TYPE_CHECKING:
+    from simple_salesforce import Salesforce
 
 logger = logging.getLogger(__name__)
 
