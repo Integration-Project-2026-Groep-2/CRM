@@ -28,13 +28,12 @@ def _make_message(body: bytes) -> MagicMock:
 
 
 class TestHandleWarning:
-
     @pytest.mark.asyncio
     async def test_valid_warning_is_logged_as_error(self, caplog):
         parsed_xml = etree.fromstring(VALID_WARNING_XML)
-        with patch("src.xml_validator.validate", return_value=parsed_xml), \
-             caplog.at_level(logging.ERROR):
+        with patch("src.xml_validator.validate", return_value=parsed_xml), caplog.at_level(logging.ERROR):
             from src.receiver import handle_warning
+
             msg = _make_message(VALID_WARNING_XML)
             await handle_warning(msg)
             msg.ack.assert_called_once()
@@ -45,9 +44,9 @@ class TestHandleWarning:
     @pytest.mark.asyncio
     async def test_xml_content_included_in_log(self, caplog):
         parsed_xml = etree.fromstring(VALID_WARNING_XML)
-        with patch("src.xml_validator.validate", return_value=parsed_xml), \
-             caplog.at_level(logging.ERROR):
+        with patch("src.xml_validator.validate", return_value=parsed_xml), caplog.at_level(logging.ERROR):
             from src.receiver import handle_warning
+
             await handle_warning(_make_message(VALID_WARNING_XML))
         log_text = " ".join(r.message for r in caplog.records)
         assert "Warning" in log_text or "serviceId" in log_text
@@ -55,9 +54,12 @@ class TestHandleWarning:
     @pytest.mark.asyncio
     async def test_invalid_xml_does_not_crash_container(self, caplog):
         """Invalid XML must be caught, logged as error, and rejected — no crash."""
-        with patch("src.xml_validator.validate", side_effect=ValueError("Ongeldige XML")), \
-             caplog.at_level(logging.ERROR):
+        with (
+            patch("src.xml_validator.validate", side_effect=ValueError("Ongeldige XML")),
+            caplog.at_level(logging.ERROR),
+        ):
             from src.receiver import handle_warning
+
             msg = _make_message(INVALID_XML)
             await handle_warning(msg)
 
@@ -73,6 +75,7 @@ class TestHandleWarning:
         not requeued — it will never become valid."""
         with patch("src.xml_validator.validate", side_effect=ValueError("bad xml")):
             from src.receiver import handle_warning
+
             msg = _make_message(INVALID_XML)
             await handle_warning(msg)
         msg.reject.assert_called_once_with(requeue=False)
@@ -82,5 +85,107 @@ class TestHandleWarning:
         parsed_xml = etree.fromstring(VALID_WARNING_XML)
         with patch("src.xml_validator.validate", return_value=parsed_xml) as mock_validate:
             from src.receiver import handle_warning
+
             await handle_warning(_make_message(VALID_WARNING_XML))
         mock_validate.assert_called_once_with(VALID_WARNING_XML)
+
+
+VALID_REG_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<Registration>
+    <registrationId>REG-12345</registrationId>
+    <firstName>John</firstName>
+    <lastName>Doe</lastName>
+    <email>john.doe@example.com</email>
+    <sessionId>SESS-001</sessionId>
+    <role>VISITOR</role>
+    <gdprConsent>true</gdprConsent>
+    <phone>+32412345678</phone>
+    <company>Acme Corp</company>
+</Registration>"""
+
+
+class TestHandleRegistration:
+    @pytest.fixture
+    def sf_mock(self):
+        return AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_valid_registration_flow_success(self, sf_mock):
+        sf_mock.query = AsyncMock(return_value={"totalSize": 0, "records": []})
+
+        parsed_xml = etree.fromstring(VALID_REG_XML)
+
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_by_email", return_value=None),
+            patch(
+                "src.receiver.create_contact",
+                return_value={
+                    "CRM_ID__c": "UUID-123",
+                    "Email": "john.doe@example.com",
+                    "FirstName": "John",
+                    "LastName": "Doe",
+                    "Role__c": "VISITOR",
+                    "GDPR_Consent__c": True,
+                    "Phone": "+32412345678",
+                },
+            ),
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+        ):
+            from src.receiver import handle_registration
+
+            msg = _make_message(VALID_REG_XML)
+            await handle_registration(msg, sf_mock)
+
+            mock_publish.assert_called_once()
+            user_data = mock_publish.call_args[0][0]
+            assert user_data["id"] == "UUID-123"
+            assert user_data["email"] == "john.doe@example.com"
+            assert user_data["isActive"] is True
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_duplicate_email_logged(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_REG_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_by_email", return_value={"Id": "003xxx"}),
+            patch("src.receiver.create_contact") as mock_create,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_registration
+
+            msg = _make_message(VALID_REG_XML)
+            await handle_registration(msg, sf_mock)
+
+            mock_create.assert_not_called()
+            mock_publish.assert_not_called()
+            msg.ack.assert_called_once()
+            assert "Conflict: Registration for existing email" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_salesforce_failure_requeues(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_REG_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_by_email", side_effect=Exception("SF Down")),
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+        ):
+            from src.receiver import handle_registration
+
+            msg = _make_message(VALID_REG_XML)
+            await handle_registration(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            msg.reject.assert_called_once_with(requeue=True)
+
+    @pytest.mark.asyncio
+    async def test_invalid_xml_rejected(self, sf_mock, caplog):
+        with patch("src.xml_validator.validate", side_effect=ValueError("Bad XML")), caplog.at_level(logging.ERROR):
+            from src.receiver import handle_registration
+
+            msg = _make_message(INVALID_XML)
+            await handle_registration(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
