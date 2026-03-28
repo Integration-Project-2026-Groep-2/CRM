@@ -14,7 +14,7 @@ async def main():
     async with connection:
         channel = await connection.channel()
 
-        confirmed_q = await channel.declare_queue("crm.user.confirmed", durable=True, exclusive=True)
+        confirmed_q = await channel.declare_queue("crm.user.confirmed", durable=True)
 
         # Generate a unique email every run
         r = random.randint(1000, 9999)

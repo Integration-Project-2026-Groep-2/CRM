@@ -117,6 +117,23 @@ async def handle_warning(message: aio_pika.IncomingMessage) -> None:
     await message.ack()
 
 
+def _build_user_data(contact: dict) -> dict:
+    """Build user_data payload dict from a Salesforce contact record."""
+    data = {
+        "id": contact["CRM_ID__c"],
+        "email": contact["Email"],
+        "firstName": contact.get("FirstName", ""),
+        "lastName": contact.get("LastName", ""),
+        "role": contact.get("Role__c", "VISITOR"),
+        "isActive": True,
+        "gdprConsent": contact.get("GDPR_Consent__c", True),
+        "confirmedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if contact.get("Phone"):
+        data["phone"] = contact["Phone"]
+    return data
+
+
 async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
     """Contract 1 — Frontend -> CRM: new registration.
 
@@ -146,6 +163,9 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
             await message.reject(requeue=False)
             return
 
+        # TODO: Switch to registrationId-based dedup as primary key (contract spec).
+        #       Current R1 approach uses email as lookup; registrationId is secondary.
+
         role = xml.findtext("role")
         company = xml.findtext("company")
         if role == "COMPANY_CONTACT" and not company:
@@ -160,22 +180,8 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
             if reg_id_incoming == reg_id_existing:
                 # Retry na publish failure -> opnieuw publishen
                 logger.info("Retry for registrationId %s — republishing", reg_id_incoming)
-                
-                # Rebuild user_data payload from existing contact
-                user_data = {
-                    "id": existing_contact["CRM_ID__c"],
-                    "email": existing_contact["Email"],
-                    "firstName": existing_contact.get("FirstName", ""),
-                    "lastName": existing_contact.get("LastName", ""),
-                    "role": existing_contact.get("Role__c", "VISITOR"),
-                    "isActive": True,
-                    "gdprConsent": existing_contact.get("GDPR_Consent__c", True),
-                    "confirmedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                }
-                if existing_contact.get("Phone"):
-                    user_data["phone"] = existing_contact["Phone"]
 
-                await sender.publish_user_confirmed(user_data)
+                await sender.publish_user_confirmed(_build_user_data(existing_contact))
                 await message.ack()
                 return
 
@@ -189,7 +195,7 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
             "LastName": xml.findtext("lastName"),
             "Email": email,
             "Role__c": xml.findtext("role"),
-            "GDPR_Consent__c": xml.findtext("gdprConsent") == "true",
+            "GDPR_Consent__c": xml.findtext("gdprConsent") in ("true", "1"),
             "Registration_ID__c": xml.findtext("registrationId"),
         }
 
@@ -204,23 +210,12 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
         contact = await create_contact(sf, contact_data)
 
         # Publish crm.user.confirmed
-        user_data = {
-            "id": contact["CRM_ID__c"],
-            "email": contact["Email"],
-            "firstName": contact["FirstName"],
-            "lastName": contact["LastName"],
-            "role": contact["Role__c"],
-            "isActive": True,  # Assuming active immediately
-            "gdprConsent": contact["GDPR_Consent__c"],
-            "confirmedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
-
-        if contact.get("Phone"):
-            user_data["phone"] = contact["Phone"]
-
-        await sender.publish_user_confirmed(user_data)
+        await sender.publish_user_confirmed(_build_user_data(contact))
         logger.info("Published crm.user.confirmed for %s", email)
         await message.ack()
+
+        # TODO: Contract 6 (R1 scope) — publish registration_confirmation
+        #       via sender.publish_mail_requested after user is confirmed.
 
     except Exception as exc:  # noqa: BLE001
         logger.error("Registration — error processing message: %s", exc)
