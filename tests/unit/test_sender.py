@@ -404,3 +404,144 @@ class TestPublishMailRequested:
         xml = _get_published_xml(setup_sender)
         assert xml.findtext("recipient/email") == "jan@example.com"
         assert xml.findtext("recipient/name") == "Jan Janssen"
+
+
+# ---------------------------------------------------------------------------
+# Contract 18 — publish_user_updated
+# ---------------------------------------------------------------------------
+
+class TestPublishUserUpdated:
+
+    BASE_DATA = {
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "email": "jan@example.com",
+        "firstName": "Jan",
+        "lastName": "Janssen",
+        "role": "VISITOR",
+        "isActive": True,
+        "gdprConsent": True,
+        "updatedAt": "2026-04-15T12:00:00Z",
+    }
+
+    @pytest.mark.asyncio
+    async def test_publishes_to_correct_queue(self, setup_sender):
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_user_updated(self.BASE_DATA)
+        assert _get_routing_key(setup_sender) == "crm.user.updated"
+
+    @pytest.mark.asyncio
+    async def test_message_is_persistent(self, setup_sender):
+        """durable queue — message must survive broker restart."""
+        from aio_pika import DeliveryMode
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_user_updated(self.BASE_DATA)
+        assert _get_delivery_mode(setup_sender) == DeliveryMode.PERSISTENT
+
+    @pytest.mark.asyncio
+    async def test_root_element_is_user_updated(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_updated(self.BASE_DATA)
+        assert _get_published_xml(setup_sender).tag == "UserUpdated"
+
+    @pytest.mark.asyncio
+    async def test_required_fields_present(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_updated(self.BASE_DATA)
+        xml = _get_published_xml(setup_sender)
+        for field in ["id", "email", "firstName", "lastName", "role",
+                      "isActive", "gdprConsent", "updatedAt"]:
+            assert xml.find(field) is not None, f"Required field '{field}' missing"
+
+    @pytest.mark.asyncio
+    async def test_optional_fields_present_when_provided(self, setup_sender):
+        data = {
+            **self.BASE_DATA,
+            "phone": "+32 471 12 34 56",
+            "companyId": "123e4567-e89b-42d3-a456-556642440001",
+            "badgeCode": "BADGE-042",
+            "street": "Kerkstraat",
+            "houseNumber": "42",
+            "postalCode": "1000",
+            "city": "Brussel",
+            "country": "BE",
+        }
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_updated(data)
+        xml = _get_published_xml(setup_sender)
+        assert xml.findtext("phone") == "+32 471 12 34 56"
+        assert xml.findtext("companyId") == "123e4567-e89b-42d3-a456-556642440001"
+        assert xml.findtext("badgeCode") == "BADGE-042"
+        assert xml.findtext("street") == "Kerkstraat"
+        assert xml.findtext("houseNumber") == "42"
+        assert xml.findtext("postalCode") == "1000"
+        assert xml.findtext("city") == "Brussel"
+        assert xml.findtext("country") == "BE"
+
+    @pytest.mark.asyncio
+    async def test_optional_fields_absent_when_not_provided(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_updated(self.BASE_DATA)
+        xml = _get_published_xml(setup_sender)
+        for field in ["phone", "companyId", "badgeCode",
+                      "street", "houseNumber", "postalCode", "city", "country"]:
+            assert xml.find(field) is None, f"Optional field '{field}' should be absent"
+
+    @pytest.mark.asyncio
+    async def test_booleans_true_serialized_as_lowercase(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_updated(self.BASE_DATA)
+        xml = _get_published_xml(setup_sender)
+        assert xml.findtext("isActive") == "true"
+        assert xml.findtext("gdprConsent") == "true"
+
+    @pytest.mark.asyncio
+    async def test_booleans_false_serialized_as_lowercase(self, setup_sender):
+        data = {**self.BASE_DATA, "isActive": False, "gdprConsent": False}
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_updated(data)
+        xml = _get_published_xml(setup_sender)
+        assert xml.findtext("isActive") == "false"
+        assert xml.findtext("gdprConsent") == "false"
+
+    @pytest.mark.asyncio
+    async def test_xsd_field_order_required_only(self, setup_sender):
+        """Required-only fields must still respect xs:sequence order."""
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_updated(self.BASE_DATA)
+        tags = [child.tag for child in _get_published_xml(setup_sender)]
+        assert tags == ["id", "email", "firstName", "lastName",
+                        "role", "isActive", "gdprConsent", "updatedAt"]
+
+    @pytest.mark.asyncio
+    async def test_full_xsd_field_order_all_optionals(self, setup_sender):
+        """XSD xs:sequence is strict — all 16 fields in exact order."""
+        data = {
+            **self.BASE_DATA,
+            "phone": "+32 471 12 34 56",
+            "companyId": "123e4567-e89b-42d3-a456-556642440001",
+            "badgeCode": "BADGE-042",
+            "street": "Kerkstraat",
+            "houseNumber": "42",
+            "postalCode": "1000",
+            "city": "Brussel",
+            "country": "BE",
+        }
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_updated(data)
+        xml = _get_published_xml(setup_sender)
+        tags = [child.tag for child in xml]
+        expected = [
+            "id", "email", "firstName", "lastName", "phone",
+            "role", "companyId", "badgeCode",
+            "street", "houseNumber", "postalCode", "city", "country",
+            "isActive", "gdprConsent", "updatedAt",
+        ]
+        assert tags == expected

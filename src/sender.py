@@ -6,6 +6,7 @@ publish calls elsewhere in the codebase.
 
 Implemented contracts:
   Contract 13 — crm.user.confirmed           (durable: true)
+  Contract 18 — crm.user.updated             (durable: true)
   Contract 14 — crm.company.confirmed        (durable: true)
   Contract 5b  — crm.company.responded       (durable: false)
   Contract 10b — crm.person.lookup.responded (durable: false)
@@ -103,6 +104,58 @@ async def publish_user_confirmed(user_data: dict[str, Any]) -> None:
     xml_bytes = etree.tostring(root, encoding="utf-8", xml_declaration=True)
     xml_validator.validate(xml_bytes)
     await _publish("crm.user.confirmed", xml_bytes, persistent=True)
+
+
+# ---------------------------------------------------------------------------
+# Contract 18 — CRM → consumers: user updated
+# Queue: crm.user.updated | durable: true | US-21, US-41
+# ---------------------------------------------------------------------------
+
+async def publish_user_updated(user_data: dict[str, Any]) -> None:
+    """Contract 18 — Publish full user profile after Contact update in Salesforce.
+
+    Consumers replace their local copy entirely — no partial merge.
+
+    Required keys in user_data:
+        id, email, firstName, lastName, role, isActive, gdprConsent, updatedAt
+    Optional keys:
+        phone, companyId (only if role=COMPANY_CONTACT), badgeCode,
+        street, houseNumber, postalCode, city, country
+
+    Field order follows XSD xs:sequence exactly:
+        id, email, firstName, lastName, [phone], role, [companyId], [badgeCode],
+        [street], [houseNumber], [postalCode], [city], [country],
+        isActive, gdprConsent, updatedAt
+    """
+    root = etree.Element("UserUpdated")
+
+    # Required fields — in XSD xs:sequence order
+    etree.SubElement(root, "id").text = str(user_data["id"])
+    etree.SubElement(root, "email").text = user_data["email"]
+    etree.SubElement(root, "firstName").text = user_data["firstName"]
+    etree.SubElement(root, "lastName").text = user_data["lastName"]
+    if "phone" in user_data:
+        etree.SubElement(root, "phone").text = user_data["phone"]
+
+    etree.SubElement(root, "role").text = user_data["role"]
+
+    if "companyId" in user_data:
+        etree.SubElement(root, "companyId").text = str(user_data["companyId"])
+    if "badgeCode" in user_data:
+        etree.SubElement(root, "badgeCode").text = user_data["badgeCode"]
+
+    # Address fields — optional, XSD order: street, houseNumber, postalCode, city, country
+    for field in ("street", "houseNumber", "postalCode", "city", "country"):
+        if field in user_data:
+            etree.SubElement(root, field).text = user_data[field]
+
+    etree.SubElement(root, "isActive").text = str(user_data["isActive"]).lower()
+    etree.SubElement(root, "gdprConsent").text = str(user_data["gdprConsent"]).lower()
+    etree.SubElement(root, "updatedAt").text = user_data["updatedAt"]
+
+    xml_bytes = etree.tostring(root, encoding="utf-8", xml_declaration=True)
+    xml_validator.validate(xml_bytes)
+    await _publish("crm.user.updated", xml_bytes, persistent=True)
 
 
 # ---------------------------------------------------------------------------
