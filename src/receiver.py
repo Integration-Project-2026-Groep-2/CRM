@@ -2,13 +2,20 @@
 
 import asyncio
 import logging
+from datetime import datetime, timezone
+from functools import partial
+from typing import TYPE_CHECKING
 
 import aio_pika
 from aio_pika.abc import AbstractRobustConnection
 from lxml import etree
 
-from src import xml_validator
+from src import sender, xml_validator
 from src.config import Config
+from src.salesforce_client import create_contact, get_contact_by_email, get_salesforce_client
+
+if TYPE_CHECKING:
+    from simple_salesforce import Salesforce
 
 logger = logging.getLogger(__name__)
 
@@ -20,20 +27,17 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     for all future contract handlers.
     """
     channel = await connection.channel()
+    sf_client = await get_salesforce_client(config)
 
     # Contract 9 — Controlroom → CRM: system warning
     # Queue: controlroom.warning.issued | durable: false | US-26
-    queue_warning = await channel.declare_queue(
-        "controlroom.warning.issued", durable=False
-    )
+    queue_warning = await channel.declare_queue("controlroom.warning.issued", durable=False)
     await queue_warning.consume(handle_warning)
 
     # Future contracts — uncomment and implement per sprint:
     # Contract 1 — Frontend → CRM: new registration
-    # queue_registration = await channel.declare_queue(
-    #     "frontend.registration.created", durable=True
-    # )
-    # await queue_registration.consume(handle_registration)
+    queue_registration = await channel.declare_queue("frontend.registration.created", durable=True)
+    await queue_registration.consume(partial(handle_registration, sf=sf_client))
 
     # Contract 2 — Frontend → CRM: update/cancel registration
     # queue_reg_updated = await channel.declare_queue(
@@ -111,3 +115,108 @@ async def handle_warning(message: aio_pika.IncomingMessage) -> None:
         etree.tostring(xml, encoding="unicode"),
     )
     await message.ack()
+
+
+def _build_user_data(contact: dict) -> dict:
+    """Build user_data payload dict from a Salesforce contact record."""
+    data = {
+        "id": contact["CRM_ID__c"],
+        "email": contact["Email"],
+        "firstName": contact.get("FirstName", ""),
+        "lastName": contact.get("LastName", ""),
+        "role": contact.get("Role__c", "VISITOR"),
+        "isActive": True,
+        "gdprConsent": contact.get("GDPR_Consent__c", True),
+        "confirmedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if contact.get("Phone"):
+        data["phone"] = contact["Phone"]
+    return data
+
+
+async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
+    """Contract 1 — Frontend -> CRM: new registration.
+
+    Queue: frontend.registration.created | durable: true | US-02, US-04, US-05, US-19
+
+    Behaviour:
+    - Validate XML against schema.
+    - Check if email exists in Salesforce (R1 scope: log only. R2 adds C15 publish).
+    - If new, create Contact in Salesforce mapping fields.
+    - Publish crm.user.confirmed via sender.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Registration — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        email = xml.findtext("email")
+
+        gdpr_text = xml.findtext("gdprConsent")
+        if gdpr_text not in ("true", "1"):
+            logger.warning("Registration refused — gdprConsent=%s for email %s", gdpr_text, email)
+            await message.reject(requeue=False)
+            return
+
+        # TODO: Switch to registrationId-based dedup as primary key (contract spec).
+        #       Current R1 approach uses email as lookup; registrationId is secondary.
+
+        role = xml.findtext("role")
+        company = xml.findtext("company")
+        if role == "COMPANY_CONTACT" and not company:
+            logger.warning("COMPANY_CONTACT registration without company field for %s", email)
+
+        existing_contact = await get_contact_by_email(sf, email)
+
+        if existing_contact:
+            reg_id_incoming = xml.findtext("registrationId")
+            reg_id_existing = existing_contact.get("Registration_ID__c")
+            
+            if reg_id_incoming == reg_id_existing:
+                # Retry na publish failure -> opnieuw publishen
+                logger.info("Retry for registrationId %s — republishing", reg_id_incoming)
+
+                await sender.publish_user_confirmed(_build_user_data(existing_contact))
+                await message.ack()
+                return
+
+            logger.warning("Conflict: email %s exists with different registrationId", email)
+            await message.ack()
+            return
+
+        # Prepare payload for Salesforce
+        contact_data = {
+            "FirstName": xml.findtext("firstName"),
+            "LastName": xml.findtext("lastName"),
+            "Email": email,
+            "Role__c": xml.findtext("role"),
+            "GDPR_Consent__c": xml.findtext("gdprConsent") in ("true", "1"),
+            "Registration_ID__c": xml.findtext("registrationId"),
+        }
+
+        phone = xml.findtext("phone")
+        if phone:
+            contact_data["Phone"] = phone
+
+        # Company mapping deferred to Contract 3 (aparte taak)
+        # TODO: sessionId mapping needed for Contract 2
+
+        logger.info("Creating new Salesforce Contact for %s", email)
+        contact = await create_contact(sf, contact_data)
+
+        # Publish crm.user.confirmed
+        await sender.publish_user_confirmed(_build_user_data(contact))
+        logger.info("Published crm.user.confirmed for %s", email)
+        await message.ack()
+
+        # TODO: Contract 6 (R1 scope) — publish registration_confirmation
+        #       via sender.publish_mail_requested after user is confirmed.
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Registration — error processing message: %s", exc)
+        await message.reject(requeue=True)
