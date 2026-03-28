@@ -116,20 +116,48 @@ async def upsert_contact_by_email(
 
     try:
         result = await asyncio.to_thread(sf.Contact.upsert, f"Email/{email}", data)
-        contact_id = result["id"]
 
-        if result.get("created", False):
-            if not data.get("CRM_ID__c"):
-                crm_id = str(uuid.uuid4())
-                await asyncio.to_thread(
-                    sf.Contact.update, contact_id, {"CRM_ID__c": crm_id}
-                )
+        # Salesforce upsert may return a dict for creates and an int status code
+        # for updates, depending on backend/API behavior.
+        created = isinstance(result, dict) and result.get("created", False)
+        contact_id = result.get("id") if isinstance(result, dict) else None
+
+        if contact_id is None and existing is not None:
+            contact_id = existing.get("Id")
+
+        if created and contact_id and not data.get("CRM_ID__c"):
+            crm_id = str(uuid.uuid4())
+            await asyncio.to_thread(
+                sf.Contact.update, contact_id, {"CRM_ID__c": crm_id}
+            )
+
+        if contact_id is None:
+            refreshed = await get_contact_by_email(sf, email)
+            if refreshed is None:
+                raise RuntimeError(f"Upsert succeeded but contact not found for email {email}")
+            return refreshed
 
         contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
         return contact_record
     except SalesforceError as e:
         logger.error("Failed to upsert contact by email %s: %s", email, str(e))
         raise
+
+
+async def _resolve_contact_active_field(sf: Salesforce) -> str:
+    """Resolve which custom field is used as contact active flag in this org."""
+    describe = await asyncio.to_thread(sf.Contact.describe)
+    available_fields = {field["name"] for field in describe.get("fields", [])}
+
+    # Primary expected name first; fallbacks cover common org naming variants.
+    for candidate in ("IsActive__c", "Active__c", "Is_Active__c"):
+        if candidate in available_fields:
+            return candidate
+
+    raise RuntimeError(
+        "No supported Contact active field found. Expected one of: "
+        "IsActive__c, Active__c, Is_Active__c"
+    )
 
 
 async def get_contact_by_email(
@@ -162,6 +190,50 @@ async def get_contact_by_email(
             return None
     except SalesforceError as e:
         logger.error("Failed to get contact by email %s: %s", email, str(e))
+        raise
+
+
+async def deactivate_contact(
+    sf: Salesforce, email: str
+) -> dict[str, Any] | None:
+    """Soft-delete a Contact by setting IsActive__c=False (Contract 2, GDPR).
+
+    NEVER physically delete a Contact — GDPR requires soft delete only.
+    If the Contact does not exist, returns None and logs a warning.
+
+    Args:
+        sf: Authenticated Salesforce client.
+        email: Contact email to deactivate.
+
+    Returns:
+        Updated Contact record as dict, or None if not found.
+
+    Raises:
+        SalesforceError: If update fails.
+    """
+    contact = await get_contact_by_email(sf, email)
+    if contact is None:
+        logger.warning("Cannot deactivate — Contact not found for email: %s", email)
+        return None
+
+    contact_id = contact["Id"]
+
+    try:
+        active_field = await _resolve_contact_active_field(sf)
+
+        await asyncio.to_thread(
+            sf.Contact.update, contact_id, {active_field: False}
+        )
+        logger.info("Deactivated Contact %s (email: %s)", contact_id, email)
+
+        # Re-fetch to get the complete updated record
+        updated_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        if active_field != "IsActive__c" and "IsActive__c" not in updated_record:
+            # Normalize key so downstream payload builders remain stable.
+            updated_record["IsActive__c"] = updated_record.get(active_field, False)
+        return updated_record
+    except SalesforceError as e:
+        logger.error("Failed to deactivate contact %s: %s", email, str(e))
         raise
 
 

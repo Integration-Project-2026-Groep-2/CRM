@@ -417,3 +417,296 @@ class TestHandleRegistration:
 
             mock_create.assert_not_called()
             msg.reject.assert_called_once_with(requeue=True)
+
+
+# ==========================================================================
+# Contract 2 + 18 + 22: frontend.registration.updated
+# ==========================================================================
+
+VALID_UPDATE_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<RegistrationChange>
+    <registrationId>REG-12345</registrationId>
+    <email>john.doe@example.com</email>
+    <sessionId>SESS-001</sessionId>
+    <changeType>updated</changeType>
+    <updatedFields>
+        <firstName>Jane</firstName>
+        <lastName>Smith</lastName>
+        <phone>+32400000000</phone>
+    </updatedFields>
+</RegistrationChange>"""
+
+VALID_CANCEL_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<RegistrationChange>
+    <email>cancel@example.com</email>
+    <sessionId>SESS-002</sessionId>
+    <changeType>cancelled</changeType>
+</RegistrationChange>"""
+
+UPDATED_CONTACT_RETURN = {
+    "Id": "003000000000099",
+    "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440099",
+    "Email": "john.doe@example.com",
+    "FirstName": "Jane",
+    "LastName": "Smith",
+    "Role__c": "VISITOR",
+    "GDPR_Consent__c": True,
+    "Phone": "+32400000000",
+}
+
+DEACTIVATED_CONTACT_RETURN = {
+    "Id": "003000000000088",
+    "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440088",
+    "Email": "cancel@example.com",
+    "FirstName": "Cancelled",
+    "LastName": "User",
+    "IsActive__c": False,
+}
+
+
+class TestHandleRegistrationUpdated:
+    @pytest.fixture
+    def sf_mock(self):
+        return AsyncMock()
+
+    # ------------------------------------------------------------------
+    # Updated path
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_updated_calls_upsert_contact(self, sf_mock):
+        """changeType=updated must call upsert_contact_by_email with mapped fields."""
+        parsed_xml = etree.fromstring(VALID_UPDATE_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN) as mock_upsert,
+            patch("src.sender.publish_user_updated"),
+        ):
+            from src.receiver import handle_registration_updated
+
+            msg = _make_message(VALID_UPDATE_XML)
+            await handle_registration_updated(msg, sf_mock)
+
+            mock_upsert.assert_called_once()
+            call_args = mock_upsert.call_args
+            assert call_args[0][1] == "john.doe@example.com"
+            update_data = call_args[0][2]
+            assert update_data["FirstName"] == "Jane"
+            assert update_data["LastName"] == "Smith"
+            assert update_data["Phone"] == "+32400000000"
+
+    @pytest.mark.asyncio
+    async def test_updated_publishes_user_updated(self, sf_mock):
+        """After upsert, crm.user.updated (C18) must be published."""
+        parsed_xml = etree.fromstring(VALID_UPDATE_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN),
+            patch("src.sender.publish_user_updated") as mock_publish,
+        ):
+            from src.receiver import handle_registration_updated
+
+            await handle_registration_updated(_make_message(VALID_UPDATE_XML), sf_mock)
+
+            mock_publish.assert_called_once()
+            user_data = mock_publish.call_args[0][0]
+            assert user_data["id"] == "550e8400-e29b-41d4-a716-446655440099"
+            assert user_data["email"] == "john.doe@example.com"
+            assert "updatedAt" in user_data
+
+    @pytest.mark.asyncio
+    async def test_updated_acks_message(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_UPDATE_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN),
+            patch("src.sender.publish_user_updated"),
+        ):
+            from src.receiver import handle_registration_updated
+
+            msg = _make_message(VALID_UPDATE_XML)
+            await handle_registration_updated(msg, sf_mock)
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_updated_without_updated_fields_calls_upsert_with_empty_data(self, sf_mock):
+        """changeType=updated without <updatedFields> should still upsert (no field changes)."""
+        xml_no_fields = b"""<?xml version='1.0' encoding='utf-8'?>
+<RegistrationChange>
+    <email>john.doe@example.com</email>
+    <sessionId>SESS-001</sessionId>
+    <changeType>updated</changeType>
+</RegistrationChange>"""
+        parsed_xml = etree.fromstring(xml_no_fields)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN) as mock_upsert,
+            patch("src.sender.publish_user_updated"),
+        ):
+            from src.receiver import handle_registration_updated
+
+            msg = _make_message(xml_no_fields)
+            await handle_registration_updated(msg, sf_mock)
+
+            mock_upsert.assert_called_once()
+            update_data = mock_upsert.call_args[0][2]
+            assert update_data == {}
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_updated_maps_role_to_salesforce_field(self, sf_mock):
+        """role in updatedFields must map to Role__c in Salesforce."""
+        xml_with_role = b"""<?xml version='1.0' encoding='utf-8'?>
+<RegistrationChange>
+    <email>john.doe@example.com</email>
+    <sessionId>SESS-001</sessionId>
+    <changeType>updated</changeType>
+    <updatedFields>
+        <role>COMPANY_CONTACT</role>
+    </updatedFields>
+</RegistrationChange>"""
+        parsed_xml = etree.fromstring(xml_with_role)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN) as mock_upsert,
+            patch("src.sender.publish_user_updated"),
+        ):
+            from src.receiver import handle_registration_updated
+
+            await handle_registration_updated(_make_message(xml_with_role), sf_mock)
+            update_data = mock_upsert.call_args[0][2]
+            assert update_data["Role__c"] == "COMPANY_CONTACT"
+
+    # ------------------------------------------------------------------
+    # Cancelled path
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_cancelled_deactivates_contact(self, sf_mock):
+        """changeType=cancelled must call deactivate_contact."""
+        parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.deactivate_contact", return_value=DEACTIVATED_CONTACT_RETURN) as mock_deact,
+            patch("src.sender.publish_user_deactivated"),
+        ):
+            from src.receiver import handle_registration_updated
+
+            await handle_registration_updated(_make_message(VALID_CANCEL_XML), sf_mock)
+            mock_deact.assert_called_once_with(sf_mock, "cancel@example.com")
+
+    @pytest.mark.asyncio
+    async def test_cancelled_publishes_user_deactivated(self, sf_mock):
+        """After deactivation, crm.user.deactivated (C22) must be published."""
+        parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.deactivate_contact", return_value=DEACTIVATED_CONTACT_RETURN),
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+        ):
+            from src.receiver import handle_registration_updated
+
+            await handle_registration_updated(_make_message(VALID_CANCEL_XML), sf_mock)
+
+            mock_publish.assert_called_once()
+            deact_data = mock_publish.call_args[0][0]
+            assert deact_data["id"] == "550e8400-e29b-41d4-a716-446655440088"
+            assert deact_data["email"] == "cancel@example.com"
+            assert "deactivatedAt" in deact_data
+
+    @pytest.mark.asyncio
+    async def test_cancelled_acks_message(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.deactivate_contact", return_value=DEACTIVATED_CONTACT_RETURN),
+            patch("src.sender.publish_user_deactivated"),
+        ):
+            from src.receiver import handle_registration_updated
+
+            msg = _make_message(VALID_CANCEL_XML)
+            await handle_registration_updated(msg, sf_mock)
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_contact_not_found_acks_without_publish(self, sf_mock, caplog):
+        """Cancelling a non-existent contact: log warning, ack, no publish."""
+        parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.deactivate_contact", return_value=None),
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_registration_updated
+
+            msg = _make_message(VALID_CANCEL_XML)
+            await handle_registration_updated(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            msg.ack.assert_called_once()
+            assert "acking without action" in caplog.text
+
+    # ------------------------------------------------------------------
+    # Error handling
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_invalid_xml_rejected(self, sf_mock, caplog):
+        """Invalid XML must be rejected without requeue."""
+        with patch("src.xml_validator.validate", side_effect=ValueError("Bad XML")), caplog.at_level(logging.ERROR):
+            from src.receiver import handle_registration_updated
+
+            msg = _make_message(INVALID_XML)
+            await handle_registration_updated(msg, sf_mock)
+            msg.reject.assert_called_once_with(requeue=False)
+
+    @pytest.mark.asyncio
+    async def test_salesforce_error_requeues(self, sf_mock):
+        """Salesforce failure must requeue the message for retry."""
+        parsed_xml = etree.fromstring(VALID_UPDATE_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.upsert_contact_by_email", side_effect=Exception("SF Down")),
+            patch("src.sender.publish_user_updated") as mock_publish,
+        ):
+            from src.receiver import handle_registration_updated
+
+            msg = _make_message(VALID_UPDATE_XML)
+            await handle_registration_updated(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            msg.reject.assert_called_once_with(requeue=True)
+
+    @pytest.mark.asyncio
+    async def test_publish_failure_on_update_requeues(self, sf_mock):
+        """If publish_user_updated fails after successful upsert, message must requeue."""
+        parsed_xml = etree.fromstring(VALID_UPDATE_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN),
+            patch("src.sender.publish_user_updated", side_effect=Exception("RabbitMQ down")),
+        ):
+            from src.receiver import handle_registration_updated
+
+            msg = _make_message(VALID_UPDATE_XML)
+            await handle_registration_updated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=True)
+
+    @pytest.mark.asyncio
+    async def test_publish_failure_on_cancel_requeues(self, sf_mock):
+        """If publish_user_deactivated fails after deactivation, message must requeue."""
+        parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.deactivate_contact", return_value=DEACTIVATED_CONTACT_RETURN),
+            patch("src.sender.publish_user_deactivated", side_effect=Exception("RabbitMQ down")),
+        ):
+            from src.receiver import handle_registration_updated
+
+            msg = _make_message(VALID_CANCEL_XML)
+            await handle_registration_updated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=True)
+

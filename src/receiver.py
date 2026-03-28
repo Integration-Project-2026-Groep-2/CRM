@@ -12,7 +12,13 @@ from lxml import etree
 
 from src import sender, xml_validator
 from src.config import Config
-from src.salesforce_client import create_contact, get_contact_by_email, get_salesforce_client
+from src.salesforce_client import (
+    create_contact,
+    deactivate_contact,
+    get_contact_by_email,
+    get_salesforce_client,
+    upsert_contact_by_email,
+)
 
 if TYPE_CHECKING:
     from simple_salesforce import Salesforce
@@ -40,10 +46,10 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     await queue_registration.consume(partial(handle_registration, sf=sf_client))
 
     # Contract 2 — Frontend → CRM: update/cancel registration
-    # queue_reg_updated = await channel.declare_queue(
-    #     "frontend.registration.updated", durable=True
-    # )
-    # await queue_reg_updated.consume(handle_registration_updated)
+    queue_reg_updated = await channel.declare_queue(
+        "frontend.registration.updated", durable=True
+    )
+    await queue_reg_updated.consume(partial(handle_registration_updated, sf=sf_client))
 
     # Contract 3 — Frontend → CRM: create company
     # queue_company = await channel.declare_queue(
@@ -220,3 +226,118 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
     except Exception as exc:  # noqa: BLE001
         logger.error("Registration — error processing message: %s", exc)
         await message.reject(requeue=True)
+
+
+def _build_updated_user_data(contact: dict) -> dict:
+    """Build user_data payload dict for crm.user.updated from a Salesforce record.
+
+    Same structure as _build_user_data but with updatedAt instead of confirmedAt.
+    """
+    data = {
+        "id": contact["CRM_ID__c"],
+        "email": contact["Email"],
+        "firstName": contact.get("FirstName", ""),
+        "lastName": contact.get("LastName", ""),
+        "role": contact.get("Role__c", "VISITOR"),
+        "isActive": True,
+        "gdprConsent": contact.get("GDPR_Consent__c", True),
+        "updatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if contact.get("Phone"):
+        data["phone"] = contact["Phone"]
+    return data
+
+
+async def handle_registration_updated(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
+    """Contract 2 — Frontend -> CRM: registration update or cancellation.
+
+    Queue: frontend.registration.updated | durable: true | US-21 (R1), US-33 (R2)
+
+    Behaviour:
+    - Validate XML against schema (<RegistrationChange>).
+    - Branch on changeType:
+        updated   → Upsert Contact in Salesforce, publish crm.user.updated (C18).
+        cancelled → Soft-delete Contact (IsActive__c=false), publish crm.user.deactivated (C22).
+    - Cancellation is always a soft delete — never physically remove (GDPR).
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("RegistrationChange — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        email = xml.findtext("email")
+        session_id = xml.findtext("sessionId")
+        change_type = xml.findtext("changeType")
+
+        logger.info(
+            "Processing registration change: email=%s, sessionId=%s, changeType=%s",
+            email, session_id, change_type,
+        )
+
+        if change_type == "updated":
+            await _handle_update(xml, email, sf, message)
+        elif change_type == "cancelled":
+            await _handle_cancellation(email, sf, message)
+        else:
+            # XSD validation should prevent this, but defence-in-depth
+            logger.error("Unknown changeType '%s' for email %s — rejecting", change_type, email)
+            await message.reject(requeue=False)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("RegistrationChange — error processing message: %s", exc)
+        await message.reject(requeue=True)
+
+
+async def _handle_update(
+    xml: etree._Element, email: str, sf: "Salesforce", message: aio_pika.IncomingMessage
+) -> None:
+    """Process changeType=updated: upsert Contact and publish crm.user.updated."""
+    update_data: dict = {}
+
+    updated_fields = xml.find("updatedFields")
+    if updated_fields is not None:
+        field_mapping = {
+            "firstName": "FirstName",
+            "lastName": "LastName",
+            "email": "Email",
+            "phone": "Phone",
+            "role": "Role__c",
+            # company mapping deferred to Contract 3
+        }
+        for xml_field, sf_field in field_mapping.items():
+            value = updated_fields.findtext(xml_field)
+            if value is not None:
+                update_data[sf_field] = value
+
+    contact = await upsert_contact_by_email(sf, email, update_data)
+
+    await sender.publish_user_updated(_build_updated_user_data(contact))
+    logger.info("Published crm.user.updated for %s", email)
+    await message.ack()
+
+
+async def _handle_cancellation(
+    email: str, sf: "Salesforce", message: aio_pika.IncomingMessage
+) -> None:
+    """Process changeType=cancelled: soft-delete Contact and publish crm.user.deactivated."""
+    contact = await deactivate_contact(sf, email)
+
+    if contact is None:
+        # Contact doesn't exist — nothing to deactivate. Ack to prevent infinite requeue.
+        logger.warning("Cancellation for unknown email %s — acking without action", email)
+        await message.ack()
+        return
+
+    deactivation_data = {
+        "id": contact["CRM_ID__c"],
+        "email": contact["Email"],
+        "deactivatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    await sender.publish_user_deactivated(deactivation_data)
+    logger.info("Published crm.user.deactivated for %s", email)
+    await message.ack()

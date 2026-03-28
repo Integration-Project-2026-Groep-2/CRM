@@ -339,3 +339,31 @@ async def publish_mail_requested(
     xml_bytes = etree.tostring(root, encoding="utf-8", xml_declaration=True)
     xml_validator.validate(xml_bytes)
     await _publish("crm.mail.requested", xml_bytes, persistent=True)
+
+
+# ---------------------------------------------------------------------------
+# Contract 22 — CRM → consumers: user deactivated (GDPR soft delete)
+# Queue: crm.user.deactivated | durable: true | US-33 (R2), R3 consumers
+# ---------------------------------------------------------------------------
+
+async def publish_user_deactivated(user_data: dict[str, Any]) -> None:
+    """Contract 22 — Publish user deactivation after cancellation.
+
+    Notifies downstream consumers that a user has been soft-deleted.
+    Consumers must remove or anonymise their cached data accordingly.
+
+    Required keys in user_data:
+        id, email, deactivatedAt
+
+    Field order follows XSD xs:sequence exactly:
+        id, email, deactivatedAt
+    """
+    root = etree.Element("UserDeactivated")
+
+    etree.SubElement(root, "id").text = str(user_data["id"])
+    etree.SubElement(root, "email").text = user_data["email"]
+    etree.SubElement(root, "deactivatedAt").text = user_data["deactivatedAt"]
+
+    xml_bytes = etree.tostring(root, encoding="utf-8", xml_declaration=True)
+    xml_validator.validate(xml_bytes)
+    await _publish("crm.user.deactivated", xml_bytes, persistent=True)

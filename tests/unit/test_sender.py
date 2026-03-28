@@ -545,3 +545,66 @@ class TestPublishUserUpdated:
             "isActive", "gdprConsent", "updatedAt",
         ]
         assert tags == expected
+
+
+# ---------------------------------------------------------------------------
+# Contract 22 — publish_user_deactivated
+# ---------------------------------------------------------------------------
+
+class TestPublishUserDeactivated:
+
+    BASE_DATA = {
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "email": "jan@example.com",
+        "deactivatedAt": "2026-04-15T14:00:00Z",
+    }
+
+    @pytest.mark.asyncio
+    async def test_publishes_to_correct_queue(self, setup_sender):
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_user_deactivated(self.BASE_DATA)
+        assert _get_routing_key(setup_sender) == "crm.user.deactivated"
+
+    @pytest.mark.asyncio
+    async def test_message_is_persistent(self, setup_sender):
+        """durable queue — message must survive broker restart."""
+        from aio_pika import DeliveryMode
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_user_deactivated(self.BASE_DATA)
+        assert _get_delivery_mode(setup_sender) == DeliveryMode.PERSISTENT
+
+    @pytest.mark.asyncio
+    async def test_root_element_is_user_deactivated(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_deactivated(self.BASE_DATA)
+        assert _get_published_xml(setup_sender).tag == "UserDeactivated"
+
+    @pytest.mark.asyncio
+    async def test_required_fields_present(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_deactivated(self.BASE_DATA)
+        xml = _get_published_xml(setup_sender)
+        for field in ["id", "email", "deactivatedAt"]:
+            assert xml.find(field) is not None, f"Required field '{field}' missing"
+
+    @pytest.mark.asyncio
+    async def test_xsd_field_order(self, setup_sender):
+        """XSD xs:sequence is strict — id, email, deactivatedAt."""
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_deactivated(self.BASE_DATA)
+        tags = [child.tag for child in _get_published_xml(setup_sender)]
+        assert tags == ["id", "email", "deactivatedAt"]
+
+    @pytest.mark.asyncio
+    async def test_field_values_match_input(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_deactivated(self.BASE_DATA)
+        xml = _get_published_xml(setup_sender)
+        assert xml.findtext("id") == "550e8400-e29b-41d4-a716-446655440000"
+        assert xml.findtext("email") == "jan@example.com"
+        assert xml.findtext("deactivatedAt") == "2026-04-15T14:00:00Z"
+
