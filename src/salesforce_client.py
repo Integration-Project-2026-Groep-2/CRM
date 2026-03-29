@@ -144,14 +144,25 @@ async def upsert_contact_by_email(
         raise
 
 
+_active_field_cache: str | None = None
+
+
 async def _resolve_contact_active_field(sf: Salesforce) -> str:
-    """Resolve which custom field is used as contact active flag in this org."""
+    """Resolve which custom field is used as contact active flag in this org.
+
+    Result is cached after first call - custom fields don't change at runtime.
+    """
+    global _active_field_cache  # noqa: PLW0603
+    if _active_field_cache is not None:
+        return _active_field_cache
+
     describe = await asyncio.to_thread(sf.Contact.describe)
     available_fields = {field["name"] for field in describe.get("fields", [])}
 
     # Primary expected name first; fallbacks cover common org naming variants.
     for candidate in ("IsActive__c", "Active__c", "Is_Active__c"):
         if candidate in available_fields:
+            _active_field_cache = candidate
             return candidate
 
     raise RuntimeError(

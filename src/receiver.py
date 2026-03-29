@@ -232,6 +232,8 @@ def _build_updated_user_data(contact: dict) -> dict:
     """Build user_data payload dict for crm.user.updated from a Salesforce record.
 
     Same structure as _build_user_data but with updatedAt instead of confirmedAt.
+    Contract 18 requires the full user profile - consumers replace their local
+    copy entirely, so all available fields must be included.
     """
     data = {
         "id": contact["CRM_ID__c"],
@@ -239,12 +241,30 @@ def _build_updated_user_data(contact: dict) -> dict:
         "firstName": contact.get("FirstName", ""),
         "lastName": contact.get("LastName", ""),
         "role": contact.get("Role__c", "VISITOR"),
-        "isActive": True,
+        "isActive": contact.get("IsActive__c", True),
         "gdprConsent": contact.get("GDPR_Consent__c", True),
         "updatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     if contact.get("Phone"):
         data["phone"] = contact["Phone"]
+    if contact.get("Company_ID__c"):
+        data["companyId"] = contact["Company_ID__c"]
+    if contact.get("Badge_Code__c"):
+        data["badgeCode"] = contact["Badge_Code__c"]
+
+    # Address fields - map all available SF fields for full profile
+    address_mapping = {
+        "MailingStreet": "street",
+        "House_Number__c": "houseNumber",
+        "MailingPostalCode": "postalCode",
+        "MailingCity": "city",
+        "MailingCountry": "country",
+    }
+    for sf_field, xml_field in address_mapping.items():
+        value = contact.get(sf_field)
+        if value:
+            data[xml_field] = value
+
     return data
 
 
