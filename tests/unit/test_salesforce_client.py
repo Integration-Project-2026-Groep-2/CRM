@@ -2,8 +2,8 @@ from unittest.mock import MagicMock
 
 import pytest
 from simple_salesforce import SalesforceError
-import src.salesforce_client as salesforce_client_module
 
+import src.salesforce_client as salesforce_client_module
 from src.salesforce_client import (
     create_account,
     create_contact,
