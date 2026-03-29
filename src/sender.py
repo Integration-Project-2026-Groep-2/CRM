@@ -332,10 +332,10 @@ async def publish_mail_requested(
     dynamic_el = etree.SubElement(root, "dynamic_data")
     etree.SubElement(dynamic_el, "guest_name").text = dynamic_data["guest_name"]
 
-    # Conditionally required for all types except bulk_event
-    if mail_type != "bulk_event":
-        etree.SubElement(dynamic_el, "session_name").text = dynamic_data["session_name"]
-        etree.SubElement(dynamic_el, "session_time").text = dynamic_data["session_time"]
+    for field in ["session_name", "session_time", "session_location"]:
+        value = dynamic_data.get(field)
+        if value:
+            etree.SubElement(dynamic_el, field).text = str(value)
 
     xml_bytes = etree.tostring(root, encoding="utf-8", xml_declaration=True)
     xml_validator.validate(xml_bytes)

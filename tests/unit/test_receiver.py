@@ -129,6 +129,7 @@ def _registration_patches(
         patch("src.receiver.get_contact_by_email", return_value=existing_contact),
         patch("src.receiver.create_contact", return_value=created_contact),
         patch("src.sender.publish_user_confirmed"),
+        patch("src.sender.publish_mail_requested"),
     )
 
 
@@ -143,8 +144,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_publishes_user_confirmed(self, sf_mock):
-        p_val, p_get, p_create, p_publish = _registration_patches()
-        with p_val, p_get, p_create, p_publish as mock_publish:
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -152,8 +153,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_id(self, sf_mock):
-        p_val, p_get, p_create, p_publish = _registration_patches()
-        with p_val, p_get, p_create, p_publish as mock_publish:
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -162,8 +163,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_email(self, sf_mock):
-        p_val, p_get, p_create, p_publish = _registration_patches()
-        with p_val, p_get, p_create, p_publish as mock_publish:
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -172,8 +173,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_names(self, sf_mock):
-        p_val, p_get, p_create, p_publish = _registration_patches()
-        with p_val, p_get, p_create, p_publish as mock_publish:
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -183,8 +184,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_role(self, sf_mock):
-        p_val, p_get, p_create, p_publish = _registration_patches()
-        with p_val, p_get, p_create, p_publish as mock_publish:
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -193,8 +194,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_gdpr_consent(self, sf_mock):
-        p_val, p_get, p_create, p_publish = _registration_patches()
-        with p_val, p_get, p_create, p_publish as mock_publish:
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -203,8 +204,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_confirmed_at(self, sf_mock):
-        p_val, p_get, p_create, p_publish = _registration_patches()
-        with p_val, p_get, p_create, p_publish as mock_publish:
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -213,8 +214,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_is_active(self, sf_mock):
-        p_val, p_get, p_create, p_publish = _registration_patches()
-        with p_val, p_get, p_create, p_publish as mock_publish:
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -223,8 +224,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_acks_message(self, sf_mock):
-        p_val, p_get, p_create, p_publish = _registration_patches()
-        with p_val, p_get, p_create, p_publish:
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish, p_mail:
             from src.receiver import handle_registration
 
             msg = _make_message(VALID_REG_XML)
@@ -246,6 +247,7 @@ class TestHandleRegistration:
             patch("src.receiver.get_contact_by_email", return_value=None),
             patch("src.receiver.create_contact", return_value=CONTACT_RETURN) as mock_create,
             patch("src.sender.publish_user_confirmed"),
+            patch("src.sender.publish_mail_requested"),
         ):
             from src.receiver import handle_registration
 
@@ -270,6 +272,7 @@ class TestHandleRegistration:
             patch("src.receiver.get_contact_by_email", return_value={"Id": "003xxx", "Registration_ID__c": "OTHER"}),
             patch("src.receiver.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_mail_requested") as mock_mail_publish,
             caplog.at_level(logging.WARNING),
         ):
             from src.receiver import handle_registration
@@ -290,6 +293,7 @@ class TestHandleRegistration:
             patch("src.receiver.get_contact_by_email", return_value=None),
             patch("src.receiver.create_contact", side_effect=Exception("SF Create Down")),
             patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_mail_requested"),
         ):
             from src.receiver import handle_registration
 
@@ -334,6 +338,7 @@ class TestHandleRegistration:
             }),
             patch("src.receiver.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_mail_requested") as mock_mail_publish,
         ):
             from src.receiver import handle_registration
 
@@ -342,6 +347,7 @@ class TestHandleRegistration:
 
             mock_create.assert_not_called()
             mock_publish.assert_called_once()
+            mock_mail_publish.assert_called_once()
             msg.ack.assert_called_once()
 
     # ------------------------------------------------------------------
@@ -361,6 +367,7 @@ class TestHandleRegistration:
             patch("src.receiver.get_contact_by_email", return_value=None),
             patch("src.receiver.create_contact", return_value=CONTACT_RETURN),
             patch("src.sender.publish_user_confirmed"),
+            patch("src.sender.publish_mail_requested"),
             caplog.at_level(logging.WARNING),
         ):
             from src.receiver import handle_registration
@@ -384,6 +391,7 @@ class TestHandleRegistration:
             patch("src.receiver.get_contact_by_email", return_value=None),
             patch("src.receiver.create_contact", return_value=contact_no_phone),
             patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_mail_requested"),
         ):
             from src.receiver import handle_registration
 
@@ -409,6 +417,7 @@ class TestHandleRegistration:
             }),
             patch("src.receiver.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed", side_effect=Exception("Publish failed")),
+            patch("src.sender.publish_mail_requested"),
         ):
             from src.receiver import handle_registration
 
