@@ -272,7 +272,7 @@ class TestHandleRegistration:
             patch("src.receiver.get_contact_by_email", return_value={"Id": "003xxx", "Registration_ID__c": "OTHER"}),
             patch("src.receiver.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
-            patch("src.sender.publish_mail_requested") as mock_mail_publish,
+            patch("src.sender.publish_mail_requested"),
             caplog.at_level(logging.WARNING),
         ):
             from src.receiver import handle_registration
