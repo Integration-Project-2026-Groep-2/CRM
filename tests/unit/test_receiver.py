@@ -515,6 +515,41 @@ class TestHandleRegistrationUpdated:
             assert "updatedAt" in user_data
 
     @pytest.mark.asyncio
+    async def test_updated_publishes_full_profile_fields_when_available(self, sf_mock):
+        """Contract 18: publish full profile fields when Salesforce record contains them."""
+        parsed_xml = etree.fromstring(VALID_UPDATE_XML)
+        contact_with_optional_fields = {
+            **UPDATED_CONTACT_RETURN,
+            "IsActive__c": False,
+            "Company_ID__c": "acc-001",
+            "Badge_Code__c": "B-42",
+            "MailingStreet": "Main Street",
+            "House_Number__c": "10A",
+            "MailingPostalCode": "2000",
+            "MailingCity": "Antwerp",
+            "MailingCountry": "Belgium",
+        }
+
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.upsert_contact_by_email", return_value=contact_with_optional_fields),
+            patch("src.sender.publish_user_updated") as mock_publish,
+        ):
+            from src.receiver import handle_registration_updated
+
+            await handle_registration_updated(_make_message(VALID_UPDATE_XML), sf_mock)
+
+            user_data = mock_publish.call_args[0][0]
+            assert user_data["isActive"] is False
+            assert user_data["companyId"] == "acc-001"
+            assert user_data["badgeCode"] == "B-42"
+            assert user_data["street"] == "Main Street"
+            assert user_data["houseNumber"] == "10A"
+            assert user_data["postalCode"] == "2000"
+            assert user_data["city"] == "Antwerp"
+            assert user_data["country"] == "Belgium"
+
+    @pytest.mark.asyncio
     async def test_updated_acks_message(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         with (

@@ -2,6 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from simple_salesforce import SalesforceError
+import src.salesforce_client as salesforce_client_module
 
 from src.salesforce_client import (
     create_account,
@@ -16,6 +17,7 @@ from src.salesforce_client import (
 
 @pytest.fixture
 def sf():
+    salesforce_client_module._active_field_cache = None
     sf = MagicMock()
     sf.Contact = MagicMock()
     sf.Account = MagicMock()
@@ -207,6 +209,51 @@ async def test_deactivate_contact_fallback_active_field(sf):
 
     sf.Contact.update.assert_called_once_with("003000000000021", {"Active__c": False})
     assert result["IsActive__c"] is False
+
+
+@pytest.mark.asyncio
+async def test_deactivate_contact_caches_active_field(sf):
+    """describe() should run once; subsequent deactivations use cached field."""
+    salesforce_client_module._active_field_cache = None
+    sf.Contact.describe.return_value = {
+        "fields": [{"name": "Active__c"}]
+    }
+
+    sf.query.side_effect = [
+        {"totalSize": 1, "records": [{"Id": "003000000000021"}]},
+        {"totalSize": 1, "records": [{"Id": "003000000000022"}]},
+    ]
+    sf.Contact.get.side_effect = [
+        {
+            "Id": "003000000000021",
+            "Email": "cancel2@example.com",
+            "CRM_ID__c": "uuid-deact-2",
+            "Active__c": False,
+        },
+        {
+            "Id": "003000000000021",
+            "Email": "cancel2@example.com",
+            "CRM_ID__c": "uuid-deact-2",
+            "Active__c": False,
+        },
+        {
+            "Id": "003000000000022",
+            "Email": "cancel3@example.com",
+            "CRM_ID__c": "uuid-deact-3",
+            "Active__c": False,
+        },
+        {
+            "Id": "003000000000022",
+            "Email": "cancel3@example.com",
+            "CRM_ID__c": "uuid-deact-3",
+            "Active__c": False,
+        },
+    ]
+
+    await deactivate_contact(sf, "cancel2@example.com")
+    await deactivate_contact(sf, "cancel3@example.com")
+
+    sf.Contact.describe.assert_called_once()
 
 
 @pytest.mark.asyncio
