@@ -7,6 +7,7 @@ publish calls elsewhere in the codebase.
 Implemented contracts:
   Contract 13 — crm.user.confirmed           (durable: true)
   Contract 18 — crm.user.updated             (durable: true)
+    Contract 22 — crm.user.deactivated         (durable: true)
   Contract 14 — crm.company.confirmed        (durable: true)
   Contract 5b  — crm.company.responded       (durable: false)
   Contract 10b — crm.person.lookup.responded (durable: false)
@@ -366,4 +367,4 @@ async def publish_user_deactivated(user_data: dict[str, Any]) -> None:
 
     xml_bytes = etree.tostring(root, encoding="utf-8", xml_declaration=True)
     xml_validator.validate(xml_bytes)
-    await _publish("crm.user.deactivated", xml_bytes, persistent=True)
+    await _publish("crm.user.deactivated", xml_bytes, persistent=True)
