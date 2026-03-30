@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from lxml import etree
+import uuid
 
 VALID_WARNING_XML = b"""<?xml version='1.0' encoding='utf-8'?>
 <Warning>
@@ -1053,3 +1054,24 @@ class TestHandlePersonLookup:
 
         msg.ack.assert_called_once()
         msg.nack.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_contact_found_id_is_valid_uuid4(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_LOOKUP_XML)
+        contact = {
+            "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440000",
+            "Email": "jan@example.com",
+            "AccountId": None,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_by_email", return_value=contact),
+            patch("src.sender.publish_person_lookup_responded") as mock_pub,
+        ):
+            from src.receiver import handle_person_lookup
+            await handle_person_lookup(_make_message(VALID_LOOKUP_XML), sf=sf_mock)
+
+        person = mock_pub.call_args[0][1]
+        id_value = person["id"]
+        parsed = uuid.UUID(id_value, version=4)
+        assert str(parsed) == id_value  # or parsed.version == 4
