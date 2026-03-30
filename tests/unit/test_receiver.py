@@ -25,6 +25,7 @@ def _make_message(body: bytes) -> MagicMock:
     msg.body = body
     msg.ack = AsyncMock()
     msg.reject = AsyncMock()
+    msg.nack = AsyncMock()  
     return msg
 
 
@@ -745,3 +746,310 @@ class TestHandleRegistrationUpdated:
 
             msg.reject.assert_called_once_with(requeue=True)
 
+# ==========================================================================
+# Contract 10a/10b: kassa.person.lookup.requested
+# ==========================================================================
+
+VALID_LOOKUP_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<PersonLookup>
+    <requestId>req-001</requestId>
+    <email>jan@example.com</email>
+</PersonLookup>"""
+
+CONTACT_LOOKUP_RETURN = {
+    "CRM_ID__c": "abc-123e-4567-e89b-12d3",
+    "Email": "jan@example.com",
+    "AccountId": None,
+}
+
+ACCOUNT_RETURN = {
+    "Name": "Acme NV",
+    "CRM_ID__c": "company-uuid-456",
+}
+
+
+class TestHandlePersonLookup:
+    @pytest.fixture
+    def sf_mock(self):
+        return AsyncMock()
+
+    # ------------------------------------------------------------------
+    # Invalid XML
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_invalid_xml_rejected(self, sf_mock, caplog):
+        """Ongeldige XML wordt gerejected zonder requeue."""
+        with (
+            patch("src.xml_validator.validate", side_effect=ValueError("bad xml")),
+            caplog.at_level(logging.ERROR),
+        ):
+            from src.receiver import handle_person_lookup
+
+            msg = _make_message(INVALID_XML)
+            await handle_person_lookup(msg, sf=sf_mock)
+
+        msg.reject.assert_called_once_with(requeue=False)
+        msg.ack.assert_not_called()
+        assert any(r.levelno == logging.ERROR for r in caplog.records)
+
+    # ------------------------------------------------------------------
+    # Contact Not Found
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_contact_not_found_responds_found_false(self, sf_mock):
+        """Contact not found → found=False, linkedToCompany=False."""
+        parsed_xml = etree.fromstring(VALID_LOOKUP_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_by_email", return_value=None),
+            patch("src.sender.publish_person_lookup_responded") as mock_pub,
+        ):
+            from src.receiver import handle_person_lookup
+
+            await handle_person_lookup(_make_message(VALID_LOOKUP_XML), sf=sf_mock)
+
+        mock_pub.assert_called_once_with(
+            "req-001",
+            {"found": False, "linkedToCompany": False},
+        )
+
+    @pytest.mark.asyncio
+    async def test_contact_not_found_acks_message(self, sf_mock):
+        """Contact not found → message is acked."""
+        parsed_xml = etree.fromstring(VALID_LOOKUP_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_by_email", return_value=None),
+            patch("src.sender.publish_person_lookup_responded"),
+        ):
+            from src.receiver import handle_person_lookup
+
+            msg = _make_message(VALID_LOOKUP_XML)
+            await handle_person_lookup(msg, sf=sf_mock)
+
+        msg.ack.assert_called_once()
+
+    # ------------------------------------------------------------------
+    # Contact found, without Company
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_contact_found_no_company_found_true(self, sf_mock):
+        """Contact found without AccountId → found=True."""
+        parsed_xml = etree.fromstring(VALID_LOOKUP_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_by_email", return_value=CONTACT_LOOKUP_RETURN),
+            patch("src.sender.publish_person_lookup_responded") as mock_pub,
+        ):
+            from src.receiver import handle_person_lookup
+
+            await handle_person_lookup(_make_message(VALID_LOOKUP_XML), sf=sf_mock)
+
+        contact_data = mock_pub.call_args[0][1]
+        assert contact_data["found"] is True
+
+    @pytest.mark.asyncio
+    async def test_contact_found_no_company_linked_false(self, sf_mock):
+        """Contact gevonden zonder AccountId → linkedToCompany=False."""
+        parsed_xml = etree.fromstring(VALID_LOOKUP_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_by_email", return_value=CONTACT_LOOKUP_RETURN),
+            patch("src.sender.publish_person_lookup_responded") as mock_pub,
+        ):
+            from src.receiver import handle_person_lookup
+
+            await handle_person_lookup(_make_message(VALID_LOOKUP_XML), sf=sf_mock)
+
+        contact_data = mock_pub.call_args[0][1]
+        assert contact_data["linkedToCompany"] is False
+
+    @pytest.mark.asyncio
+    async def test_contact_found_no_company_id_present(self, sf_mock):
+        """Contact gevonden zonder AccountId → CRM id aanwezig in response."""
+        parsed_xml = etree.fromstring(VALID_LOOKUP_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_by_email", return_value=CONTACT_LOOKUP_RETURN),
+            patch("src.sender.publish_person_lookup_responded") as mock_pub,
+        ):
+            from src.receiver import handle_person_lookup
+
+            await handle_person_lookup(_make_message(VALID_LOOKUP_XML), sf=sf_mock)
+
+        contact_data = mock_pub.call_args[0][1]
+        assert contact_data["id"] == "abc-123e-4567-e89b-12d3"
+
+    @pytest.mark.asyncio
+    async def test_contact_found_no_company_name_absent(self, sf_mock):
+        """Contact found without AccountId → companyName not present in response."""
+        parsed_xml = etree.fromstring(VALID_LOOKUP_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_by_email", return_value=CONTACT_LOOKUP_RETURN),
+            patch("src.sender.publish_person_lookup_responded") as mock_pub,
+        ):
+            from src.receiver import handle_person_lookup
+
+            await handle_person_lookup(_make_message(VALID_LOOKUP_XML), sf=sf_mock)
+
+        contact_data = mock_pub.call_args[0][1]
+        assert "companyName" not in contact_data
+
+    @pytest.mark.asyncio
+    async def test_contact_found_no_company_acks_message(self, sf_mock):
+        """Contact found without AccountId → message is acked."""
+        parsed_xml = etree.fromstring(VALID_LOOKUP_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_by_email", return_value=CONTACT_LOOKUP_RETURN),
+            patch("src.sender.publish_person_lookup_responded"),
+        ):
+            from src.receiver import handle_person_lookup
+
+            msg = _make_message(VALID_LOOKUP_XML)
+            await handle_person_lookup(msg, sf=sf_mock)
+
+        msg.ack.assert_called_once()
+
+    # ------------------------------------------------------------------
+    # Contact found, with Company
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_contact_found_with_company_linked_true(self, sf_mock):
+        """Contact with AccountId → linkedToCompany=True."""
+        parsed_xml = etree.fromstring(VALID_LOOKUP_XML)
+        contact = {**CONTACT_LOOKUP_RETURN, "AccountId": "sf-acc-id"}
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_by_email", return_value=contact),
+            patch("src.sender.publish_person_lookup_responded") as mock_pub,
+            patch("asyncio.to_thread", new=AsyncMock(return_value=ACCOUNT_RETURN)),
+        ):
+            from src.receiver import handle_person_lookup
+
+            await handle_person_lookup(_make_message(VALID_LOOKUP_XML), sf=sf_mock)
+
+        contact_data = mock_pub.call_args[0][1]
+        assert contact_data["linkedToCompany"] is True
+
+    @pytest.mark.asyncio
+    async def test_contact_found_with_company_name_present(self, sf_mock):
+        """Contact with AccountId → companyName present in response."""
+        parsed_xml = etree.fromstring(VALID_LOOKUP_XML)
+        contact = {**CONTACT_LOOKUP_RETURN, "AccountId": "sf-acc-id"}
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_by_email", return_value=contact),
+            patch("src.sender.publish_person_lookup_responded") as mock_pub,
+            patch("asyncio.to_thread", new=AsyncMock(return_value=ACCOUNT_RETURN)),
+        ):
+            from src.receiver import handle_person_lookup
+
+            await handle_person_lookup(_make_message(VALID_LOOKUP_XML), sf=sf_mock)
+
+        contact_data = mock_pub.call_args[0][1]
+        assert contact_data["companyName"] == "Acme NV"
+
+    @pytest.mark.asyncio
+    async def test_contact_found_with_company_id_present(self, sf_mock):
+        """Contact with AccountId → companyId present in response."""
+        parsed_xml = etree.fromstring(VALID_LOOKUP_XML)
+        contact = {**CONTACT_LOOKUP_RETURN, "AccountId": "sf-acc-id"}
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_by_email", return_value=contact),
+            patch("src.sender.publish_person_lookup_responded") as mock_pub,
+            patch("asyncio.to_thread", new=AsyncMock(return_value=ACCOUNT_RETURN)),
+        ):
+            from src.receiver import handle_person_lookup
+
+            await handle_person_lookup(_make_message(VALID_LOOKUP_XML), sf=sf_mock)
+
+        contact_data = mock_pub.call_args[0][1]
+        assert contact_data["companyId"] == "company-uuid-456"
+
+    @pytest.mark.asyncio
+    async def test_contact_found_with_company_acks_message(self, sf_mock):
+        """Contact with AccountId → message is acked."""
+        parsed_xml = etree.fromstring(VALID_LOOKUP_XML)
+        contact = {**CONTACT_LOOKUP_RETURN, "AccountId": "sf-acc-id"}
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_by_email", return_value=contact),
+            patch("src.sender.publish_person_lookup_responded"),
+            patch("asyncio.to_thread", new=AsyncMock(return_value=ACCOUNT_RETURN)),
+        ):
+            from src.receiver import handle_person_lookup
+
+            msg = _make_message(VALID_LOOKUP_XML)
+            await handle_person_lookup(msg, sf=sf_mock)
+
+        msg.ack.assert_called_once()
+
+    # ------------------------------------------------------------------
+    # Sad paths
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_salesforce_unavailable_nacks_with_requeue(self, sf_mock):
+        """SF unreachable via contact lookup → nack with requeue=True."""
+        parsed_xml = etree.fromstring(VALID_LOOKUP_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch(
+                "src.receiver.get_contact_by_email",
+                side_effect=ConnectionError("SF down"),
+            ),
+            patch("src.sender.publish_person_lookup_responded") as mock_pub,
+        ):
+            from src.receiver import handle_person_lookup
+
+            msg = _make_message(VALID_LOOKUP_XML)
+            await handle_person_lookup(msg, sf=sf_mock)
+
+        msg.nack.assert_called_once_with(requeue=True)
+        mock_pub.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_account_fetch_fails_responds_linked_false(self, sf_mock):
+        """Account fetch failed → linkedToCompany=False, response send anyway."""
+        parsed_xml = etree.fromstring(VALID_LOOKUP_XML)
+        contact = {**CONTACT_LOOKUP_RETURN, "AccountId": "sf-acc-id"}
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_by_email", return_value=contact),
+            patch("src.sender.publish_person_lookup_responded") as mock_pub,
+            patch("asyncio.to_thread", new=AsyncMock(side_effect=ConnectionError("timeout"))),
+        ):
+            from src.receiver import handle_person_lookup
+
+            msg = _make_message(VALID_LOOKUP_XML)
+            await handle_person_lookup(msg, sf=sf_mock)
+
+        contact_data = mock_pub.call_args[0][1]
+        assert contact_data["linkedToCompany"] is False
+        msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_account_fetch_fails_no_crash(self, sf_mock):
+        """Account fetch failed → no crash, message is acked."""
+        parsed_xml = etree.fromstring(VALID_LOOKUP_XML)
+        contact = {**CONTACT_LOOKUP_RETURN, "AccountId": "sf-acc-id"}
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_by_email", return_value=contact),
+            patch("src.sender.publish_person_lookup_responded"),
+            patch("asyncio.to_thread", new=AsyncMock(side_effect=ConnectionError("timeout"))),
+        ):
+            from src.receiver import handle_person_lookup
+
+            msg = _make_message(VALID_LOOKUP_XML)
+            await handle_person_lookup(msg, sf=sf_mock)
+
+        msg.ack.assert_called_once()
+        msg.nack.assert_not_called()
