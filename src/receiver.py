@@ -126,6 +126,7 @@ async def handle_registration(message: aio_pika.IncomingMessage) -> None:
 
     Queue: frontend.registration.created | durable: true | US-02, 03, 04, 05, 19
 
+
     Flow:
     1. Validate XML against XSD (<Registration>)
     2. Check idempotency: skip if registrationId already processed
@@ -191,6 +192,7 @@ async def handle_registration(message: aio_pika.IncomingMessage) -> None:
                 email, exc,
             )
             await message.reject(requeue=True)
+
             return
 
         if existing_contact:

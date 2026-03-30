@@ -345,8 +345,7 @@ class TestPublishMailRequested:
 
     @pytest.mark.asyncio
     async def test_publishes_to_correct_queue(self, setup_sender):
-        dynamic = {"guest_name": "Jan", "session_name": "Keynote",
-                   "session_time": "2025-06-01T09:00:00Z"}
+        dynamic = {"guest_name": "Jan"}
         with patch("src.xml_validator.validate", return_value=MagicMock()):
             await sender.publish_mail_requested(
                 "registration_confirmation", self.RECIPIENT, dynamic)
@@ -355,8 +354,7 @@ class TestPublishMailRequested:
     @pytest.mark.asyncio
     async def test_message_is_persistent(self, setup_sender):
         from aio_pika import DeliveryMode
-        dynamic = {"guest_name": "Jan", "session_name": "K",
-                   "session_time": "2025-06-01T09:00:00Z"}
+        dynamic = {"guest_name": "Jan"}
         with patch("src.xml_validator.validate", return_value=MagicMock()):
             await sender.publish_mail_requested(
                 "registration_confirmation", self.RECIPIENT, dynamic)
@@ -364,8 +362,7 @@ class TestPublishMailRequested:
 
     @pytest.mark.asyncio
     async def test_header_source_is_crm(self, setup_sender):
-        dynamic = {"guest_name": "Jan", "session_name": "K",
-                   "session_time": "2025-06-01T09:00:00Z"}
+        dynamic = {"guest_name": "Jan"}
         with patch("src.xml_validator.validate") as v:
             v.side_effect = lambda b: etree.fromstring(b)
             await sender.publish_mail_requested(
@@ -385,18 +382,35 @@ class TestPublishMailRequested:
     @pytest.mark.asyncio
     async def test_session_change_has_session_fields(self, setup_sender):
         dynamic = {"guest_name": "Jan", "session_name": "Keynote",
-                   "session_time": "2025-06-01T09:00:00Z"}
+                   "session_time": "2025-06-01T09:00:00Z", "session_location": "Room 1"}
         with patch("src.xml_validator.validate") as v:
             v.side_effect = lambda b: etree.fromstring(b)
             await sender.publish_mail_requested("session_change", self.RECIPIENT, dynamic)
         xml = _get_published_xml(setup_sender)
         assert xml.findtext("dynamic_data/session_name") == "Keynote"
-        assert xml.findtext("dynamic_data/session_time") is not None
+        assert xml.findtext("dynamic_data/session_time") == "2025-06-01T09:00:00Z"
+        assert xml.findtext("dynamic_data/session_location") == "Room 1"
+
+    @pytest.mark.asyncio
+    async def test_optional_session_fields_include_empty_string_but_skip_none(self, setup_sender):
+        dynamic = {
+            "guest_name": "Jan",
+            "session_name": "",
+            "session_time": None,
+            "session_location": "Room 1",
+        }
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_mail_requested("session_change", self.RECIPIENT, dynamic)
+        xml = _get_published_xml(setup_sender)
+        assert xml.find("dynamic_data/session_name") is not None
+        assert xml.findtext("dynamic_data/session_name") == ""
+        assert xml.find("dynamic_data/session_time") is None
+        assert xml.findtext("dynamic_data/session_location") == "Room 1"
 
     @pytest.mark.asyncio
     async def test_recipient_fields_correct(self, setup_sender):
-        dynamic = {"guest_name": "Jan", "session_name": "K",
-                   "session_time": "2025-06-01T09:00:00Z"}
+        dynamic = {"guest_name": "Jan"}
         with patch("src.xml_validator.validate") as v:
             v.side_effect = lambda b: etree.fromstring(b)
             await sender.publish_mail_requested(
