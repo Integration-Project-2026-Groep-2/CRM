@@ -392,6 +392,23 @@ class TestPublishMailRequested:
         assert xml.findtext("dynamic_data/session_location") == "Room 1"
 
     @pytest.mark.asyncio
+    async def test_optional_session_fields_include_empty_string_but_skip_none(self, setup_sender):
+        dynamic = {
+            "guest_name": "Jan",
+            "session_name": "",
+            "session_time": None,
+            "session_location": "Room 1",
+        }
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_mail_requested("session_change", self.RECIPIENT, dynamic)
+        xml = _get_published_xml(setup_sender)
+        assert xml.find("dynamic_data/session_name") is not None
+        assert xml.findtext("dynamic_data/session_name") == ""
+        assert xml.find("dynamic_data/session_time") is None
+        assert xml.findtext("dynamic_data/session_location") == "Room 1"
+
+    @pytest.mark.asyncio
     async def test_recipient_fields_correct(self, setup_sender):
         dynamic = {"guest_name": "Jan"}
         with patch("src.xml_validator.validate") as v:

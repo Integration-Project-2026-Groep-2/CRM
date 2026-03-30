@@ -309,8 +309,11 @@ async def publish_mail_requested(
                       session_reminder | bulk_event
         recipient:    dict with keys: email, name
         dynamic_data: dict with required key: guest_name
-                      Conditionally required (all mailTypes except bulk_event):
-                        session_name, session_time
+                                            Optional keys (included in XML when not None):
+                                                session_name, session_time, session_location
+
+                                            For session_change/session_reminder, callers should provide
+                                            session fields according to business rules (XSD allows omission).
 
     The <header> is generated automatically with source=CRM and current UTC timestamp.
     """
@@ -334,7 +337,7 @@ async def publish_mail_requested(
 
     for field in ["session_name", "session_time", "session_location"]:
         value = dynamic_data.get(field)
-        if value:
+        if value is not None:
             etree.SubElement(dynamic_el, field).text = str(value)
 
     xml_bytes = etree.tostring(root, encoding="utf-8", xml_declaration=True)

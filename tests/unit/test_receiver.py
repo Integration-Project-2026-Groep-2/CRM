@@ -152,6 +152,20 @@ class TestHandleRegistration:
             mock_publish.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_registration_publishes_mail_requested_with_correct_args(self, sf_mock):
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish, p_mail as mock_mail_publish:
+            from src.receiver import handle_registration
+
+            await handle_registration(_make_message(VALID_REG_XML), sf_mock)
+
+            mock_mail_publish.assert_called_once_with(
+                "registration_confirmation",
+                {"email": "john.doe@example.com", "name": "John Doe"},
+                {"guest_name": "John Doe"},
+            )
+
+    @pytest.mark.asyncio
     async def test_registration_user_data_id(self, sf_mock):
         p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
         with p_val, p_get, p_create, p_publish as mock_publish, p_mail:

@@ -140,6 +140,11 @@ def _build_user_data(contact: dict) -> dict:
     return data
 
 
+def _build_full_name(first_name: str | None, last_name: str | None) -> str:
+    """Build a display name from first/last name, skipping missing parts."""
+    return f"{first_name or ''} {last_name or ''}".strip()
+
+
 async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
     """Contract 1 — Frontend -> CRM: new registration.
 
@@ -190,9 +195,10 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
                 await sender.publish_user_confirmed(_build_user_data(existing_contact))
                 
                 # C6: Publish mail request
-                first_name = existing_contact.get("FirstName", "")
-                last_name = existing_contact.get("LastName", "")
-                full_name = f"{first_name} {last_name}".strip()
+                full_name = _build_full_name(
+                    existing_contact.get("FirstName"),
+                    existing_contact.get("LastName"),
+                )
                 
                 recipient = {"email": email, "name": full_name}
                 dynamic_data = {"guest_name": full_name}
@@ -230,9 +236,10 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
         logger.info("Published crm.user.confirmed for %s", email)
 
         # Contract 6 (R1 scope) — publish registration_confirmation
-        first_name = contact_data.get("FirstName", "")
-        last_name = contact_data.get("LastName", "")
-        full_name = f"{first_name} {last_name}".strip()
+        full_name = _build_full_name(
+            contact_data.get("FirstName"),
+            contact_data.get("LastName"),
+        )
         
         recipient = {"email": email, "name": full_name}
         dynamic_data = {"guest_name": full_name}
