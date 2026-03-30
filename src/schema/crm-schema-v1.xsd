@@ -280,7 +280,7 @@
 
   <!-- ============================================================
        CONTRACT 7 — CRM → Controlroom: heartbeat
-       Queue: crm.heartbeat | durable: false
+       Exchange: heartbeat.direct | routing key: routing.heartbeat | durable: true
   ============================================================ -->
   <xs:element name="Heartbeat">
     <xs:complexType>
