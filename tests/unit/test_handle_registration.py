@@ -5,7 +5,7 @@ Contract 3: frontend.company.created       (US-40, US-20)
 """
 
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from lxml import etree
@@ -94,7 +94,7 @@ class TestHandleRegistration:
     @pytest.mark.asyncio
     async def test_invalid_xml_is_rejected(self):
         with patch("src.xml_validator.validate", side_effect=ValueError("bad xml")):
-            from receiver import handle_registration
+            from src.receiver import handle_registration
             msg = _make_message(INVALID_XML)
             await handle_registration(msg)
         msg.reject.assert_called_once_with(requeue=False)
@@ -102,7 +102,7 @@ class TestHandleRegistration:
     @pytest.mark.asyncio
     async def test_invalid_xml_does_not_crash(self):
         with patch("src.xml_validator.validate", side_effect=ValueError("bad xml")):
-            from receiver import handle_registration
+            from src.receiver import handle_registration
             await handle_registration(_make_message(INVALID_XML))
         # Reaching here means no crash
 
@@ -110,7 +110,7 @@ class TestHandleRegistration:
     async def test_invalid_xml_logged_as_error(self, caplog):
         with patch("src.xml_validator.validate", side_effect=ValueError("bad xml")), \
              caplog.at_level(logging.ERROR):
-            from receiver import handle_registration
+            from src.receiver import handle_registration
             await handle_registration(_make_message(INVALID_XML))
         assert any(r.levelno == logging.ERROR for r in caplog.records)
 
@@ -127,7 +127,7 @@ class TestHandleRegistration:
              patch("src.sender.publish_user_confirmed", new=AsyncMock()) as pub_user, \
              patch("src.sender.publish_mail_requested", new=AsyncMock()) as pub_mail, \
              caplog.at_level(logging.INFO):
-            from receiver import handle_registration
+            from src.receiver import handle_registration
             await handle_registration(_make_message(VALID_REGISTRATION_XML))
 
         sf.assert_called_once_with("reg-001")
@@ -150,7 +150,7 @@ class TestHandleRegistration:
              patch("src.salesforce.create_contact", new=AsyncMock()) as sf_create, \
              patch("src.sender.publish_user_confirmed", new=AsyncMock()) as pub_user, \
              caplog.at_level(logging.WARNING):
-            from receiver import handle_registration
+            from src.receiver import handle_registration
             msg = _make_message(VALID_REGISTRATION_XML)
             await handle_registration(msg)
 
@@ -168,7 +168,7 @@ class TestHandleRegistration:
         with patch("src.xml_validator.validate", return_value=parsed), \
              patch("src.salesforce.registration_exists",
                    new=AsyncMock(side_effect=SalesforceUnavailableError("down"))):
-            from receiver import handle_registration
+            from src.receiver import handle_registration
             msg = _make_message(VALID_REGISTRATION_XML)
             await handle_registration(msg)
         msg.reject.assert_called_once_with(requeue=True)
@@ -181,7 +181,7 @@ class TestHandleRegistration:
              patch("src.salesforce.registration_exists", new=AsyncMock(return_value=False)), \
              patch("src.salesforce.find_contact_by_email",
                    new=AsyncMock(side_effect=SalesforceUnavailableError("down"))):
-            from receiver import handle_registration
+            from src.receiver import handle_registration
             msg = _make_message(VALID_REGISTRATION_XML)
             await handle_registration(msg)
         msg.reject.assert_called_once_with(requeue=True)
@@ -195,7 +195,7 @@ class TestHandleRegistration:
              patch("src.salesforce.find_contact_by_email", new=AsyncMock(return_value=None)), \
              patch("src.salesforce.create_contact",
                    new=AsyncMock(side_effect=SalesforceUnavailableError("down"))):
-            from receiver import handle_registration
+            from src.receiver import handle_registration
             msg = _make_message(VALID_REGISTRATION_XML)
             await handle_registration(msg)
         msg.reject.assert_called_once_with(requeue=True)
@@ -211,7 +211,7 @@ class TestHandleRegistration:
              patch("src.salesforce.create_contact", new=AsyncMock(return_value="sf-id-001")) as sf_create, \
              patch("src.sender.publish_user_confirmed", new=AsyncMock()), \
              patch("src.sender.publish_mail_requested", new=AsyncMock()):
-            from receiver import handle_registration
+            from src.receiver import handle_registration
             await handle_registration(_make_message(VALID_REGISTRATION_XML))
 
         sf_create.assert_called_once()
@@ -232,7 +232,7 @@ class TestHandleRegistration:
              patch("src.salesforce.create_contact", new=AsyncMock(return_value="sf-id")), \
              patch("src.sender.publish_user_confirmed", new=AsyncMock()) as pub_user, \
              patch("src.sender.publish_mail_requested", new=AsyncMock()):
-            from receiver import handle_registration
+            from src.receiver import handle_registration
             await handle_registration(_make_message(VALID_REGISTRATION_XML))
 
         pub_user.assert_called_once()
@@ -254,7 +254,7 @@ class TestHandleRegistration:
              patch("src.salesforce.create_contact", new=AsyncMock(return_value="sf-id")), \
              patch("src.sender.publish_user_confirmed", new=AsyncMock()), \
              patch("src.sender.publish_mail_requested", new=AsyncMock()) as pub_mail:
-            from receiver import handle_registration
+            from src.receiver import handle_registration
             await handle_registration(_make_message(VALID_REGISTRATION_XML))
 
         pub_mail.assert_called_once()
@@ -274,7 +274,7 @@ class TestHandleRegistration:
              patch("src.salesforce.create_contact", new=AsyncMock(return_value="sf-id")), \
              patch("src.sender.publish_user_confirmed", new=AsyncMock()) as pub_user, \
              patch("src.sender.publish_mail_requested", new=AsyncMock()):
-            from receiver import handle_registration
+            from src.receiver import handle_registration
             await handle_registration(_make_message(VALID_REGISTRATION_XML))
 
         user_data = pub_user.call_args[0][0]
@@ -291,7 +291,7 @@ class TestHandleRegistration:
              patch("src.salesforce.create_contact", new=AsyncMock(return_value="sf-id")) as sf_create, \
              patch("src.sender.publish_user_confirmed", new=AsyncMock()), \
              patch("src.sender.publish_mail_requested", new=AsyncMock()):
-            from receiver import handle_registration
+            from src.receiver import handle_registration
             await handle_registration(_make_message(VALID_REGISTRATION_WITH_PHONE_XML))
 
         payload = sf_create.call_args[0][0]
@@ -306,7 +306,7 @@ class TestHandleRegistration:
              patch("src.salesforce.create_contact", new=AsyncMock(return_value="sf-id")) as sf_create, \
              patch("src.sender.publish_user_confirmed", new=AsyncMock()), \
              patch("src.sender.publish_mail_requested", new=AsyncMock()):
-            from receiver import handle_registration
+            from src.receiver import handle_registration
             await handle_registration(_make_message(VALID_COMPANY_CONTACT_XML))
 
         payload = sf_create.call_args[0][0]
@@ -325,7 +325,7 @@ class TestHandleCompanyCreated:
     @pytest.mark.asyncio
     async def test_invalid_xml_is_rejected(self):
         with patch("src.xml_validator.validate", side_effect=ValueError("bad xml")):
-            from receiver import handle_company_created
+            from src.receiver import handle_company_created
             msg = _make_message(INVALID_XML)
             await handle_company_created(msg)
         msg.reject.assert_called_once_with(requeue=False)
@@ -333,7 +333,7 @@ class TestHandleCompanyCreated:
     @pytest.mark.asyncio
     async def test_invalid_xml_does_not_crash(self):
         with patch("src.xml_validator.validate", side_effect=ValueError("bad xml")):
-            from receiver import handle_company_created
+            from src.receiver import handle_company_created
             await handle_company_created(_make_message(INVALID_XML))
 
     # ── Idempotency ───────────────────────────────────────────────────────
@@ -347,7 +347,7 @@ class TestHandleCompanyCreated:
              patch("src.salesforce.create_account", new=AsyncMock()) as sf_create, \
              patch("src.sender.publish_company_confirmed", new=AsyncMock()) as pub, \
              caplog.at_level(logging.INFO):
-            from receiver import handle_company_created
+            from src.receiver import handle_company_created
             await handle_company_created(_make_message(VALID_COMPANY_XML))
 
         sf_create.assert_not_called()
@@ -363,7 +363,7 @@ class TestHandleCompanyCreated:
         with patch("src.xml_validator.validate", return_value=parsed), \
              patch("src.salesforce.find_account_by_vat",
                    new=AsyncMock(side_effect=SalesforceUnavailableError("down"))):
-            from receiver import handle_company_created
+            from src.receiver import handle_company_created
             msg = _make_message(VALID_COMPANY_XML)
             await handle_company_created(msg)
         msg.reject.assert_called_once_with(requeue=True)
@@ -376,7 +376,7 @@ class TestHandleCompanyCreated:
              patch("src.salesforce.find_account_by_vat", new=AsyncMock(return_value=None)), \
              patch("src.salesforce.create_account",
                    new=AsyncMock(side_effect=SalesforceUnavailableError("down"))):
-            from receiver import handle_company_created
+            from src.receiver import handle_company_created
             msg = _make_message(VALID_COMPANY_XML)
             await handle_company_created(msg)
         msg.reject.assert_called_once_with(requeue=True)
@@ -390,7 +390,7 @@ class TestHandleCompanyCreated:
              patch("src.salesforce.find_account_by_vat", new=AsyncMock(return_value=None)), \
              patch("src.salesforce.create_account", new=AsyncMock(return_value="sf-acct-001")) as sf_create, \
              patch("src.sender.publish_company_confirmed", new=AsyncMock()):
-            from receiver import handle_company_created
+            from src.receiver import handle_company_created
             await handle_company_created(_make_message(VALID_COMPANY_XML))
 
         sf_create.assert_called_once()
@@ -407,7 +407,7 @@ class TestHandleCompanyCreated:
              patch("src.salesforce.find_account_by_vat", new=AsyncMock(return_value=None)), \
              patch("src.salesforce.create_account", new=AsyncMock(return_value="sf-acct")), \
              patch("src.sender.publish_company_confirmed", new=AsyncMock()) as pub:
-            from receiver import handle_company_created
+            from src.receiver import handle_company_created
             await handle_company_created(_make_message(VALID_COMPANY_XML))
 
         pub.assert_called_once()
@@ -426,7 +426,7 @@ class TestHandleCompanyCreated:
              patch("src.salesforce.find_account_by_vat", new=AsyncMock(return_value=None)), \
              patch("src.salesforce.create_account", new=AsyncMock(return_value="sf-acct")), \
              patch("src.sender.publish_company_confirmed", new=AsyncMock()) as pub:
-            from receiver import handle_company_created
+            from src.receiver import handle_company_created
             await handle_company_created(_make_message(VALID_COMPANY_XML))
 
         crm_id = pub.call_args[0][0]["id"]
@@ -440,7 +440,7 @@ class TestHandleCompanyCreated:
              patch("src.salesforce.find_account_by_vat", new=AsyncMock(return_value=None)), \
              patch("src.salesforce.create_account", new=AsyncMock(return_value="sf-acct")) as sf_create, \
              patch("src.sender.publish_company_confirmed", new=AsyncMock()):
-            from receiver import handle_company_created
+            from src.receiver import handle_company_created
             await handle_company_created(_make_message(VALID_COMPANY_XML))
 
         payload = sf_create.call_args[0][0]
@@ -453,7 +453,7 @@ class TestHandleCompanyCreated:
              patch("src.salesforce.find_account_by_vat", new=AsyncMock(return_value=None)), \
              patch("src.salesforce.create_account", new=AsyncMock(return_value="sf-acct")) as sf_create, \
              patch("src.sender.publish_company_confirmed", new=AsyncMock()):
-            from receiver import handle_company_created
+            from src.receiver import handle_company_created
             await handle_company_created(_make_message(VALID_COMPANY_MINIMAL_XML))
 
         payload = sf_create.call_args[0][0]
