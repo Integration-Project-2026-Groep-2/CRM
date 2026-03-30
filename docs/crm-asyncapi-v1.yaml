@@ -140,18 +140,21 @@ channels:
   # ============================================================
 
   crmHeartbeat:
-    address: crm.heartbeat
+    address: heartbeat.direct/routing.heartbeat
     description: >-
       Contract 7 — CRM → Controlroom: heartbeat elke 1 seconde (US-25, US-26 |
-      R1)
+      R1). Publiceert naar exchange heartbeat.direct met routing key
+      routing.heartbeat.
     messages:
       heartbeat:
         $ref: "#/components/messages/Heartbeat"
     bindings:
       amqp:
-        is: queue
-        queue:
-          durable: false
+        is: routingKey
+        exchange:
+          name: heartbeat.direct
+          type: direct
+          durable: true
 
   crmStatusChecked:
     address: crm.status.checked

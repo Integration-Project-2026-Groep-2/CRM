@@ -40,7 +40,7 @@ Eén Docker container → één Python process → 3 asyncio tasks + sender util
 
 | Module | Verantwoordelijkheid |
 |---|---|
-| `heartbeat.py` | XML heartbeat elke seconde → `crm.heartbeat` (Contract 7) |
+| `heartbeat.py` | XML heartbeat elke seconde → `heartbeat.direct` exchange (Contract 7) |
 | `status.py` | CPU/mem/disk → `crm.status.checked` (Contract 8) |
 | `receiver.py` | Luistert op 11 queues van andere teams |
 | `sender.py` | Utility module — receiver handlers roepen publish functies aan |
