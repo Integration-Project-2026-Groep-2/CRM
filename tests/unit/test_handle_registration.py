@@ -5,7 +5,7 @@ Contract 3: frontend.company.created       (US-40, US-20)
 """
 
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from lxml import etree
@@ -258,7 +258,6 @@ class TestHandleRegistration:
             await handle_registration(_make_message(VALID_REGISTRATION_XML))
 
         pub_mail.assert_called_once()
-        _, kwargs = pub_mail.call_args[0], pub_mail.call_args[1]
         args = pub_mail.call_args[0]
         assert args[0] == "registration_confirmation"   # mail_type
         assert args[1]["email"] == "jan@example.com"    # recipient
