@@ -361,3 +361,94 @@ async def _handle_cancellation(
     await sender.publish_user_deactivated(deactivation_data)
     logger.info("Published crm.user.deactivated for %s", email)
     await message.ack()
+
+
+async def handle_person_lookup(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 10a — Kassa → CRM: person lookup request.
+
+    Queue: kassa.person.lookup.requested | durable: true | US-47
+
+    Behaviour:
+    - Validate XML against schema (<PersonLookupRequest>).
+    - Lookup Contact by email (or other identifier) in Salesforce.
+    - Publish crm.person.lookup.responded with user data if found, or notFound=true if not.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+    """
+
+
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("PersonLookupRequest — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    request_id: str | None = xml.findtext("requestId")
+    email: str | None = xml.findtext("email")
+
+    if not request_id or not email:
+        logger.error (
+            "PersonLookup - missing reqeustId or email in PersonLookupRequest, rejecting message",
+            message.body,
+        )
+        await message.reject(requeue=False)
+        return
+    
+    logger.info("personLookup - reeustId = %s, email = %s", request_id, email)
+
+    try:
+        contact = await get_contact_by_email(sf, email)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "PersonLookup - Salesfforce Unavailable while looking up contact for email %s: %s", email, exc
+        )
+        await message.reject(requeue=True)
+        return
+    
+    if contact is None:
+        logger.info("PersonLookup — no contact found for email %s", email)
+        await sender.publish_person_lookup_responded(
+            request_id,
+            {"found": False, "linkedToCompany": False},
+        )
+        await message.ack()
+        return
+    
+    crm_id: str = contact.get("CRM_ID__c", "")
+    account_id: str | None = contact.get("Company_ID__c")
+
+    if not crm_id:
+        logger.warning("PersonLookup — contact found for %s but CRM_ID__c is missing.", email)
+    
+    contact_data = dict = {
+        "found": True,
+        "linkedToCompany": False,
+    }
+
+    if crm_id:
+        try:
+            account = await asyncio.to_thread(sf.Account.get, account_id) 
+            contact_data["linkedToCompany"] = True
+            if account.get("name"):
+                contact_data["companyName"] = account["name"]
+            if account.get("CRM_ID__c"):
+                contact_data["companyId"] = account["CRM_ID__c"]
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "PersonLookup — failed to fetch Account %s for contact %s: %s. "
+                "Responding with linkedToCompany=False.",
+                account_id, email, exc,
+            )
+            # Continue with contact data even if account lookup fails
+    
+    await sender.publish_persoon_lookup_responded(request_id, contact_data)
+    logger.info(
+        "PersonLookup — responded: requestId=%s found=True linkedToCompany=%s",
+        request_id,
+        contact_data["linkedToCompany"],
+    )
+    await message.ack()
+    
