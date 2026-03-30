@@ -10,8 +10,6 @@ returns a server-side error (5xx). Callers requeue the message on this error.
 import logging
 from typing import Any
 
-import aiohttp
-
 from src.config import Config
 
 logger = logging.getLogger(__name__)
@@ -28,6 +26,21 @@ class SalesforceUnavailableError(Exception):
     """
 
 
+def _get_aiohttp():
+    """Import aiohttp on demand.
+
+    This keeps unit tests (and tooling that imports `src.salesforce`) working
+    even if the optional runtime dependency isn't installed.
+    """
+    try:
+        import aiohttp  # type: ignore
+    except ModuleNotFoundError as exc:  # pragma: no cover
+        raise RuntimeError(
+            "Missing dependency 'aiohttp'. Install it with `pip install -r requirements.txt`."
+        ) from exc
+    return aiohttp
+
+
 async def init(config: Config) -> None:
     """Authenticate with Salesforce and store the access token.
 
@@ -36,6 +49,8 @@ async def init(config: Config) -> None:
     """
     global _config, _access_token, _instance_url  # noqa: PLW0603
     _config = config
+
+    aiohttp = _get_aiohttp()
 
     token_url = f"{config.sf_login_url}/services/oauth2/token"
     payload = {
@@ -165,6 +180,7 @@ async def _soql(query: str) -> dict[str, Any]:
     Raises SalesforceUnavailableError on network or server-side errors.
     """
     url = _api(f"query/?q={query}")
+    aiohttp = _get_aiohttp()
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=_headers()) as resp:
@@ -191,6 +207,7 @@ async def _create(sobject: str, payload: dict[str, Any]) -> str:
     Raises SalesforceUnavailableError on network or server-side errors.
     """
     url = _api(f"sobjects/{sobject}/")
+    aiohttp = _get_aiohttp()
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=_headers(), json=payload) as resp:
