@@ -102,70 +102,18 @@ async def handle_warning(message: aio_pika.IncomingMessage) -> None:
     - No Salesforce action required
     - Invalid XML: caught, logged, rejected (requeue=False — will never become valid)
     """
-    try:
-        xml = xml_validator.validate(message.body)
-        logger.error(
-            "Controlroom warning received: %s",
-            etree.tostring(xml, encoding="unicode"),
-        )
-        await message.ack()
-    except Exception as exc:
-        logger.error(
-            "Controlroom warning — invalid XML, rejecting message: %s", exc
-        )
-        await message.reject(requeue=False)
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _parse_xsd_boolean(raw: str | None) -> bool:
-    """Parse XSD xs:boolean values.
-
-    Accepts: true/false/1/0 (case-insensitive).
-    """
-    if raw is None:
-        return False
-    raw_norm = raw.strip().lower()
-    return raw_norm in {"true", "1"}
-
-
-async def get_contact_by_email(sf: object, email: str):
-    """Wrapper to enable test patching / dependency injection."""
-    fn = getattr(sf, "get_contact_by_email", None)
-    if callable(fn):
-        return await fn(email)
-    return await salesforce.find_contact_by_email(email)
-
-
-async def create_contact(sf: object, payload: dict):
-    """Wrapper to enable test patching / dependency injection.
-
-    Returns a contact-like dict for downstream publishing.
-    """
-    fn = getattr(sf, "create_contact", None)
-    if callable(fn):
-        return await fn(payload)
-
-    await salesforce.create_contact(payload)
-    return payload
-
-
-async def upsert_contact_by_email(sf: object, email: str, update_data: dict):
-    """Wrapper to enable test patching / dependency injection."""
-    fn = getattr(sf, "upsert_contact_by_email", None)
-    if callable(fn):
-        return await fn(email, update_data)
-    raise NotImplementedError("upsert_contact_by_email is not implemented without an injected Salesforce client")
-
-
-async def deactivate_contact(sf: object, email: str):
-    """Wrapper to enable test patching / dependency injection."""
-    fn = getattr(sf, "deactivate_contact", None)
-    if callable(fn):
-        return await fn(email)
-    raise NotImplementedError("deactivate_contact is not implemented without an injected Salesforce client")
+    async with message.process(ignore_processed=True):
+        try:
+            xml = xml_validator.validate(message.body)
+            logger.error(
+                "Controlroom warning received: %s",
+                etree.tostring(xml, encoding="unicode"),
+            )
+        except Exception as exc:
+            logger.error(
+                "Controlroom warning — invalid XML, rejecting message: %s", exc
+            )
+            await message.reject(requeue=False)
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +121,7 @@ async def deactivate_contact(sf: object, email: str):
 # Contracts 13 + 6 published on success
 # ---------------------------------------------------------------------------
 
-async def handle_registration(message: aio_pika.IncomingMessage, sf: object | None = None) -> None:
+async def handle_registration(message: aio_pika.IncomingMessage) -> None:
     """Contract 1 — Frontend → CRM: new registration.
 
     Queue: frontend.registration.created | durable: true | US-02, 03, 04, 05, 19
@@ -193,122 +141,6 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: object | No
     - Duplicate regId   → log info, ack silently (idempotent)
     - Duplicate email   → log warning (conflict), ack (C15 is R2)
     """
-    # Test suite `tests/unit/test_receiver.py` injects `sf` and expects explicit
-    # ack/reject on the message object.
-    if sf is not None:
-        try:
-            xml = xml_validator.validate(message.body)
-        except Exception as exc:
-            logger.error("Contract 1 — invalid XML, rejecting: %s", exc)
-            await message.reject(requeue=False)
-            return
-
-        registration_id = xml.findtext("registrationId")
-        email = xml.findtext("email")
-        first_name = xml.findtext("firstName")
-        last_name = xml.findtext("lastName")
-        role = xml.findtext("role")
-        session_id = xml.findtext("sessionId")
-        gdpr_consent_raw = xml.findtext("gdprConsent")
-        gdpr_consent = _parse_xsd_boolean(gdpr_consent_raw)
-        phone = xml.findtext("phone")
-
-        if not gdpr_consent:
-            logger.warning("Registration refused — gdprConsent=false")
-            await message.reject(requeue=False)
-            return
-
-        if role == "COMPANY_CONTACT" and xml.find("company") is None:
-            logger.warning("COMPANY_CONTACT registration without company field")
-
-        try:
-            existing_contact = await get_contact_by_email(sf, email)
-        except Exception as exc:
-            logger.error(
-                "Contract 1 — Salesforce unavailable during email lookup (email=%s), requeueing: %s",
-                email,
-                exc,
-            )
-            await message.reject(requeue=True)
-            return
-
-        confirmed_at = _utc_now_iso()
-
-        if existing_contact:
-            existing_reg_id = existing_contact.get("Registration_ID__c")
-            if existing_reg_id and registration_id and existing_reg_id == registration_id:
-                # Retry path: republish confirmation
-                crm_id = existing_contact.get("CRM_ID__c")
-                user_data = {
-                    "id": crm_id,
-                    "email": email,
-                    "firstName": first_name,
-                    "lastName": last_name,
-                    "role": role,
-                    "isActive": True,
-                    "gdprConsent": True,
-                    "confirmedAt": confirmed_at,
-                }
-                if phone:
-                    user_data["phone"] = phone
-
-                try:
-                    await sender.publish_user_confirmed(user_data)
-                except Exception:
-                    await message.reject(requeue=True)
-                    return
-
-                await message.ack()
-                return
-
-            logger.warning(
-                "Conflict: email %s exists with different registrationId", email
-            )
-            await message.ack()
-            return
-
-        crm_id = str(uuid.uuid4())
-        contact_payload = {
-            "CRM_ID__c": crm_id,
-            "Registration_ID__c": registration_id,
-            "FirstName": first_name,
-            "LastName": last_name,
-            "Email": email,
-            "Role__c": role,
-            "Session_ID__c": session_id,
-            "GDPR_Consent__c": True,
-        }
-        if phone:
-            contact_payload["Phone"] = phone
-
-        try:
-            created_contact = await create_contact(sf, contact_payload)
-        except Exception:
-            await message.reject(requeue=True)
-            return
-
-        user_data: dict = {
-            "id": created_contact.get("CRM_ID__c", crm_id),
-            "email": email,
-            "firstName": first_name,
-            "lastName": last_name,
-            "role": role,
-            "isActive": True,
-            "gdprConsent": True,
-            "confirmedAt": confirmed_at,
-        }
-        if phone:
-            user_data["phone"] = phone
-
-        try:
-            await sender.publish_user_confirmed(user_data)
-        except Exception:
-            await message.reject(requeue=True)
-            return
-
-        await message.ack()
-        return
-
     async with message.process(ignore_processed=True):
         # ── Step 1: validate XML ──────────────────────────────────────────
         try:
@@ -326,7 +158,7 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: object | No
         last_name = xml.findtext("lastName")
         role = xml.findtext("role")
         session_id = xml.findtext("sessionId")
-        gdpr_consent = _parse_xsd_boolean(xml.findtext("gdprConsent", "false"))
+        gdpr_consent = xml.findtext("gdprConsent", "false").lower() == "true"
         phone = xml.findtext("phone")  # optional
         company_el = xml.find("company")  # optional, required if COMPANY_CONTACT
 
@@ -372,7 +204,7 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: object | No
 
         # ── Step 4: create Contact in Salesforce ──────────────────────────
         crm_id = str(uuid.uuid4())
-        confirmed_at = _utc_now_iso()
+        confirmed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         contact_payload = {
             "CRM_ID__c": crm_id,
@@ -430,9 +262,9 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: object | No
 
         # ── Step 6: publish crm.mail.requested (C6) ───────────────────────
         await sender.publish_mail_requested(
-            "registration_confirmation",
-            {"email": email, "name": f"{first_name} {last_name}"},
-            {
+            mail_type="registration_confirmation",
+            recipient={"email": email, "name": f"{first_name} {last_name}"},
+            dynamic_data={
                 "guest_name": first_name,
                 "session_name": session_id,   # mailing team resolves name from ID
                 "session_time": confirmed_at,  # placeholder — planning owns schedule
@@ -509,7 +341,7 @@ async def handle_company_created(message: aio_pika.IncomingMessage) -> None:
 
         # ── Step 3: create Account in Salesforce ──────────────────────────
         crm_id = str(uuid.uuid4())
-        confirmed_at = _utc_now_iso()
+        confirmed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         account_payload = {
             "CRM_ID__c": crm_id,
@@ -563,111 +395,3 @@ async def handle_company_created(message: aio_pika.IncomingMessage) -> None:
         logger.info(
             "Contract 3 — crm.company.confirmed published (crm_id=%s).", crm_id
         )
-
-
-async def handle_registration_updated(message: aio_pika.IncomingMessage, sf: object) -> None:
-    """Contract 2/18/22 — Frontend → CRM: update/cancel registration.
-
-    Implemented for unit tests in `tests/unit/test_receiver.py`.
-    """
-    try:
-        xml = xml_validator.validate(message.body)
-    except Exception as exc:
-        logger.error("Contract 2 — invalid XML, rejecting: %s", exc)
-        await message.reject(requeue=False)
-        return
-
-    email = xml.findtext("email")
-    change_type = (xml.findtext("changeType") or "").strip().lower()
-
-    if change_type == "updated":
-        update_data: dict[str, str] = {}
-        updated_fields = xml.find("updatedFields")
-        if updated_fields is not None:
-            first_name = updated_fields.findtext("firstName")
-            last_name = updated_fields.findtext("lastName")
-            phone = updated_fields.findtext("phone")
-            role = updated_fields.findtext("role")
-            if first_name:
-                update_data["FirstName"] = first_name
-            if last_name:
-                update_data["LastName"] = last_name
-            if phone:
-                update_data["Phone"] = phone
-            if role:
-                update_data["Role__c"] = role
-
-        try:
-            contact = await upsert_contact_by_email(sf, email, update_data)
-        except Exception as exc:
-            logger.error("Contract 2 — Salesforce error, requeueing: %s", exc)
-            await message.reject(requeue=True)
-            return
-
-        user_data: dict[str, object] = {
-            "id": contact["CRM_ID__c"],
-            "email": contact["Email"],
-            "firstName": contact.get("FirstName", ""),
-            "lastName": contact.get("LastName", ""),
-            "role": contact.get("Role__c", ""),
-            "isActive": bool(contact.get("IsActive__c", True)),
-            "gdprConsent": bool(contact.get("GDPR_Consent__c", True)),
-            "updatedAt": _utc_now_iso(),
-        }
-        if "Phone" in contact and contact["Phone"]:
-            user_data["phone"] = contact["Phone"]
-        if "Company_ID__c" in contact and contact["Company_ID__c"]:
-            user_data["companyId"] = contact["Company_ID__c"]
-        if "Badge_Code__c" in contact and contact["Badge_Code__c"]:
-            user_data["badgeCode"] = contact["Badge_Code__c"]
-
-        address_map = {
-            "MailingStreet": "street",
-            "House_Number__c": "houseNumber",
-            "MailingPostalCode": "postalCode",
-            "MailingCity": "city",
-            "MailingCountry": "country",
-        }
-        for sf_key, out_key in address_map.items():
-            value = contact.get(sf_key)
-            if value:
-                user_data[out_key] = value
-
-        try:
-            await sender.publish_user_updated(user_data)
-        except Exception:
-            await message.reject(requeue=True)
-            return
-
-        await message.ack()
-        return
-
-    if change_type == "cancelled":
-        try:
-            contact = await deactivate_contact(sf, email)
-        except Exception as exc:
-            logger.error("Contract 2 — Salesforce error, requeueing: %s", exc)
-            await message.reject(requeue=True)
-            return
-
-        if contact is None:
-            logger.warning("Contract 2 — contact not found for cancellation, acking without action")
-            await message.ack()
-            return
-
-        deact_data = {
-            "id": contact["CRM_ID__c"],
-            "email": contact["Email"],
-            "deactivatedAt": _utc_now_iso(),
-        }
-        try:
-            await sender.publish_user_deactivated(deact_data)
-        except Exception:
-            await message.reject(requeue=True)
-            return
-
-        await message.ack()
-        return
-
-    logger.error("Contract 2 — unknown changeType=%s, rejecting", change_type)
-    await message.reject(requeue=False)
