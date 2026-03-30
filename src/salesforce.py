@@ -10,8 +10,6 @@ returns a server-side error (5xx). Callers requeue the message on this error.
 import logging
 from typing import Any
 
-import aiohttp
-
 from src.config import Config
 
 logger = logging.getLogger(__name__)
@@ -37,6 +35,7 @@ async def init(config: Config) -> None:
     global _config, _access_token, _instance_url  # noqa: PLW0603
     _config = config
 
+    import aiohttp  # noqa: PLC0415
     token_url = f"{config.sf_login_url}/services/oauth2/token"
     payload = {
         "grant_type": "password",
@@ -164,6 +163,7 @@ async def _soql(query: str) -> dict[str, Any]:
 
     Raises SalesforceUnavailableError on network or server-side errors.
     """
+    import aiohttp  # noqa: PLC0415
     url = _api(f"query/?q={query}")
     try:
         async with aiohttp.ClientSession() as session:
@@ -190,6 +190,7 @@ async def _create(sobject: str, payload: dict[str, Any]) -> str:
 
     Raises SalesforceUnavailableError on network or server-side errors.
     """
+    import aiohttp  # noqa: PLC0415
     url = _api(f"sobjects/{sobject}/")
     try:
         async with aiohttp.ClientSession() as session:
