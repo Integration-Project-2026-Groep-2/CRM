@@ -92,17 +92,17 @@ jobs:
           docker push $IMAGE:$VERSION
           docker push $IMAGE:latest
 
-      - name: Deploy to Prod
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VM_HOST }}
-          username: ${{ secrets.VM_USER }}
-          password: ${{ secrets.VM_PASSWORD }}
-          port: ${{ secrets.VM_PORT }}
-          script: |
-            cd /home/github-deploy/infra
-            docker compose pull crm
-            docker compose up -d crm
+      # TODO: Enable when Infra fixes github-deploy user shell + permissions
+      # - name: Deploy to Prod
+      #   uses: appleboy/ssh-action@v1
+      #   with:
+      #     host: ${{ secrets.DEPLOY_HOST }}
+      #     username: ${{ secrets.DEPLOY_USER }}
+      #     key: ${{ secrets.DEPLOY_SSH_KEY }}
+      #     script: |
+      #       cd /home/github-deploy/infra
+      #       docker compose pull crm
+      #       docker compose up -d crm
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
