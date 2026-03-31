@@ -95,9 +95,10 @@ jobs:
       - name: Deploy to Prod
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          password: ${{ secrets.VM_PASSWORD }}
+          port: ${{ secrets.VM_PORT }}
           script: |
             cd /home/github-deploy/infra
             docker compose pull crm
