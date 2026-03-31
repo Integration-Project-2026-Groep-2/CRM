@@ -1,0 +1,110 @@
+name: Promote to Prod
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "7-char SHA to promote (leave empty for latest-dev)"
+        required: false
+      version:
+        description: "Stable version tag e.g. v1.4.0 (leave empty for auto)"
+        required: false
+  push:
+    tags:
+      - "v*"
+
+env:
+  IMAGE: ghcr.io/integration-project-2026-groep-2/crm
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      packages: write
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve source and version
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Tag push: use git SHA from the tagged commit
+            SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+            VERSION="${GITHUB_REF_NAME}"
+            SOURCE_TAG="sha-$SHA"
+          elif [ -n "${{ github.event.inputs.sha }}" ]; then
+            # Manual with SHA specified
+            SHA="${{ github.event.inputs.sha }}"
+            SOURCE_TAG="sha-$SHA"
+          else
+            # Manual without SHA: promote latest-dev directly
+            SHA=""
+            SOURCE_TAG="latest-dev"
+          fi
+
+          VERSION="${VERSION:-${{ github.event.inputs.version }}}"
+          if [ -z "$VERSION" ]; then
+            if [ -n "$SHA" ]; then
+              VERSION="release-$SHA"
+            else
+              VERSION="release-$(date +%Y%m%d-%H%M%S)"
+            fi
+          fi
+
+          echo "sha=$SHA" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "source_tag=$SOURCE_TAG" >> $GITHUB_OUTPUT
+          echo "Source: $SOURCE_TAG → $VERSION"
+
+      - name: Guard — image exists
+        run: |
+          docker manifest inspect $IMAGE:${{ steps.resolve.outputs.source_tag }} > /dev/null 2>&1 || {
+            echo "::error::Image $IMAGE:${{ steps.resolve.outputs.source_tag }} not found in registry"
+            exit 1
+          }
+
+      - name: Guard — version not reused
+        run: |
+          if docker manifest inspect $IMAGE:${{ steps.resolve.outputs.version }} > /dev/null 2>&1; then
+            echo "::error::Version ${{ steps.resolve.outputs.version }} already exists — refusing to overwrite"
+            exit 1
+          fi
+
+      - name: Retag and push
+        run: |
+          SOURCE_TAG=${{ steps.resolve.outputs.source_tag }}
+          VERSION=${{ steps.resolve.outputs.version }}
+          docker pull $IMAGE:$SOURCE_TAG
+          docker tag $IMAGE:$SOURCE_TAG $IMAGE:$VERSION
+          docker tag $IMAGE:$SOURCE_TAG $IMAGE:latest
+          docker push $IMAGE:$VERSION
+          docker push $IMAGE:latest
+
+      - name: Deploy to Prod
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            cd /home/github-deploy/infra
+            docker compose pull crm
+            docker compose up -d crm
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.resolve.outputs.version }}
+          generate_release_notes: true

@@ -1,12 +1,11 @@
-name: Deploy to Production
+name: CI/CD to Dev
 
 on:
   push:
-    branches: [prod]
+    branches: [main]
 
-concurrency:
-  group: production
-  cancel-in-progress: false
+env:
+  IMAGE: ghcr.io/integration-project-2026-groep-2/crm
 
 jobs:
   test:
@@ -46,30 +45,41 @@ jobs:
       - name: Run tests
         run: pytest -v
 
-  docker-build:
+  build-and-push:
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      packages: write
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Docker image
-        run: docker build -t crm:prod .
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-  deploy:
-    needs: [test, docker-build]
+      - name: Build and push
+        run: |
+          SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          docker build -t $IMAGE:sha-$SHA -t $IMAGE:latest-dev .
+          docker push $IMAGE:sha-$SHA
+          docker push $IMAGE:latest-dev
+
+  deploy-to-dev:
+    needs: build-and-push
     runs-on: ubuntu-latest
 
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.VM_HOST }}
-          username: ${{ secrets.VM_USER }}
-          password: ${{ secrets.VM_PASSWORD }}
-          port: ${{ secrets.VM_PORT }}
+          host: ${{ secrets.DEV_HOST }}
+          username: ${{ secrets.DEV_USER }}
+          key: ${{ secrets.DEV_SSH_KEY }}
           script: |
-            cd ~/CRM
-            git pull origin prod
-            docker compose up --build -d
-            docker compose logs --tail=20 crm
+            cd /home/github-deploy/infra
+            docker compose pull crm
+            docker compose up -d crm

@@ -156,6 +156,29 @@ async def handle_health(request: web.Request) -> web.Response:
     return web.json_response(health)
 
 
+async def handle_connection(request: web.Request) -> web.Response:
+    """Return RabbitMQ connection info so the UI can show VM vs local."""
+    rmq_url = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost/")
+    # Extract user and host from URL (hide password)
+    try:
+        host_part = rmq_url.split("@")[-1].split("/")[0].split(":")[0]
+        user_part = rmq_url.split("://")[-1].split(":")[0]
+    except Exception:
+        host_part = "unknown"
+        user_part = "unknown"
+
+    is_local = user_part == "guest"
+    conn = request.app.get("rmq_conn")
+    connected = conn is not None and not conn.is_closed
+
+    return web.json_response({
+        "host": host_part,
+        "connected": connected,
+        "mode": "local" if is_local else "vm",
+        "label": f"VM ({user_part}@{host_part})" if not is_local else "Lokaal (guest)",
+    })
+
+
 async def handle_status(request: web.Request) -> web.Response:
     metrics = await asyncio.to_thread(_get_system_metrics)
     return web.json_response(metrics)
@@ -365,6 +388,7 @@ def create_app() -> web.Application:
     app.on_cleanup.append(_rmq_cleanup)
     app.router.add_get("/", handle_index)
     app.router.add_get("/api/health", handle_health)
+    app.router.add_get("/api/connection", handle_connection)
     app.router.add_get("/api/status", handle_status)
     app.router.add_get("/api/contacts", handle_contacts)
     app.router.add_get("/api/events", handle_get_events)
