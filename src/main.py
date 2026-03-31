@@ -67,15 +67,9 @@ async def main() -> None:
 
     # Keep references to background tasks so we can cancel them during shutdown.
     tasks = [
-        asyncio.create_task(
-            _supervised_task("heartbeat", lambda: run_heartbeat(connection, config))
-        ),
-        asyncio.create_task(
-            _supervised_task("status", lambda: run_status(connection, config))
-        ),
-        asyncio.create_task(
-            _supervised_task("receiver", lambda: run_receiver(connection, config))
-        ),
+        asyncio.create_task(_supervised_task("heartbeat", lambda: run_heartbeat(connection, config))),
+        asyncio.create_task(_supervised_task("status", lambda: run_status(connection, config))),
+        asyncio.create_task(_supervised_task("receiver", lambda: run_receiver(connection, config))),
     ]
     try:
         await shutdown_event.wait()  # Wait until shutdown signal is received

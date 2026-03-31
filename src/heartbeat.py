@@ -5,7 +5,8 @@ import logging
 from datetime import datetime, timezone
 
 import aio_pika
-from aio_pika.abc import AbstractChannel, AbstractRobustConnection
+from aio_pika import ExchangeType
+from aio_pika.abc import AbstractChannel, AbstractExchange, AbstractRobustConnection
 from lxml import etree
 
 from src import xml_validator
@@ -27,25 +28,30 @@ def _build_heartbeat_xml(service_id: str) -> bytes:
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
 
 
-async def _get_channel(connection: AbstractRobustConnection) -> AbstractChannel:
-    """Open a new channel and declare the heartbeat queue.
+async def _get_channel(
+    connection: AbstractRobustConnection,
+) -> tuple[AbstractChannel, AbstractExchange]:
+    """Open a new channel and declare the heartbeat exchange.
 
     Separated so it can be called again after a channel failure.
     """
     channel = await connection.channel()
-    await channel.declare_queue("crm.heartbeat", durable=False)
-    return channel
+    exchange = await channel.declare_exchange(
+        "heartbeat.direct", type=ExchangeType.DIRECT, durable=True
+    )
+    return channel, exchange
 
 
 async def run_heartbeat(connection: AbstractRobustConnection, config: Config) -> None:
-    """Publish XML heartbeat to crm.heartbeat every HEARTBEAT_INTERVAL_SECONDS.
+    """Publish XML heartbeat via heartbeat.direct exchange every HEARTBEAT_INTERVAL_SECONDS.
 
-    - Declares queue crm.heartbeat (durable=False)
+    - Declares exchange heartbeat.direct (direct, durable=True)
     - Automatically recreates channel on failure
     - Per-iteration try/except: logs error, skips iteration, loop continues
     - Heartbeat mag NOOIT stoppen
     """
     channel: AbstractChannel | None = None
+    exchange: AbstractExchange | None = None
 
     logger.info("Heartbeat task started (interval=%ds)", config.heartbeat_interval_seconds)
 
@@ -54,14 +60,14 @@ async def run_heartbeat(connection: AbstractRobustConnection, config: Config) ->
             # (Re)create channel if needed — handles first start + recovery
             if channel is None or channel.is_closed:
                 logger.info("Opening heartbeat channel...")
-                channel = await _get_channel(connection)
+                channel, exchange = await _get_channel(connection)
 
             xml_bytes = _build_heartbeat_xml("CRM")
             xml_validator.validate(xml_bytes)
 
-            await channel.default_exchange.publish(
+            await exchange.publish(
                 aio_pika.Message(body=xml_bytes),
-                routing_key="crm.heartbeat",
+                routing_key="routing.heartbeat",
             )
             logger.debug("Heartbeat published")
         except (ValueError, etree.XMLSyntaxError):
@@ -71,5 +77,6 @@ async def run_heartbeat(connection: AbstractRobustConnection, config: Config) ->
             logger.exception("Heartbeat iteration failed")
             # Force channel re-creation on next iteration
             channel = None
+            exchange = None
 
         await asyncio.sleep(config.heartbeat_interval_seconds)

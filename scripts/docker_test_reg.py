@@ -14,40 +14,33 @@ async def main():
     async with connection:
         channel = await connection.channel()
 
-        confirmed_q = await channel.declare_queue("crm.user.confirmed", durable=True)
-
-        # Generate a unique email every run
-        r = random.randint(1000, 9999)
+        r = random.randint(100000, 999999)
         email = f"docker.test.user.{r}@example.com"
+        first_name = f"Dock{r}"
+        last_name = f"Test{r}"
+        phone = f"+32{random.randint(400000000, 499999999)}"
 
         xml_payload = f"""<?xml version='1.0' encoding='utf-8'?>
 <Registration>
     <registrationId>REG-TEST-DOCKER-{r}</registrationId>
-    <firstName>Docker</firstName>
-    <lastName>TestUser</lastName>
+    <firstName>{first_name}</firstName>
+    <lastName>{last_name}</lastName>
     <email>{email}</email>
     <sessionId>SESS-001</sessionId>
     <role>VISITOR</role>
     <gdprConsent>true</gdprConsent>
-    <phone>+32412345678</phone>
+    <phone>{phone}</phone>
 </Registration>""".encode("utf-8")
 
         await channel.default_exchange.publish(
             aio_pika.Message(body=xml_payload, delivery_mode=aio_pika.DeliveryMode.PERSISTENT),
             routing_key="frontend.registration.created",
         )
-        print(f"Published registration to frontend.registration.created with email {email}")
+        # Poll queues removed
+        await asyncio.sleep(5)
 
-        print("Waiting 6 seconds for CRM to process and Salesforce to respond...")
-        await asyncio.sleep(6)
-
-        msg = await confirmed_q.get(fail=False)
-        if msg:
-            print("Received confirmation on crm.user.confirmed:")
-            print(msg.body.decode())
-            await msg.ack()
-        else:
-            print("Did not receive a confirmation message. Check docker logs crm.")
+        # NO CONSUMING SO IT STAYS IN THE QUEUE
+        print("\n\nTest run finished. The message crm.mail.requested is left in RabbitMQ for you to inspect!")
 
 
 if __name__ == "__main__":

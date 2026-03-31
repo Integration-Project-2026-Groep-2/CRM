@@ -140,6 +140,11 @@ def _build_user_data(contact: dict) -> dict:
     return data
 
 
+def _build_full_name(first_name: str | None, last_name: str | None) -> str:
+    """Build a display name from first/last name, skipping missing parts."""
+    return f"{first_name or ''} {last_name or ''}".strip()
+
+
 async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
     """Contract 1 — Frontend -> CRM: new registration.
 
@@ -188,6 +193,17 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
                 logger.info("Retry for registrationId %s — republishing", reg_id_incoming)
 
                 await sender.publish_user_confirmed(_build_user_data(existing_contact))
+                
+                # C6: Publish mail request
+                full_name = _build_full_name(
+                    existing_contact.get("FirstName"),
+                    existing_contact.get("LastName"),
+                )
+                
+                recipient = {"email": email, "name": full_name}
+                dynamic_data = {"guest_name": full_name}
+                await sender.publish_mail_requested("registration_confirmation", recipient, dynamic_data)
+
                 await message.ack()
                 return
 
@@ -218,10 +234,19 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
         # Publish crm.user.confirmed
         await sender.publish_user_confirmed(_build_user_data(contact))
         logger.info("Published crm.user.confirmed for %s", email)
-        await message.ack()
 
-        # TODO: Contract 6 (R1 scope) — publish registration_confirmation
-        #       via sender.publish_mail_requested after user is confirmed.
+        # Contract 6 (R1 scope) — publish registration_confirmation
+        full_name = _build_full_name(
+            contact_data.get("FirstName"),
+            contact_data.get("LastName"),
+        )
+        
+        recipient = {"email": email, "name": full_name}
+        dynamic_data = {"guest_name": full_name}
+        await sender.publish_mail_requested("registration_confirmation", recipient, dynamic_data)
+        logger.info("Published crm.mail.requested for %s", email)
+
+        await message.ack()
 
     except Exception as exc:  # noqa: BLE001
         logger.error("Registration — error processing message: %s", exc)
