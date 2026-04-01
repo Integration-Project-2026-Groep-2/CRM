@@ -55,7 +55,4 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script: |
-            cd /home/github-deploy/infra
-            docker compose pull crm
-            docker compose up -d crm
+          script: crm
