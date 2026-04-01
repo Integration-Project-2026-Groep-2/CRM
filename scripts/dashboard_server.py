@@ -17,6 +17,8 @@ Usage:
   Open http://localhost:8050
 """
 
+# TODO: change tests to use new exchange topic
+
 import asyncio
 import logging
 import os
@@ -28,7 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import aio_pika
-from aio_pika import DeliveryMode
+from aio_pika import DeliveryMode, ExchangeType
 from aiohttp import web
 from dotenv import load_dotenv
 from lxml import etree
@@ -225,6 +227,9 @@ async def _rmq_startup(app: web.Application) -> None:
         app["rmq_conn"] = await aio_pika.connect_robust(rmq_url)
         app["rmq_channel"] = await app["rmq_conn"].channel()
         logger.info("RabbitMQ connected: %s", rmq_url.split("@")[-1])
+        app["rmq_user_exchange"] = await app["rmq_channel"].declare_exchange(
+            "user.topic", ExchangeType.TOPIC, durable=True,
+        )
 
         # Drain stale messages from response queues (once at startup)
         ch = app["rmq_channel"]
@@ -290,7 +295,8 @@ async def handle_crud_create(request: web.Request) -> web.Response:
 </Registration>""".encode("utf-8")
 
     response_q = await ch.declare_queue("crm.user.confirmed", durable=True)
-    await ch.default_exchange.publish(
+    user_exchange = request.app["rmq_user_exchange"]
+    await user_exchange.publish(
         aio_pika.Message(body=xml, delivery_mode=DeliveryMode.PERSISTENT),
         routing_key="frontend.registration.created",
     )
@@ -330,7 +336,8 @@ async def handle_crud_update(request: web.Request) -> web.Response:
 </RegistrationChange>""".encode("utf-8")
 
     response_q = await ch.declare_queue("crm.user.updated", durable=True)
-    await ch.default_exchange.publish(
+    user_exchange = request.app["rmq_user_exchange"]
+    await user_exchange.publish(
         aio_pika.Message(body=xml, delivery_mode=DeliveryMode.PERSISTENT),
         routing_key="frontend.registration.updated",
     )
@@ -363,7 +370,8 @@ async def handle_crud_delete(request: web.Request) -> web.Response:
 </RegistrationChange>""".encode("utf-8")
 
     response_q = await ch.declare_queue("crm.user.deactivated", durable=True)
-    await ch.default_exchange.publish(
+    user_exchange = request.app["rmq_user_exchange"]
+    await user_exchange.publish(
         aio_pika.Message(body=xml, delivery_mode=DeliveryMode.PERSISTENT),
         routing_key="frontend.registration.updated",
     )
