@@ -20,8 +20,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 import aio_pika
-from aio_pika import DeliveryMode
-from aio_pika.abc import AbstractChannel
+from aio_pika import DeliveryMode, ExchangeType
+from aio_pika.abc import AbstractChannel, AbstractExchange
 from lxml import etree
 
 from src import xml_validator
@@ -29,16 +29,21 @@ from src import xml_validator
 logger = logging.getLogger(__name__)
 
 _channel: AbstractChannel | None = None
+_exchange: AbstractExchange | None = None
 
 
 async def init(channel: AbstractChannel) -> None:
-    """Initialize the sender with a RabbitMQ channel.
+    """Initialize the sender with a RabbitMQ channel and declare contact.topic exchange.
 
     Must be called once at startup before any publish function is used.
+    All CRM outbound messages are published via the contact.topic exchange.
     """
-    global _channel  # noqa: PLW0603
+    global _channel, _exchange  # noqa: PLW0603
     _channel = channel
-    logger.info("Sender initialized.")
+    _exchange = await channel.declare_exchange(
+        "contact.topic", type=ExchangeType.TOPIC, durable=True,
+    )
+    logger.info("Sender initialized (exchange: contact.topic).")
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +51,7 @@ async def init(channel: AbstractChannel) -> None:
 # ---------------------------------------------------------------------------
 
 async def _publish(queue_name: str, xml_bytes: bytes, persistent: bool = False) -> None:
-    """Publish xml_bytes to the given queue via the default exchange.
+    """Publish xml_bytes to the given queue via the contact.topic exchange.
 
     Args:
         queue_name: Routing key (= queue name) to publish to.
@@ -57,11 +62,11 @@ async def _publish(queue_name: str, xml_bytes: bytes, persistent: bool = False) 
     The sender never declares queues — the consuming team creates their own.
     """
     delivery_mode = DeliveryMode.PERSISTENT if persistent else DeliveryMode.NOT_PERSISTENT
-    await _channel.default_exchange.publish(
+    await _exchange.publish(
         aio_pika.Message(body=xml_bytes, delivery_mode=delivery_mode),
         routing_key=queue_name,
     )
-    logger.debug("Message published to queue '%s' (persistent=%s).", queue_name, persistent)
+    logger.debug("Message published to '%s' via contact.topic (persistent=%s).", queue_name, persistent)
 
 
 # ---------------------------------------------------------------------------

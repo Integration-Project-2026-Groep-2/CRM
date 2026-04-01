@@ -3,6 +3,7 @@ import os
 import random
 
 import aio_pika
+from aio_pika import ExchangeType
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -32,7 +33,10 @@ async def main():
     <phone>{phone}</phone>
 </Registration>""".encode("utf-8")
 
-        await channel.default_exchange.publish(
+        exchange = await channel.declare_exchange(
+            "user.topic", type=ExchangeType.TOPIC, durable=True,
+        )
+        await exchange.publish(
             aio_pika.Message(body=xml_payload, delivery_mode=aio_pika.DeliveryMode.PERSISTENT),
             routing_key="frontend.registration.created",
         )

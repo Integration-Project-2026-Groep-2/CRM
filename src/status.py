@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 
 import aio_pika
 import psutil
-from aio_pika.abc import AbstractChannel, AbstractRobustConnection
+from aio_pika import ExchangeType
+from aio_pika.abc import AbstractChannel, AbstractExchange, AbstractRobustConnection
 from lxml import etree
 
 from src import xml_validator
@@ -71,32 +72,37 @@ def _build_status_xml(service_id: str, metrics: dict) -> bytes:
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
 
 
-async def _get_channel(connection: AbstractRobustConnection) -> AbstractChannel:
-    """Open a new channel and declare the status queue."""
+async def _get_channel(
+    connection: AbstractRobustConnection,
+) -> tuple[AbstractChannel, AbstractExchange]:
+    """Open a new channel and declare the contact.topic exchange."""
     channel = await connection.channel()
-    await channel.declare_queue("crm.status.checked", durable=False)
-    return channel
+    exchange = await channel.declare_exchange(
+        "contact.topic", type=ExchangeType.TOPIC, durable=True,
+    )
+    return channel, exchange
 
 
 async def run_status(connection: AbstractRobustConnection, config: Config) -> None:
-    """Publish XML status to crm.status.checked every STATUS_CHECK_INTERVAL_SECONDS."""
+    """Publish XML status to crm.status.checked via contact.topic every STATUS_CHECK_INTERVAL_SECONDS."""
     channel: AbstractChannel | None = None
-    
+    exchange: AbstractExchange | None = None
+
     logger.info("Status task started (interval=%ds)", config.status_check_interval_seconds)
-    
+
     start_time = time.monotonic()
 
     while True:
         try:
             if channel is None or channel.is_closed:
                 logger.info("Opening status channel...")
-                channel = await _get_channel(connection)
+                channel, exchange = await _get_channel(connection)
 
             metrics = _get_system_metrics(start_time)
             xml_bytes = _build_status_xml(config.system_name, metrics)
             xml_validator.validate(xml_bytes)
 
-            await channel.default_exchange.publish(
+            await exchange.publish(
                 aio_pika.Message(body=xml_bytes),
                 routing_key="crm.status.checked",
             )
@@ -106,5 +112,6 @@ async def run_status(connection: AbstractRobustConnection, config: Config) -> No
         except Exception:
             logger.exception("Status iteration failed")
             channel = None
+            exchange = None
 
         await asyncio.sleep(config.status_check_interval_seconds)

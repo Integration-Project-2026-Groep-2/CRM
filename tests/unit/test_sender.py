@@ -17,24 +17,25 @@ from src import sender
 @pytest.fixture(autouse=True)
 def setup_sender():
     mock_channel = MagicMock()
-    mock_channel.default_exchange = MagicMock()
-    mock_channel.default_exchange.publish = AsyncMock()
+    mock_exchange = MagicMock()
+    mock_exchange.publish = AsyncMock()
     sender._channel = mock_channel
-    yield mock_channel
+    sender._exchange = mock_exchange
+    yield mock_exchange
 
 
-def _get_published_xml(mock_channel) -> etree._Element:
-    call_args = mock_channel.default_exchange.publish.call_args
+def _get_published_xml(mock_exchange) -> etree._Element:
+    call_args = mock_exchange.publish.call_args
     message = call_args[0][0]
     return etree.fromstring(message.body)
 
 
-def _get_routing_key(mock_channel) -> str:
-    return mock_channel.default_exchange.publish.call_args[1]["routing_key"]
+def _get_routing_key(mock_exchange) -> str:
+    return mock_exchange.publish.call_args[1]["routing_key"]
 
 
-def _get_delivery_mode(mock_channel):
-    message = mock_channel.default_exchange.publish.call_args[0][0]
+def _get_delivery_mode(mock_exchange):
+    message = mock_exchange.publish.call_args[0][0]
     return message.delivery_mode
 
 
