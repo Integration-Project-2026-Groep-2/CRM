@@ -44,18 +44,18 @@ jobs:
           docker push "$IMAGE:sha-$SHA"
           docker push "$IMAGE:latest-dev"
 
-  # TODO: Enable when Infra fixes github-deploy user shell + permissions
-  # deploy-to-dev:
-  #   needs: build-and-push
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Deploy via SSH
-  #       uses: appleboy/ssh-action@v1
-  #       with:
-  #         host: ${{ secrets.DEPLOY_HOST }}
-  #         username: ${{ secrets.DEPLOY_USER }}
-  #         key: ${{ secrets.DEPLOY_SSH_KEY }}
-  #         script: |
-  #           cd /home/github-deploy/infra
-  #           docker compose pull crm
-  #           docker compose up -d crm
+  deploy-to-dev:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            cd /home/github-deploy/infra
+            docker compose pull crm
+            docker compose up -d crm
