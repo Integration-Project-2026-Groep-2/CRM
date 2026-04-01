@@ -13,6 +13,7 @@ import os
 import random
 
 import aio_pika
+from aio_pika import ExchangeType
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -23,6 +24,7 @@ async def main():
     connection = await aio_pika.connect_robust(rmq_url)
     async with connection:
         channel = await connection.channel()
+        user_exchange = await channel.declare_exchange("user.topic", ExchangeType.TOPIC, durable=True)
 
         updated_q = await channel.declare_queue("crm.user.updated", durable=True)
         deactivated_q = await channel.declare_queue("crm.user.deactivated", durable=True)
@@ -43,7 +45,7 @@ async def main():
     <phone>+32412345678</phone>
 </Registration>""".encode("utf-8")
 
-        await channel.default_exchange.publish(
+        await user_exchange.publish(
             aio_pika.Message(body=reg_xml, delivery_mode=aio_pika.DeliveryMode.PERSISTENT),
             routing_key="frontend.registration.created",
         )
@@ -74,7 +76,7 @@ async def main():
     </updatedFields>
 </RegistrationChange>""".encode("utf-8")
 
-        await channel.default_exchange.publish(
+        await user_exchange.publish(
             aio_pika.Message(body=update_xml, delivery_mode=aio_pika.DeliveryMode.PERSISTENT),
             routing_key="frontend.registration.updated",
         )
@@ -98,7 +100,7 @@ async def main():
     <changeType>cancelled</changeType>
 </RegistrationChange>""".encode("utf-8")
 
-        await channel.default_exchange.publish(
+        await user_exchange.publish(
             aio_pika.Message(body=cancel_xml, delivery_mode=aio_pika.DeliveryMode.PERSISTENT),
             routing_key="frontend.registration.updated",
         )

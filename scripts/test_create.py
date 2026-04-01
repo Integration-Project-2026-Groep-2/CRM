@@ -12,7 +12,7 @@ import os
 import random
 
 import aio_pika
-from aio_pika import DeliveryMode
+from aio_pika import DeliveryMode, ExchangeType
 from dotenv import load_dotenv
 from lxml import etree
 
@@ -62,6 +62,7 @@ async def main() -> None:
     connection = await aio_pika.connect_robust(rmq_url)
     async with connection:
         channel = await connection.channel()
+        user_exchange = await channel.declare_exchange("user.topic", ExchangeType.TOPIC, durable=True)
         confirmed_q = await channel.declare_queue("crm.user.confirmed", durable=True)
 
         # Drain stale messages
@@ -84,7 +85,7 @@ async def main() -> None:
 </Registration>""".encode("utf-8")
 
         print(f"  Publishing to: frontend.registration.created")
-        await channel.default_exchange.publish(
+        await user_exchange.publish(
             aio_pika.Message(body=xml, delivery_mode=DeliveryMode.PERSISTENT),
             routing_key="frontend.registration.created",
         )
