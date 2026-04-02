@@ -8,16 +8,29 @@ from src.salesforce_client import (
     create_account,
     create_contact,
     deactivate_contact,
+    find_unique_contact_by_email,
     get_account_by_vat,
+    get_contact_by_crm_id,
     get_contact_by_email,
+    update_payment_status,
     upsert_account_by_vat,
     upsert_contact_by_email,
 )
 
 
 @pytest.fixture
-def sf():
+def sf(monkeypatch):
     salesforce_client_module._active_field_cache = None
+
+    async def immediate_to_thread(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(
+        salesforce_client_module.asyncio,
+        "to_thread",
+        immediate_to_thread,
+    )
+
     sf = MagicMock()
     sf.Contact = MagicMock()
     sf.Account = MagicMock()
@@ -97,6 +110,54 @@ async def test_get_contact_by_email_not_found(sf):
     result = await get_contact_by_email(sf, "x@y.com")
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_contact_by_crm_id_found(sf):
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000005"}]}
+    sf.Contact.get.return_value = {
+        "Id": "003000000000005",
+        "CRM_ID__c": "crm-123",
+        "Email": "x@y.com",
+    }
+
+    result = await get_contact_by_crm_id(sf, "crm-123")
+
+    assert result["CRM_ID__c"] == "crm-123"
+    sf.Contact.get.assert_called_once_with("003000000000005")
+
+
+@pytest.mark.asyncio
+async def test_find_unique_contact_by_email_found(sf):
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000006"}]}
+    sf.Contact.get.return_value = {"Id": "003000000000006", "Email": "unique@example.com"}
+
+    result = await find_unique_contact_by_email(sf, "unique@example.com")
+
+    assert result == {"Id": "003000000000006", "Email": "unique@example.com"}
+
+
+@pytest.mark.asyncio
+async def test_find_unique_contact_by_email_not_found(sf):
+    sf.query.return_value = {"totalSize": 0, "records": []}
+
+    result = await find_unique_contact_by_email(sf, "missing@example.com")
+
+    assert result is None
+    sf.Contact.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_find_unique_contact_by_email_returns_none_for_ambiguous_match(sf):
+    sf.query.return_value = {
+        "totalSize": 2,
+        "records": [{"Id": "003000000000006"}, {"Id": "003000000000007"}],
+    }
+
+    result = await find_unique_contact_by_email(sf, "duplicate@example.com")
+
+    assert result is None
+    sf.Contact.get.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -276,3 +337,131 @@ async def test_deactivate_contact_raises_salesforce_error(sf):
 
     with pytest.raises(SalesforceError):
         await deactivate_contact(sf, "err@example.com")
+
+
+# ---------------------------------------------------------------------------
+# update_payment_status (Contract 16)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_payment_status_updates_via_crm_id(sf):
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000040"}]}
+    sf.Contact.get.side_effect = [
+        {
+            "Id": "003000000000040",
+            "CRM_ID__c": "crm-user-1",
+            "Email": "john@example.com",
+            "Registration_ID__c": "REG-123",
+        },
+        {
+            "Id": "003000000000040",
+            "CRM_ID__c": "crm-user-1",
+            "Email": "john@example.com",
+            "Registration_ID__c": "REG-123",
+            "Paid_At__c": "2026-04-02T10:00:00Z",
+        },
+    ]
+
+    result = await update_payment_status(
+        sf,
+        user_id="crm-user-1",
+        email="john@example.com",
+        registration_id="REG-123",
+        paid_at="2026-04-02T10:00:00Z",
+    )
+
+    sf.Contact.update.assert_called_once_with(
+        "003000000000040", {"Paid_At__c": "2026-04-02T10:00:00Z"}
+    )
+    assert result["Paid_At__c"] == "2026-04-02T10:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_update_payment_status_falls_back_to_unique_email(sf):
+    sf.query.side_effect = [
+        {"totalSize": 1, "records": [{"Id": "003000000000041"}]},
+    ]
+    sf.Contact.get.side_effect = [
+        {
+            "Id": "003000000000041",
+            "CRM_ID__c": "crm-user-2",
+            "Email": "unique@example.com",
+        },
+        {
+            "Id": "003000000000041",
+            "CRM_ID__c": "crm-user-2",
+            "Email": "unique@example.com",
+            "Paid_At__c": "2026-04-02T11:00:00Z",
+        },
+    ]
+
+    result = await update_payment_status(
+        sf,
+        user_id=None,
+        email="unique@example.com",
+        registration_id=None,
+        paid_at="2026-04-02T11:00:00Z",
+    )
+
+    sf.Contact.update.assert_called_once_with(
+        "003000000000041", {"Paid_At__c": "2026-04-02T11:00:00Z"}
+    )
+    assert result["Email"] == "unique@example.com"
+
+
+@pytest.mark.asyncio
+async def test_update_payment_status_returns_none_for_ambiguous_email(sf):
+    sf.query.return_value = {
+        "totalSize": 2,
+        "records": [{"Id": "003000000000041"}, {"Id": "003000000000042"}],
+    }
+
+    result = await update_payment_status(
+        sf,
+        user_id=None,
+        email="duplicate@example.com",
+        registration_id=None,
+        paid_at="2026-04-02T11:00:00Z",
+    )
+
+    assert result is None
+    sf.Contact.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_payment_status_returns_none_for_registration_id_mismatch(sf):
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000043"}]}
+    sf.Contact.get.return_value = {
+        "Id": "003000000000043",
+        "CRM_ID__c": "crm-user-3",
+        "Email": "mismatch@example.com",
+        "Registration_ID__c": "REG-OLD",
+    }
+
+    result = await update_payment_status(
+        sf,
+        user_id="crm-user-3",
+        email="mismatch@example.com",
+        registration_id="REG-NEW",
+        paid_at="2026-04-02T12:00:00Z",
+    )
+
+    assert result is None
+    sf.Contact.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_payment_status_does_not_fallback_to_email_when_user_id_missing_in_salesforce(sf):
+    sf.query.return_value = {"totalSize": 0, "records": []}
+
+    result = await update_payment_status(
+        sf,
+        user_id="missing-user-id",
+        email="john@example.com",
+        registration_id=None,
+        paid_at="2026-04-02T13:00:00Z",
+    )
+
+    assert result is None
+    sf.Contact.update.assert_not_called()

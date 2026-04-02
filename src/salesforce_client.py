@@ -5,6 +5,7 @@ CUSTOM FIELDS REFERENCE (must be created in Salesforce Setup):
 - Contact.GDPR_Consent__c (Checkbox) — For Contract 1
 - Contact.Registration_ID__c (Text) — Deduplication key for Contract 1
 - Contact.Role__c (Picklist: VISITOR | COMPANY_CONTACT) — For Contract 1, 13, 18
+- Contact.Paid_At__c (DateTime) — Payment timestamp for Contract 16 / Contract 17
 
 - Account.CRM_ID__c (Text, Unique) — UUID v4 for Contract 14, 19, 23
 - Account.VAT_Number__c (Text, External ID, Unique) — For Contract 3, 5a, 5b, 14
@@ -23,6 +24,8 @@ from simple_salesforce import Salesforce, SalesforceError
 from src.config import Config
 
 logger = logging.getLogger(__name__)
+
+_PAYMENT_TIMESTAMP_FIELD = "Paid_At__c"
 
 
 def _escape_soql(value: str) -> str:
@@ -202,6 +205,96 @@ async def get_contact_by_email(
     except SalesforceError as e:
         logger.error("Failed to get contact by email %s: %s", email, str(e))
         raise
+
+
+async def get_contact_by_crm_id(
+    sf: Salesforce, crm_id: str
+) -> dict[str, Any] | None:
+    """Look up a Contact by CRM UUID."""
+    try:
+        escaped_crm_id = _escape_soql(crm_id)
+        query = f"SELECT Id FROM Contact WHERE CRM_ID__c = '{escaped_crm_id}'"
+        result = await asyncio.to_thread(sf.query, query)
+
+        if result["totalSize"] == 0:
+            return None
+        if result["totalSize"] > 1:
+            logger.warning("Multiple Contacts found for CRM_ID__c %s", crm_id)
+            return None
+
+        contact_id = result["records"][0]["Id"]
+        contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        logger.info("Found Contact by CRM_ID__c: %s", crm_id)
+        return contact_record
+    except SalesforceError as e:
+        logger.error("Failed to get contact by CRM_ID__c %s: %s", crm_id, str(e))
+        raise
+
+
+async def find_unique_contact_by_email(
+    sf: Salesforce, email: str
+) -> dict[str, Any] | None:
+    """Look up a Contact by email, but only return a unique match."""
+    try:
+        escaped_email = _escape_soql(email)
+        query = f"SELECT Id FROM Contact WHERE Email = '{escaped_email}'"
+        result = await asyncio.to_thread(sf.query, query)
+
+        if result["totalSize"] == 0:
+            logger.warning("No Contact found for payment confirmation email %s", email)
+            return None
+        if result["totalSize"] > 1:
+            logger.warning("Multiple Contacts found for payment confirmation email %s", email)
+            return None
+
+        contact_id = result["records"][0]["Id"]
+        contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        logger.info("Found unique Contact by email: %s", email)
+        return contact_record
+    except SalesforceError as e:
+        logger.error("Failed to find unique contact by email %s: %s", email, str(e))
+        raise
+
+
+async def update_payment_status(
+    sf: Salesforce,
+    user_id: str | None,
+    email: str,
+    registration_id: str | None,
+    paid_at: str,
+) -> dict[str, Any] | None:
+    """Update a Contact payment timestamp for Contract 16.
+
+    Lookup order:
+    - If user_id is present, search by CRM_ID__c and do not fall back to email.
+    - Otherwise search by email, but only if it resolves to exactly one Contact.
+    """
+    if user_id:
+        contact = await get_contact_by_crm_id(sf, user_id)
+        if contact is None:
+            logger.warning("PaymentConfirmed ignored — no Contact found for userId %s", user_id)
+            return None
+    else:
+        contact = await find_unique_contact_by_email(sf, email)
+        if contact is None:
+            return None
+
+    existing_registration_id = contact.get("Registration_ID__c")
+    if registration_id and existing_registration_id and registration_id != existing_registration_id:
+        logger.warning(
+            "PaymentConfirmed ignored — registrationId mismatch for %s: incoming=%s existing=%s",
+            contact.get("Email", email),
+            registration_id,
+            existing_registration_id,
+        )
+        return None
+
+    contact_id = contact["Id"]
+    await asyncio.to_thread(
+        sf.Contact.update, contact_id, {_PAYMENT_TIMESTAMP_FIELD: paid_at}
+    )
+    logger.info("Updated %s for Contact %s", _PAYMENT_TIMESTAMP_FIELD, contact_id)
+    return await asyncio.to_thread(sf.Contact.get, contact_id)
 
 
 async def deactivate_contact(
