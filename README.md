@@ -47,7 +47,7 @@ Eén Docker container → één Python process → 3 asyncio tasks + sender util
 
 ## Contracten
 
-23 XML-contracten (AsyncAPI v1.5.0). Formele spec:
+26 XML-contracten (AsyncAPI v1.6.0). Formele spec:
 
 - **Bron**: [`docs/crm-asyncapi-v1.yaml`](docs/crm-asyncapi-v1.yaml)
 - **Online bekijken**: [AsyncAPI Studio](https://studio.asyncapi.com/?url=https://raw.githubusercontent.com/Integration-Project-2026-Groep-2/CRM/main/docs/crm-asyncapi-v1.yaml)

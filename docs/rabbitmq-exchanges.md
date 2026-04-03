@@ -1,6 +1,6 @@
 # RabbitMQ Exchanges — Integratieproject 2026
 
-_Bron: ClickUp > Teams > Team CRM > Documentatie CRM > XML Contracts (AsyncAPI v1.5.0)_
+_Bron: ClickUp > Teams > Team CRM > Documentatie CRM > XML Contracts (AsyncAPI v1.6.0)_
 
 ---
 
@@ -65,6 +65,9 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 | `frontend.registration.created` | `user.topic` | Frontend | 1 |
 | `frontend.registration.updated` | `user.topic` | Frontend | 2 |
 | `frontend.company.created` | `user.topic` | Frontend | 3 |
+| `facturatie.user.created` | `user.topic` | Facturatie | 24 |
+| `facturatie.user.updated` | `user.topic` | Facturatie | 25 |
+| `facturatie.user.deactivated` | `user.topic` | Facturatie | 26 |
 | `kassa.person.lookup.requested` | `payment.topic` | Kassa | 10a |
 | `kassa.payment.confirmed` | `payment.topic` | Kassa | 16 |
 | `kassa.unpaid.requested` | `payment.topic` | Kassa | 17a |
@@ -73,6 +76,8 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 | `controlroom.warning.issued` | `planning.topic` | Controlroom | 9 |
 | `iot.badge.linked` | `planning.topic` | IoT | 12 |
 | `mailing.bounce.reported` | `mail.topic` | Mailing | 20 |
+
+> Dezelfde exchange delen betekent **niet** dat berichten automatisch compatibel zijn. CRM moet elke routing key expliciet binden en de payload moet overeenkomen met het contract dat de receiver valideert.
 
 ### Speciale exchanges (apart van topic routing)
 
@@ -85,6 +90,6 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 
 ## Referenties
 
-- ClickUp: Teams > Team CRM > Documentatie CRM > XML Contracts (AsyncAPI v1.5.0)
+- ClickUp: Teams > Team CRM > Documentatie CRM > XML Contracts (AsyncAPI v1.6.0)
 - Formele AsyncAPI specificatie: `docs/crm-asyncapi-v1.yaml`
 - XSD schema: `src/schema/crm-schema-v1.xsd`
