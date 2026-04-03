@@ -17,7 +17,7 @@ All SF calls are wrapped in asyncio.to_thread() to prevent blocking the event lo
 import asyncio
 import logging
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from simple_salesforce import Salesforce, SalesforceError
 
@@ -67,7 +67,7 @@ async def get_salesforce_client(config: Config) -> Salesforce:
 
 
 async def create_contact(sf: Salesforce, data: dict[str, Any]) -> dict[str, Any]:
-    """Create a new Contact in Salesforce (Contract 1).
+    """Create a new Contact in Salesforce (Contracts 1 and 24).
 
     Maps XML Registration fields to Contact fields and returns complete record
     for crm.user.confirmed serialization.
@@ -271,25 +271,69 @@ async def find_unique_contact_by_email(
     sf: Salesforce, email: str
 ) -> dict[str, Any] | None:
     """Look up a Contact by email, but only return a unique match."""
+    match_status, contact = await get_contact_match_by_email(sf, email)
+    if match_status == "none":
+        logger.warning("No Contact found for payment confirmation email %s", email)
+        return None
+    if match_status == "ambiguous":
+        logger.warning("Multiple Contacts found for payment confirmation email %s", email)
+        return None
+    return contact
+
+
+async def get_contact_match_by_email(
+    sf: Salesforce, email: str
+) -> tuple[Literal["none", "unique", "ambiguous"], dict[str, Any] | None]:
+    """Classify an email lookup as no match, unique match, or ambiguous match."""
     try:
         escaped_email = _escape_soql(email)
         query = f"SELECT Id FROM Contact WHERE Email = '{escaped_email}'"
         result = await asyncio.to_thread(sf.query, query)
 
         if result["totalSize"] == 0:
-            logger.warning("No Contact found for payment confirmation email %s", email)
-            return None
+            return "none", None
         if result["totalSize"] > 1:
-            logger.warning("Multiple Contacts found for payment confirmation email %s", email)
-            return None
+            return "ambiguous", None
 
         contact_id = result["records"][0]["Id"]
         contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
         logger.info("Found unique Contact by email: %s", email)
-        return contact_record
+        return "unique", contact_record
     except SalesforceError as e:
-        logger.error("Failed to find unique contact by email %s: %s", email, str(e))
+        logger.error("Failed to get contact match by email %s: %s", email, str(e))
         raise
+
+
+async def ensure_contact_identifiers(
+    sf: Salesforce,
+    contact: dict[str, Any],
+    registration_id: str | None = None,
+) -> dict[str, Any]:
+    """Ensure a Contact has the canonical identifiers needed by CRM contracts.
+
+    - Always ensure CRM_ID__c exists.
+    - Only set Registration_ID__c when it is currently empty and an inbound
+      registration_id is provided.
+    """
+    updates: dict[str, Any] = {}
+
+    if not contact.get("CRM_ID__c"):
+        updates["CRM_ID__c"] = str(uuid.uuid4())
+
+    if registration_id and not contact.get("Registration_ID__c"):
+        updates["Registration_ID__c"] = registration_id
+
+    if not updates:
+        return contact
+
+    contact_id = contact["Id"]
+    await asyncio.to_thread(sf.Contact.update, contact_id, updates)
+    logger.info(
+        "Normalized Contact %s identifiers: %s",
+        contact_id,
+        ", ".join(sorted(updates.keys())),
+    )
+    return await asyncio.to_thread(sf.Contact.get, contact_id)
 
 
 async def get_unpaid_contacts(sf: Salesforce) -> list[dict[str, Any]]:

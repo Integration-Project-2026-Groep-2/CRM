@@ -2,6 +2,7 @@
 Unit tests — receiver.py
 Contract 9: controlroom.warning.issued
 Contract 1 + 13: frontend.registration.created → crm.user.confirmed
+Contract 24: facturatie.user.created → crm.user.confirmed
 """
 
 import logging
@@ -105,6 +106,7 @@ VALID_REG_XML = b"""<?xml version='1.0' encoding='utf-8'?>
 </Registration>"""
 
 CONTACT_RETURN = {
+    "Id": "003000000000001",
     "CRM_ID__c": "123e4567-e89b-12d3-a456-426614174000",
     "Email": "john.doe@example.com",
     "FirstName": "John",
@@ -112,6 +114,33 @@ CONTACT_RETURN = {
     "Role__c": "VISITOR",
     "GDPR_Consent__c": True,
     "Phone": "+32412345678",
+}
+
+VALID_FACTURATIE_USER_CREATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<UserCreated>
+    <facturatieCustomerId>FB-1024</facturatieCustomerId>
+    <registrationId>REG-20260415-010</registrationId>
+    <firstName>Els</firstName>
+    <lastName>Peeters</lastName>
+    <email>els.peeters@example.com</email>
+    <phone>+32470111222</phone>
+    <role>COMPANY_CONTACT</role>
+    <gdprConsent>true</gdprConsent>
+    <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
+    <createdAt>2026-04-15T09:30:00Z</createdAt>
+</UserCreated>"""
+
+FACTURATIE_CONTACT_RETURN = {
+    "Id": "003000000000024",
+    "CRM_ID__c": "223e4567-e89b-12d3-a456-426614174024",
+    "Email": "els.peeters@example.com",
+    "FirstName": "Els",
+    "LastName": "Peeters",
+    "Role__c": "COMPANY_CONTACT",
+    "GDPR_Consent__c": True,
+    "Phone": "+32470111222",
+    "Company_ID__c": "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901",
+    "Registration_ID__c": "REG-20260415-010",
 }
 
 
@@ -440,6 +469,231 @@ class TestHandleRegistration:
 
             mock_create.assert_not_called()
             msg.reject.assert_called_once_with(requeue=True)
+
+
+# ==========================================================================
+# Contract 24 + 13: facturatie.user.created
+# ==========================================================================
+
+
+class TestHandleFacturatieUserCreated:
+    @pytest.fixture
+    def sf_mock(self):
+        return AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_new_facturatie_user_creates_contact_and_publishes_confirmed(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_CREATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.receiver.create_contact", return_value=FACTURATIE_CONTACT_RETURN) as mock_create,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_mail_requested") as mock_mail,
+            patch("src.receiver.get_contact_by_email") as mock_fallback_lookup,
+        ):
+            from src.receiver import handle_facturatie_user_created
+
+            msg = _make_message(VALID_FACTURATIE_USER_CREATED_XML)
+            await handle_facturatie_user_created(msg, sf_mock)
+
+            mock_create.assert_called_once()
+            create_payload = mock_create.call_args.args[1]
+            assert create_payload["FirstName"] == "Els"
+            assert create_payload["LastName"] == "Peeters"
+            assert create_payload["Email"] == "els.peeters@example.com"
+            assert create_payload["Role__c"] == "COMPANY_CONTACT"
+            assert create_payload["Phone"] == "+32470111222"
+            assert create_payload["Company_ID__c"] == "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901"
+            assert create_payload["Registration_ID__c"] == "REG-20260415-010"
+            mock_publish.assert_called_once()
+            published_user = mock_publish.call_args.args[0]
+            assert published_user["companyId"] == "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901"
+            mock_mail.assert_not_called()
+            mock_fallback_lookup.assert_not_called()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_existing_unique_facturatie_user_is_reused_and_confirmed(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_CREATED_XML)
+        existing_contact = {
+            "Id": "003000000000025",
+            "Email": "els.peeters@example.com",
+        }
+        normalized_contact = {
+            **FACTURATIE_CONTACT_RETURN,
+            "Id": "003000000000025",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.receiver.create_contact") as mock_create,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_mail_requested") as mock_mail,
+        ):
+            from src.receiver import handle_facturatie_user_created
+
+            msg = _make_message(VALID_FACTURATIE_USER_CREATED_XML)
+            await handle_facturatie_user_created(msg, sf_mock)
+
+            mock_ensure.assert_called_once_with(
+                sf_mock,
+                existing_contact,
+                registration_id="REG-20260415-010",
+            )
+            mock_create.assert_not_called()
+            mock_publish.assert_called_once()
+            published_user = mock_publish.call_args.args[0]
+            assert published_user["companyId"] == "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901"
+            mock_mail.assert_not_called()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_existing_contact_without_crm_id_still_publishes_after_normalization(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_CREATED_XML)
+        existing_contact = {
+            "Id": "003000000000026",
+            "Email": "els.peeters@example.com",
+            "Registration_ID__c": None,
+        }
+        normalized_contact = {
+            **FACTURATIE_CONTACT_RETURN,
+            "Id": "003000000000026",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+        ):
+            from src.receiver import handle_facturatie_user_created
+
+            msg = _make_message(VALID_FACTURATIE_USER_CREATED_XML)
+            await handle_facturatie_user_created(msg, sf_mock)
+
+            mock_ensure.assert_called_once()
+            published_user = mock_publish.call_args.args[0]
+            assert published_user["id"] == FACTURATIE_CONTACT_RETURN["CRM_ID__c"]
+            assert published_user["companyId"] == "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901"
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_existing_inactive_facturatie_user_keeps_fallback_active_field_state(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_CREATED_XML)
+        existing_contact = {
+            "Id": "003000000000029",
+            "Email": "els.peeters@example.com",
+        }
+        normalized_contact = {
+            **FACTURATIE_CONTACT_RETURN,
+            "Id": "003000000000029",
+            "Active__c": False,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact),
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+        ):
+            from src.receiver import handle_facturatie_user_created
+
+            msg = _make_message(VALID_FACTURATIE_USER_CREATED_XML)
+            await handle_facturatie_user_created(msg, sf_mock)
+
+            published_user = mock_publish.call_args.args[0]
+            assert published_user["isActive"] is False
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_facturatie_user_email_is_acked_without_publish(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_CREATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_match_by_email", return_value=("ambiguous", None)),
+            patch("src.receiver.create_contact") as mock_create,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_facturatie_user_created
+
+            msg = _make_message(VALID_FACTURATIE_USER_CREATED_XML)
+            await handle_facturatie_user_created(msg, sf_mock)
+
+            mock_create.assert_not_called()
+            mock_publish.assert_not_called()
+            msg.ack.assert_called_once()
+            assert "ambiguous email els.peeters@example.com" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_facturatie_user_created_invalid_xml_rejected(self, sf_mock):
+        with patch("src.xml_validator.validate", side_effect=ValueError("Bad XML")):
+            from src.receiver import handle_facturatie_user_created
+
+            msg = _make_message(INVALID_XML)
+            await handle_facturatie_user_created(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+
+    @pytest.mark.asyncio
+    async def test_facturatie_user_created_without_gdpr_consent_rejected(self, sf_mock, caplog):
+        invalid_gdpr_xml = VALID_FACTURATIE_USER_CREATED_XML.replace(
+            b"<gdprConsent>true</gdprConsent>",
+            b"<gdprConsent>false</gdprConsent>",
+        )
+        parsed_xml = etree.fromstring(invalid_gdpr_xml)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_facturatie_user_created
+
+            msg = _make_message(invalid_gdpr_xml)
+            await handle_facturatie_user_created(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+            assert "FacturatieUserCreated refused — gdprConsent=false" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_facturatie_user_created_publish_failure_requeues(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_CREATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.receiver.create_contact", return_value=FACTURATIE_CONTACT_RETURN),
+            patch("src.sender.publish_user_confirmed", side_effect=Exception("publish failed")),
+        ):
+            from src.receiver import handle_facturatie_user_created
+
+            msg = _make_message(VALID_FACTURATIE_USER_CREATED_XML)
+            await handle_facturatie_user_created(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=True)
+
+    @pytest.mark.asyncio
+    async def test_unique_match_state_is_not_treated_as_ambiguous(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_CREATED_XML)
+        existing_contact = {
+            "Id": "003000000000028",
+            "Email": "els.peeters@example.com",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=FACTURATIE_CONTACT_RETURN),
+            patch("src.receiver.create_contact") as mock_create,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.receiver.get_contact_by_email") as mock_fallback_lookup,
+        ):
+            from src.receiver import handle_facturatie_user_created
+
+            msg = _make_message(VALID_FACTURATIE_USER_CREATED_XML)
+            await handle_facturatie_user_created(msg, sf_mock)
+
+            mock_create.assert_not_called()
+            mock_publish.assert_called_once()
+            mock_fallback_lookup.assert_not_called()
+            msg.ack.assert_called_once()
 
 
 # ==========================================================================
@@ -1010,10 +1264,11 @@ class TestHandleUnpaidRequested:
 
 class TestRunReceiver:
     @pytest.mark.asyncio
-    async def test_run_receiver_registers_contract_16_queue(self):
+    async def test_run_receiver_registers_contract_24_queue(self):
         warning_queue = AsyncMock()
         registration_queue = AsyncMock()
         updated_queue = AsyncMock()
+        facturatie_created_queue = AsyncMock()
         payment_queue = AsyncMock()
         unpaid_queue = AsyncMock()
         sf_client = MagicMock()
@@ -1025,7 +1280,57 @@ class TestRunReceiver:
             patch("src.receiver.get_salesforce_client", return_value=sf_client),
             patch(
                 "src.receiver._declare_and_bind",
-                side_effect=[warning_queue, registration_queue, updated_queue, payment_queue, unpaid_queue],
+                side_effect=[
+                    warning_queue,
+                    registration_queue,
+                    updated_queue,
+                    facturatie_created_queue,
+                    payment_queue,
+                    unpaid_queue,
+                ],
+            ) as mock_declare,
+            patch("src.receiver.asyncio.Future", return_value=_stop_receiver()),
+        ):
+            from src.receiver import handle_facturatie_user_created, run_receiver
+
+            with pytest.raises(RuntimeError, match="stop receiver loop"):
+                await run_receiver(AsyncMock(), MagicMock())
+
+            queue_call = next(
+                call for call in mock_declare.call_args_list
+                if call.args[1] == "facturatie.user.created"
+            )
+            assert queue_call.kwargs["durable"] is True
+
+            facturatie_callback = facturatie_created_queue.consume.call_args.args[0]
+            assert facturatie_callback.func is handle_facturatie_user_created
+            assert facturatie_callback.keywords["sf"] is sf_client
+
+    @pytest.mark.asyncio
+    async def test_run_receiver_registers_contract_16_queue(self):
+        warning_queue = AsyncMock()
+        registration_queue = AsyncMock()
+        updated_queue = AsyncMock()
+        facturatie_created_queue = AsyncMock()
+        payment_queue = AsyncMock()
+        unpaid_queue = AsyncMock()
+        sf_client = MagicMock()
+
+        async def _stop_receiver():
+            raise RuntimeError("stop receiver loop")
+
+        with (
+            patch("src.receiver.get_salesforce_client", return_value=sf_client),
+            patch(
+                "src.receiver._declare_and_bind",
+                side_effect=[
+                    warning_queue,
+                    registration_queue,
+                    updated_queue,
+                    facturatie_created_queue,
+                    payment_queue,
+                    unpaid_queue,
+                ],
             ) as mock_declare,
             patch("src.receiver.asyncio.Future", return_value=_stop_receiver()),
         ):
@@ -1034,8 +1339,11 @@ class TestRunReceiver:
             with pytest.raises(RuntimeError, match="stop receiver loop"):
                 await run_receiver(AsyncMock(), MagicMock())
 
-            assert mock_declare.call_args_list[3].args[1] == "kassa.payment.confirmed"
-            assert mock_declare.call_args_list[3].kwargs["durable"] is True
+            queue_call = next(
+                call for call in mock_declare.call_args_list
+                if call.args[1] == "kassa.payment.confirmed"
+            )
+            assert queue_call.kwargs["durable"] is True
 
             payment_callback = payment_queue.consume.call_args.args[0]
             assert payment_callback.func is handle_payment_confirmed
@@ -1046,6 +1354,7 @@ class TestRunReceiver:
         warning_queue = AsyncMock()
         registration_queue = AsyncMock()
         updated_queue = AsyncMock()
+        facturatie_created_queue = AsyncMock()
         payment_queue = AsyncMock()
         unpaid_queue = AsyncMock()
         sf_client = MagicMock()
@@ -1057,7 +1366,14 @@ class TestRunReceiver:
             patch("src.receiver.get_salesforce_client", return_value=sf_client),
             patch(
                 "src.receiver._declare_and_bind",
-                side_effect=[warning_queue, registration_queue, updated_queue, payment_queue, unpaid_queue],
+                side_effect=[
+                    warning_queue,
+                    registration_queue,
+                    updated_queue,
+                    facturatie_created_queue,
+                    payment_queue,
+                    unpaid_queue,
+                ],
             ) as mock_declare,
             patch("src.receiver.asyncio.Future", return_value=_stop_receiver()),
         ):
@@ -1066,8 +1382,11 @@ class TestRunReceiver:
             with pytest.raises(RuntimeError, match="stop receiver loop"):
                 await run_receiver(AsyncMock(), MagicMock())
 
-            assert mock_declare.call_args_list[4].args[1] == "kassa.unpaid.requested"
-            assert mock_declare.call_args_list[4].kwargs["durable"] is True
+            queue_call = next(
+                call for call in mock_declare.call_args_list
+                if call.args[1] == "kassa.unpaid.requested"
+            )
+            assert queue_call.kwargs["durable"] is True
 
             unpaid_callback = unpaid_queue.consume.call_args.args[0]
             assert unpaid_callback.func is handle_unpaid_requested

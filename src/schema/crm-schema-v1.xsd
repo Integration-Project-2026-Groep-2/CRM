@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  CRM Master Schema — Alle contracts (1–23)
+  CRM Master Schema — Alle contracts (1–26)
   Integration Project 2025/2026 | Groep 2
-  Versie 1.1 — Maart 2026
+  Versie 1.2 — April 2026
 
-  Bron: crm-asyncapi-v1.yaml (AsyncAPI 3.1.0, v1.5.0)
+  Bron: crm-asyncapi-v1.yaml (AsyncAPI 3.1.0, v1.6.0)
 
   Gebruik: runtime-validatie via lxml in Python.
 
@@ -65,6 +65,18 @@
     <xs:restriction base="xs:string">
       <xs:enumeration value="VISITOR"/>
       <xs:enumeration value="COMPANY_CONTACT"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="FacturatieUserRoleType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="VISITOR"/>
+      <xs:enumeration value="COMPANY_CONTACT"/>
+      <xs:enumeration value="SPEAKER"/>
+      <xs:enumeration value="EVENT_MANAGER"/>
+      <xs:enumeration value="CASHIER"/>
+      <xs:enumeration value="BAR_STAFF"/>
+      <xs:enumeration value="ADMIN"/>
     </xs:restriction>
   </xs:simpleType>
 
@@ -165,6 +177,27 @@
             </xs:sequence>
           </xs:complexType>
         </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 24 — Facturatie → CRM: user aanmaken
+       Queue: facturatie.user.created | durable: true
+  ============================================================ -->
+  <xs:element name="UserCreated">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="facturatieCustomerId" type="xs:string"/>
+        <xs:element name="registrationId"       type="xs:string" minOccurs="0"/>
+        <xs:element name="firstName"            type="xs:string"/>
+        <xs:element name="lastName"             type="xs:string"/>
+        <xs:element name="email"                type="EmailType"/>
+        <xs:element name="phone"                type="xs:string" minOccurs="0" nillable="true"/>
+        <xs:element name="role"                 type="FacturatieUserRoleType"/>
+        <xs:element name="gdprConsent"          type="xs:boolean"/>
+        <xs:element name="companyId"            type="UUIDType"  minOccurs="0" nillable="true"/>
+        <xs:element name="createdAt"            type="ISO8601DateTimeType"/>
       </xs:sequence>
     </xs:complexType>
   </xs:element>
@@ -584,28 +617,30 @@
 
   <!-- ============================================================
        CONTRACT 18 — CRM → consumers: user updated
-       Queue: crm.user.updated | durable: true
+       CONTRACT 25 — Facturatie → CRM: user updated
+       Queue: crm.user.updated / facturatie.user.updated | durable: true
+       Noot: gedeelde root met order-onafhankelijke veldvalidatie.
   ============================================================ -->
   <xs:element name="UserUpdated">
     <xs:complexType>
-      <xs:sequence>
+      <xs:all>
         <xs:element name="id"          type="UUIDType"/>
         <xs:element name="email"       type="EmailType"/>
         <xs:element name="firstName"   type="xs:string"/>
         <xs:element name="lastName"    type="xs:string"/>
-        <xs:element name="phone"       type="xs:string"       minOccurs="0"/>
-        <xs:element name="role"        type="UserRoleType"/>
-        <xs:element name="companyId"   type="UUIDType"         minOccurs="0"/>
-        <xs:element name="badgeCode"   type="xs:string"        minOccurs="0"/>
-        <xs:element name="street"      type="xs:string"        minOccurs="0"/>
-        <xs:element name="houseNumber" type="xs:string"        minOccurs="0"/>
-        <xs:element name="postalCode"  type="xs:string"        minOccurs="0"/>
-        <xs:element name="city"        type="xs:string"        minOccurs="0"/>
-        <xs:element name="country"     type="CountryCodeType"  minOccurs="0"/>
+        <xs:element name="phone"       type="xs:string"       minOccurs="0" nillable="true"/>
+        <xs:element name="street"      type="xs:string"       minOccurs="0" nillable="true"/>
+        <xs:element name="houseNumber" type="xs:string"       minOccurs="0" nillable="true"/>
+        <xs:element name="postalCode"  type="xs:string"       minOccurs="0" nillable="true"/>
+        <xs:element name="city"        type="xs:string"       minOccurs="0" nillable="true"/>
+        <xs:element name="country"     type="CountryCodeType" minOccurs="0" nillable="true"/>
+        <xs:element name="role"        type="FacturatieUserRoleType"/>
+        <xs:element name="companyId"   type="UUIDType"        minOccurs="0" nillable="true"/>
+        <xs:element name="badgeCode"   type="xs:string"       minOccurs="0" nillable="true"/>
         <xs:element name="isActive"    type="xs:boolean"/>
         <xs:element name="gdprConsent" type="xs:boolean"/>
         <xs:element name="updatedAt"   type="ISO8601DateTimeType"/>
-      </xs:sequence>
+      </xs:all>
     </xs:complexType>
   </xs:element>
 
@@ -677,7 +712,8 @@
 
   <!-- ============================================================
        CONTRACT 22 — CRM → consumers: user deactivated (GDPR)
-       Queue: crm.user.deactivated | durable: true
+       CONTRACT 26 — Facturatie → CRM: user deactivated
+       Queue: crm.user.deactivated / facturatie.user.deactivated | durable: true
   ============================================================ -->
   <xs:element name="UserDeactivated">
     <xs:complexType>
