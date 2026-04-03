@@ -33,7 +33,6 @@ import aio_pika
 from aio_pika import DeliveryMode, ExchangeType
 from aiohttp import web
 from dotenv import load_dotenv
-from lxml import etree
 from simple_salesforce import Salesforce
 
 load_dotenv()

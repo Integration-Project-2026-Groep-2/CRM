@@ -72,7 +72,7 @@ async def main() -> None:
     reg_id = sys.argv[2]
     rmq_url = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost/")
 
-    print(f"=== TEST UPDATE (C2 -> C18) ===")
+    print("=== TEST UPDATE (C2 -> C18) ===")
     print(f"  Email:  {email}")
     print(f"  RegID:  {reg_id}")
     print()
@@ -98,8 +98,8 @@ async def main() -> None:
     </updatedFields>
 </RegistrationChange>""".encode("utf-8")
 
-        print(f"  Publishing to: frontend.registration.updated (changeType=updated)")
-        print(f"  Listening on:  contact.topic -> crm.user.updated (temporary test queue)")
+        print("  Publishing to: frontend.registration.updated (changeType=updated)")
+        print("  Listening on:  contact.topic -> crm.user.updated (temporary test queue)")
         await user_exchange.publish(
             aio_pika.Message(body=xml, delivery_mode=DeliveryMode.PERSISTENT),
             routing_key="frontend.registration.updated",
@@ -107,7 +107,7 @@ async def main() -> None:
 
         body = await _wait_for_message(updated_q, "crm.user.updated", email)
         if body:
-            print(f"  OK  crm.user.updated ontvangen (C18)")
+            print("  OK  crm.user.updated ontvangen (C18)")
             print()
             root = etree.fromstring(body)
             print(f"  id:        {root.findtext('id', 'N/A')}")
@@ -117,12 +117,12 @@ async def main() -> None:
             print(f"  isActive:  {root.findtext('isActive', 'N/A')}")
             print(f"  updatedAt: {root.findtext('updatedAt', 'N/A')}")
             print()
-            print(f"  === VOOR DELETE ===")
+            print("  === VOOR DELETE ===")
             print(f"  docker exec crm python scripts/test_delete.py {email} {reg_id}")
         else:
             print(f"  FAIL  Geen response na {POLL_TIMEOUT:.0f}s")
             print("  Verwacht outbound via: contact.topic -> crm.user.updated")
-            print(f"  Check: docker logs crm --tail 20")
+            print("  Check: docker logs crm --tail 20")
             raise SystemExit(1)
 
 

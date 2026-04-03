@@ -4,13 +4,17 @@ Publishes inbound XML (simulating other teams) and verifies the CRM container
 produces the expected outbound XML or Salesforce side effects.
 
 Requires:
-  - A running CRM container connected to RabbitMQ and Salesforce
-  - RabbitMQ accessible on RABBITMQ_URL
+  - Docker Compose only when `E2E_AUTO_START_LOCAL_STACK=1` is set for local
+    `crm` + `rabbitmq` startup
+  - Salesforce credentials in the environment for `@pytest.mark.salesforce`
+    tests
 
 Usage:
-    # Against local Docker
-    docker compose up --build -d
+    # Use an already running CRM + RabbitMQ stack
     python -m pytest tests/e2e/ -v
+
+    # Or explicitly let the suite start the local Docker stack
+    E2E_AUTO_START_LOCAL_STACK=1 python -m pytest tests/e2e/ -v
 
     # Skip Salesforce-dependent tests
     python -m pytest tests/e2e/ -v -m "not salesforce"
@@ -20,7 +24,10 @@ import asyncio
 import os
 import random
 import string
+import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlparse
 
 import aio_pika
 import pytest
@@ -35,12 +42,108 @@ load_dotenv()
 # Tests run on the host, so replace with localhost if needed.
 _raw_url = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost/")
 RABBITMQ_URL = _raw_url.replace("@rabbitmq:", "@localhost:") if "@rabbitmq:" in _raw_url else _raw_url
+E2E_AUTO_START_LOCAL_STACK = os.getenv("E2E_AUTO_START_LOCAL_STACK", "").strip().lower() in {
+    "1", "true", "yes", "on"
+}
 TIMEOUT = 15  # seconds — CRM needs time for Salesforce round-trip
+STACK_STARTUP_TIMEOUT = 90  # seconds — includes local image build/startup
+REPO_ROOT = Path(__file__).resolve().parents[2]
+_LOCAL_RABBITMQ_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+def _rabbitmq_targets_localhost() -> bool:
+    """Return True when tests should manage the local Docker Compose stack."""
+    parsed = urlparse(RABBITMQ_URL)
+    return (parsed.hostname or "localhost") in _LOCAL_RABBITMQ_HOSTS
+
+
+def _compose_up_local_stack() -> None:
+    """Build and start the local CRM + RabbitMQ stack for e2e tests."""
+    result = subprocess.run(
+        ["docker", "compose", "up", "--build", "-d", "rabbitmq", "crm"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Failed to start local Docker stack for e2e tests.\n"
+            f"stdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+
+
+async def _wait_for_local_rabbitmq(timeout: float = STACK_STARTUP_TIMEOUT) -> None:
+    """Wait until the local AMQP endpoint accepts connections."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    last_error: Exception | None = None
+
+    while asyncio.get_event_loop().time() < deadline:
+        try:
+            conn = await aio_pika.connect_robust(RABBITMQ_URL)
+            await conn.close()
+            return
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            await asyncio.sleep(1)
+
+    raise RuntimeError(
+        "Local RabbitMQ did not become reachable for e2e tests "
+        f"within {timeout}s (last error: {last_error})"
+    )
+
+
+async def _wait_for_receiver_queue(
+    queue_name: str, timeout: float = STACK_STARTUP_TIMEOUT,
+) -> None:
+    """Wait until the CRM receiver has attached a consumer to an inbound queue."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    last_error: Exception | None = None
+
+    while asyncio.get_event_loop().time() < deadline:
+        conn = None
+        try:
+            conn = await aio_pika.connect_robust(RABBITMQ_URL)
+            channel = await conn.channel()
+            queue = await channel.declare_queue(queue_name, passive=True)
+            if queue.declaration_result.consumer_count > 0:
+                await conn.close()
+                return
+            last_error = RuntimeError(
+                f"Queue {queue_name} exists but has no active consumers yet"
+            )
+            await conn.close()
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if conn is not None:
+                await conn.close()
+        await asyncio.sleep(1)
+
+    raise RuntimeError(
+        "CRM receiver did not become ready for e2e tests "
+        f"within {timeout}s (queue={queue_name}, last error: {last_error})"
+    )
+
+
+@pytest.fixture(scope="module", autouse=True)
+async def ensure_local_e2e_stack():
+    """Optionally auto-start the local Docker stack for e2e tests."""
+    if not E2E_AUTO_START_LOCAL_STACK:
+        return
+    if not _rabbitmq_targets_localhost():
+        raise RuntimeError(
+            "E2E_AUTO_START_LOCAL_STACK=1 requires RABBITMQ_URL to target localhost."
+        )
+
+    await asyncio.to_thread(_compose_up_local_stack)
+    await _wait_for_local_rabbitmq()
+    await _wait_for_receiver_queue("frontend.registration.created")
 
 
 @pytest.fixture
@@ -586,3 +689,107 @@ class TestContract16PaymentConfirmed:
         assert remaining == 0, f"PaymentConfirmed message still in queue (count={remaining})"
         assert contact["Email"] == email
         assert _normalize_utc_datetime(contact["Paid_At__c"]) == _normalize_utc_datetime(paid_at)
+
+
+# ---------------------------------------------------------------------------
+# Contract 17 — Unpaid Request → unpaid participants response
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.salesforce
+class TestContract17UnpaidRequested:
+    """C17: kassa.unpaid.requested returns only unpaid Contacts."""
+
+    @pytest.mark.asyncio
+    async def test_unpaid_request_returns_only_contacts_without_payment_timestamp(
+        self, channel, inbound_exchanges, outbound_exchange, sf_client,
+    ):
+        paid_email = _unique_email()
+        unpaid_email = _unique_email()
+        paid_registration_id = f"REG-E2E-PAID-{random.randint(100000, 999999)}"
+        unpaid_registration_id = f"REG-E2E-UNPAID-{random.randint(100000, 999999)}"
+
+        q_confirmed = await _create_temp_queue(channel, outbound_exchange, "crm.user.confirmed")
+        q_unpaid = await _create_temp_queue(channel, outbound_exchange, "crm.unpaid.responded")
+        await _drain_queue(q_confirmed)
+        await _drain_queue(q_unpaid)
+
+        paid_registration_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<Registration>
+    <registrationId>{paid_registration_id}</registrationId>
+    <firstName>Paid</firstName>
+    <lastName>Person</lastName>
+    <email>{paid_email}</email>
+    <sessionId>SESS-E2E-017A</sessionId>
+    <role>VISITOR</role>
+    <gdprConsent>true</gdprConsent>
+</Registration>"""
+        unpaid_registration_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<Registration>
+    <registrationId>{unpaid_registration_id}</registrationId>
+    <firstName>Unpaid</firstName>
+    <lastName>Person</lastName>
+    <email>{unpaid_email}</email>
+    <sessionId>SESS-E2E-017B</sessionId>
+    <role>VISITOR</role>
+    <gdprConsent>true</gdprConsent>
+</Registration>"""
+
+        await _publish(inbound_exchanges["user.topic"], "frontend.registration.created", paid_registration_xml)
+        paid_confirmed = await _consume_one(q_confirmed)
+        assert paid_confirmed is not None, "Prerequisite: first registration must produce UserConfirmed"
+
+        paid_user_id = paid_confirmed.findtext("id")
+        assert paid_user_id is not None, "Paid contact confirmation did not contain an id"
+
+        await _publish(inbound_exchanges["user.topic"], "frontend.registration.created", unpaid_registration_xml)
+        unpaid_confirmed = await _consume_one(q_confirmed)
+        assert unpaid_confirmed is not None, "Prerequisite: second registration must produce UserConfirmed"
+
+        payment_queue_name = "kassa.payment.confirmed"
+        payment_queue = await channel.declare_queue(payment_queue_name, durable=True)
+        await payment_queue.bind(inbound_exchanges["payment.topic"], routing_key=payment_queue_name)
+        await _drain_queue(payment_queue)
+
+        unpaid_request_queue_name = "kassa.unpaid.requested"
+        unpaid_request_queue = await channel.declare_queue(unpaid_request_queue_name, durable=True)
+        await unpaid_request_queue.bind(
+            inbound_exchanges["payment.topic"], routing_key=unpaid_request_queue_name
+        )
+        await _drain_queue(unpaid_request_queue)
+
+        paid_at = datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+        payment_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<PaymentConfirmed>
+    <userId>{paid_user_id}</userId>
+    <email>{paid_email}</email>
+    <registrationId>{paid_registration_id}</registrationId>
+    <amount>49.95</amount>
+    <currency>EUR</currency>
+    <paidAt>{paid_at}</paidAt>
+</PaymentConfirmed>"""
+
+        await _publish(inbound_exchanges["payment.topic"], payment_queue_name, payment_xml)
+        await _wait_for_contact_paid_at(sf_client, paid_email, paid_at)
+
+        request_id = f"UNPAID-E2E-{random.randint(100000, 999999)}"
+        unpaid_request_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<UnpaidRequest>
+    <requestId>{request_id}</requestId>
+</UnpaidRequest>"""
+
+        await _publish(inbound_exchanges["payment.topic"], unpaid_request_queue_name, unpaid_request_xml)
+
+        response = await _consume_one(q_unpaid)
+        assert response is not None, "Contract 17 response was not published"
+        assert response.findtext("requestId") == request_id
+
+        persons = response.findall("persons/person")
+        returned_emails = [person.findtext("email") for person in persons]
+
+        assert unpaid_email in returned_emails
+        assert paid_email not in returned_emails
+
+        unpaid_person = next(person for person in persons if person.findtext("email") == unpaid_email)
+        assert unpaid_person.findtext("firstName") == "Unpaid"
+        assert unpaid_person.findtext("lastName") == "Person"
