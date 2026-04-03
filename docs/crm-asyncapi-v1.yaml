@@ -1,7 +1,7 @@
 asyncapi: 3.1.0
 info:
   title: Integratieproject 2026 — CRM (Salesforce) RabbitMQ Contracts
-  version: 1.6.0
+  version: 1.7.0
   description: >
     XML-contracten voor alle integraties waarbij het CRM-team (Salesforce)
     betrokken is.
@@ -125,6 +125,54 @@ channels:
     messages:
       facturatieUserDeactivated:
         $ref: "#/components/messages/FacturatieUserDeactivated"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: true
+
+  # ============================================================
+  # MAILING → CRM (user sync)
+  # ============================================================
+
+  mailingUserCreated:
+    address: mailing.user.created
+    description: >-
+      Contract 27 — Mailing → CRM: nieuwe Mailing-user synchroniseren naar
+      Salesforce. Payload volgt de Mailing XSD met verplichte velden id, email
+      en gdprConsent.
+    messages:
+      mailingUserCreated:
+        $ref: "#/components/messages/MailingUserCreated"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: true
+
+  mailingUserUpdated:
+    address: mailing.user.updated
+    description: >-
+      Contract 28 — Mailing → CRM: bestaande Mailing-user bijwerken in
+      Salesforce. Het volledige object wordt meegestuurd voor consistentie met
+      de producer-XSD.
+    messages:
+      mailingUserUpdated:
+        $ref: "#/components/messages/MailingUserUpdated"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: true
+
+  mailingUserDeactivated:
+    address: mailing.user.deactivated
+    description: >-
+      Contract 29 — Mailing → CRM: bestaande Mailing-user soft-deactiveren in
+      Salesforce op basis van GDPR- of annulatiepropagatie.
+    messages:
+      mailingUserDeactivated:
+        $ref: "#/components/messages/MailingUserDeactivated"
     bindings:
       amqp:
         is: queue
@@ -628,6 +676,46 @@ operations:
       - name: facturatie
       - name: contract-26
 
+  receiveMailingUserCreated:
+    action: receive
+    channel:
+      $ref: "#/channels/mailingUserCreated"
+    messages:
+      - $ref: "#/channels/mailingUserCreated/messages/mailingUserCreated"
+    summary: >-
+      Ontvang nieuw user-syncverzoek uit Mailing, valideer de payload en
+      publiceer daarna crm.user.confirmed zodat consumers de officiële CRM UUID
+      kennen.
+    tags:
+      - name: mailing
+      - name: contract-27
+
+  receiveMailingUserUpdated:
+    action: receive
+    channel:
+      $ref: "#/channels/mailingUserUpdated"
+    messages:
+      - $ref: "#/channels/mailingUserUpdated/messages/mailingUserUpdated"
+    summary: >-
+      Ontvang volledig update-object uit Mailing, werk Contact in Salesforce bij
+      en publiceer daarna crm.user.updated.
+    tags:
+      - name: mailing
+      - name: contract-28
+
+  receiveMailingUserDeactivated:
+    action: receive
+    channel:
+      $ref: "#/channels/mailingUserDeactivated"
+    messages:
+      - $ref: "#/channels/mailingUserDeactivated/messages/mailingUserDeactivated"
+    summary: >-
+      Ontvang deactivatieverzoek uit Mailing, voer enkel soft delete uit in
+      Salesforce en publiceer daarna crm.user.deactivated.
+    tags:
+      - name: mailing
+      - name: contract-29
+
   receiveCompanyDataRequest:
     action: receive
     channel:
@@ -739,9 +827,9 @@ operations:
       - $ref: "#/channels/crmUserConfirmed/messages/userConfirmed"
     summary: >-
       Publiceer bevestigd Contact met UUID na Salesforce-validatie. Getriggerd
-      door receiveRegistrationCreated en receiveFacturatieUserCreated. E-mail is
-      deduplicatiesleutel — dubbele e-mail leidt tot sendUserConflict in plaats
-      van dit event.
+      door receiveRegistrationCreated, receiveFacturatieUserCreated en
+      receiveMailingUserCreated. E-mail is deduplicatiesleutel — dubbele e-mail
+      leidt tot sendUserConflict in plaats van dit event.
     tags:
       - name: frontend
       - name: facturatie
@@ -817,8 +905,8 @@ operations:
       - $ref: "#/channels/crmUserUpdated/messages/userUpdated"
     summary: >-
       Publiceer volledig bijgewerkt Contact na update in Salesforce (US-21,
-      US-41) vanuit Frontend- of Facturatie-sync. Consumers updaten hun lokale
-      kopie.
+      US-41) vanuit Frontend-, Facturatie- of Mailing-sync. Consumers updaten
+      hun lokale kopie.
     tags:
       - name: frontend
       - name: facturatie
@@ -874,8 +962,8 @@ operations:
       - $ref: "#/channels/crmUserDeactivated/messages/userDeactivated"
     summary: >-
       Publiceer deactivatie van Contact na Frontend-cancellation,
-      Facturatie-sync of GDPR-verwijderverzoek (US-55). isActive=false — geen
-      fysieke verwijdering.
+      Facturatie-sync, Mailing-sync of GDPR-verwijderverzoek (US-55).
+      isActive=false — geen fysieke verwijdering.
     tags:
       - name: facturatie
       - name: mailing
@@ -1061,6 +1149,79 @@ components:
               <email>els.peeters@example.com</email>
               <deactivatedAt>2026-04-15T16:00:00Z</deactivatedAt>
             </UserDeactivated>
+
+    MailingUserCreated:
+      name: MailingUserCreated
+      title: Mailing user aangemaakt
+      summary: >-
+        Mailing vraagt CRM om een nieuwe user uit de eigen databank te
+        synchroniseren naar Salesforce. CRM bevestigt daarna met
+        crm.user.confirmed zodat consumers de officiële CRM UUID kennen.
+      contentType: application/xml
+      tags:
+        - name: mailing
+        - name: contract-27
+      payload:
+        $ref: "#/components/schemas/MailingUserCreated"
+      examples:
+        - name: mailing_create
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <MailingUserCreated>
+              <id>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</id>
+              <email>els.peeters@example.com</email>
+              <firstName>Els</firstName>
+              <lastName>Peeters</lastName>
+              <gdprConsent>true</gdprConsent>
+              <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
+            </MailingUserCreated>
+
+    MailingUserUpdated:
+      name: MailingUserUpdated
+      title: Mailing user bijgewerkt
+      summary: >-
+        Mailing stuurt een volledig update-object voor een user die al in CRM
+        gekend is of gekoppeld moet blijven aan dezelfde UUID.
+      contentType: application/xml
+      tags:
+        - name: mailing
+        - name: contract-28
+      payload:
+        $ref: "#/components/schemas/MailingUserUpdated"
+      examples:
+        - name: mailing_update
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <MailingUserUpdated>
+              <id>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</id>
+              <email>els.peeters@example.com</email>
+              <firstName>Elise</firstName>
+              <lastName>Peeters</lastName>
+              <gdprConsent>true</gdprConsent>
+              <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
+            </MailingUserUpdated>
+
+    MailingUserDeactivated:
+      name: MailingUserDeactivated
+      title: Mailing user gedeactiveerd
+      summary: >-
+        Mailing vraagt CRM om een bestaande user soft te deactiveren zodat de
+        CRM master data en mailinglijsten GDPR-consistent blijven.
+      contentType: application/xml
+      tags:
+        - name: mailing
+        - name: contract-29
+      payload:
+        $ref: "#/components/schemas/MailingUserDeactivated"
+      examples:
+        - name: mailing_deactivatie
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <MailingUserDeactivated>
+              <id>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</id>
+              <email>els.peeters@example.com</email>
+              <deactivatedAt>2026-04-15T16:00:00Z</deactivatedAt>
+            </MailingUserDeactivated>
 
     CompanyCreated:
       name: CompanyCreated
@@ -1971,6 +2132,91 @@ components:
       description: >-
         Facturatie vraagt CRM om een bestaande CRM-linked user soft te
         deactiveren.
+      properties:
+        id:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        email:
+          type: string
+          format: email
+        deactivatedAt:
+          type: string
+          format: date-time
+
+    MailingUserCreated:
+      type: object
+      required:
+        - id
+        - email
+        - gdprConsent
+      description: >-
+        Mailing synchroniseert een user uit de eigen datastore naar CRM. Deze
+        payload volgt de producer-XSD en bevat bewust alleen de velden die
+        Mailing persistent bewaart.
+      properties:
+        id:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        email:
+          type: string
+          format: email
+        firstName:
+          type: string
+          description: Optioneel — mag in de producer-XSD ook expliciet nil zijn.
+        lastName:
+          type: string
+          description: Optioneel — mag in de producer-XSD ook expliciet nil zijn.
+        gdprConsent:
+          type: boolean
+          description: Verplicht — CRM verwerkt create/update alleen met expliciete toestemming.
+        companyId:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          description: Optioneel — UUID v4 van gekoppeld bedrijf indien al gekend in Mailing.
+
+    MailingUserUpdated:
+      type: object
+      required:
+        - id
+        - email
+        - gdprConsent
+      description: >-
+        Mailing stuurt steeds het volledige gekende user-object om partial
+        merge-ambiguiteit bij CRM te vermijden.
+      properties:
+        id:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        email:
+          type: string
+          format: email
+        firstName:
+          type: string
+          description: Optioneel — mag in de producer-XSD ook expliciet nil zijn.
+        lastName:
+          type: string
+          description: Optioneel — mag in de producer-XSD ook expliciet nil zijn.
+        gdprConsent:
+          type: boolean
+        companyId:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          description: Optioneel — UUID v4 van gekoppeld bedrijf indien al gekend in Mailing.
+
+    MailingUserDeactivated:
+      type: object
+      required:
+        - id
+        - email
+        - deactivatedAt
+      description: >-
+        Mailing vraagt CRM om een bestaande user te deactiveren. CRM voert
+        enkel soft delete uit en publiceert daarna crm.user.deactivated.
       properties:
         id:
           type: string

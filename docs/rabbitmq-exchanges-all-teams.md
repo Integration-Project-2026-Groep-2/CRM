@@ -156,7 +156,7 @@ _Geen eigen docs._
 
 ## Referenties
 
-- ClickUp > Team CRM > Documentatie CRM > XML Contracts (AsyncAPI v1.6.0)
+- ClickUp > Team CRM > Documentatie CRM > XML Contracts (AsyncAPI v1.7.0)
 - ClickUp > Team Facturatie/Mailing > Doc Mailing (SendGrid) > XML/XSD Contracts
 - ClickUp > Team Facturatie/Mailing > Doc Facturatie (FOSSBilling) > XML/XSD Contracts
 - ClickUp > Team Planning > Analyse: Team Planning > XML contracts

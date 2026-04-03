@@ -1,6 +1,6 @@
 # RabbitMQ Exchanges — Integratieproject 2026
 
-_Bron: ClickUp > Teams > Team CRM > Documentatie CRM > XML Contracts (AsyncAPI v1.6.0)_
+_Bron: ClickUp > Teams > Team CRM > Documentatie CRM > XML Contracts (AsyncAPI v1.7.0)_
 
 ---
 
@@ -68,6 +68,9 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 | `facturatie.user.created` | `user.topic` | Facturatie | 24 |
 | `facturatie.user.updated` | `user.topic` | Facturatie | 25 |
 | `facturatie.user.deactivated` | `user.topic` | Facturatie | 26 |
+| `mailing.user.created` | `user.topic` | Mailing | 27 |
+| `mailing.user.updated` | `user.topic` | Mailing | 28 |
+| `mailing.user.deactivated` | `user.topic` | Mailing | 29 |
 | `kassa.person.lookup.requested` | `payment.topic` | Kassa | 10a |
 | `kassa.payment.confirmed` | `payment.topic` | Kassa | 16 |
 | `kassa.unpaid.requested` | `payment.topic` | Kassa | 17a |
@@ -78,6 +81,7 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 | `mailing.bounce.reported` | `mail.topic` | Mailing | 20 |
 
 **Contract 24 runtime-gedrag:** Bij een uniek bestaand Contact hergebruikt CRM dat Contact en kent zo nodig eerst een CRM UUID toe. Deze flow publiceert geen `crm.mail.requested`.
+**Contracten 27-28 inbound-vereisten:** Mailing user sync gebruikt verplichte velden `id`, `email` en `gdprConsent`; `firstName`, `lastName` en `companyId` blijven optioneel volgens de Mailing XSD.
 
 > Dezelfde exchange delen betekent **niet** dat berichten automatisch compatibel zijn. CRM moet elke routing key expliciet binden en de payload moet overeenkomen met het contract dat de receiver valideert.
 
@@ -92,6 +96,6 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 
 ## Referenties
 
-- ClickUp: Teams > Team CRM > Documentatie CRM > XML Contracts (AsyncAPI v1.6.0)
+- ClickUp: Teams > Team CRM > Documentatie CRM > XML Contracts (AsyncAPI v1.7.0)
 - Formele AsyncAPI specificatie: `docs/crm-asyncapi-v1.yaml`
 - XSD schema: `src/schema/crm-schema-v1.xsd`
