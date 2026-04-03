@@ -596,6 +596,8 @@ operations:
     summary: >-
       Ontvang handmatig aangemaakte klant uit Facturatie, valideer voor
       Salesforce en publiceer daarna crm.user.confirmed met de CRM UUID.
+      Bij een uniek bestaand Contact hergebruikt CRM dat Contact en kent zo nodig
+      eerst een CRM UUID toe. Deze flow publiceert geen crm.mail.requested.
     tags:
       - name: facturatie
       - name: contract-24
@@ -979,6 +981,8 @@ components:
       summary: >-
         Facturatie meldt een handmatig aangemaakte klant zodat CRM een Contact
         in Salesforce kan aanmaken en een CRM UUID kan toekennen.
+        Bij een uniek bestaand Contact hergebruikt CRM dat Contact en kent zo nodig
+        eerst een CRM UUID toe. Deze flow publiceert geen crm.mail.requested.
       contentType: application/xml
       tags:
         - name: facturatie
@@ -1854,10 +1858,12 @@ components:
       description: >-
         Facturatie meldt een handmatig aangemaakte klant zodat CRM een Contact
         kan aanmaken in Salesforce en een CRM UUID kan toekennen.
+        Bij een uniek bestaand Contact hergebruikt CRM dat Contact en kent zo nodig
+        eerst een CRM UUID toe. Deze flow publiceert geen crm.mail.requested.
       properties:
         facturatieCustomerId:
           type: string
-          description: Interne klant-ID in FOSSBilling.
+          description: Interne klant-ID in FOSSBilling. Inbound-only voor CRM in v1.6.0.
         registrationId:
           type: string
           description: Optioneel — doorgegeven als er al een registratiereferentie bestaat.

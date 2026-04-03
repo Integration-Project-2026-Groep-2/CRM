@@ -77,6 +77,8 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 | `iot.badge.linked` | `planning.topic` | IoT | 12 |
 | `mailing.bounce.reported` | `mail.topic` | Mailing | 20 |
 
+**Contract 24 runtime-gedrag:** Bij een uniek bestaand Contact hergebruikt CRM dat Contact en kent zo nodig eerst een CRM UUID toe. Deze flow publiceert geen `crm.mail.requested`.
+
 > Dezelfde exchange delen betekent **niet** dat berichten automatisch compatibel zijn. CRM moet elke routing key expliciet binden en de payload moet overeenkomen met het contract dat de receiver valideert.
 
 ### Speciale exchanges (apart van topic routing)

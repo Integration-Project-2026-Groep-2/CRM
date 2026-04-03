@@ -8,7 +8,9 @@ from src.salesforce_client import (
     create_account,
     create_contact,
     deactivate_contact,
+    ensure_contact_identifiers,
     find_unique_contact_by_email,
+    get_contact_match_by_email,
     get_account_by_vat,
     get_contact_by_crm_id,
     get_contact_by_email,
@@ -158,6 +160,86 @@ async def test_find_unique_contact_by_email_returns_none_for_ambiguous_match(sf)
 
     assert result is None
     sf.Contact.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_contact_match_by_email_returns_none_for_no_match(sf):
+    sf.query.return_value = {"totalSize": 0, "records": []}
+
+    match_status, contact = await get_contact_match_by_email(sf, "missing@example.com")
+
+    assert match_status == "none"
+    assert contact is None
+    sf.Contact.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_contact_match_by_email_returns_unique_contact(sf):
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000010"}]}
+    sf.Contact.get.return_value = {"Id": "003000000000010", "Email": "unique@example.com"}
+
+    match_status, contact = await get_contact_match_by_email(sf, "unique@example.com")
+
+    assert match_status == "unique"
+    assert contact == {"Id": "003000000000010", "Email": "unique@example.com"}
+    sf.Contact.get.assert_called_once_with("003000000000010")
+
+
+@pytest.mark.asyncio
+async def test_get_contact_match_by_email_returns_ambiguous_without_fetching_contact(sf):
+    sf.query.return_value = {
+        "totalSize": 2,
+        "records": [{"Id": "003000000000010"}, {"Id": "003000000000011"}],
+    }
+
+    match_status, contact = await get_contact_match_by_email(sf, "duplicate@example.com")
+
+    assert match_status == "ambiguous"
+    assert contact is None
+    sf.Contact.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ensure_contact_identifiers_adds_missing_crm_id_and_registration_id(sf, monkeypatch):
+    monkeypatch.setattr(salesforce_client_module.uuid, "uuid4", lambda: "generated-crm-id")
+    sf.Contact.get.return_value = {
+        "Id": "003000000000008",
+        "Email": "ensure@example.com",
+        "CRM_ID__c": "generated-crm-id",
+        "Registration_ID__c": "REG-NEW",
+    }
+
+    result = await ensure_contact_identifiers(
+        sf,
+        {"Id": "003000000000008", "Email": "ensure@example.com"},
+        registration_id="REG-NEW",
+    )
+
+    sf.Contact.update.assert_called_once_with(
+        "003000000000008",
+        {"CRM_ID__c": "generated-crm-id", "Registration_ID__c": "REG-NEW"},
+    )
+    assert result["CRM_ID__c"] == "generated-crm-id"
+    assert result["Registration_ID__c"] == "REG-NEW"
+
+
+@pytest.mark.asyncio
+async def test_ensure_contact_identifiers_preserves_existing_registration_id(sf):
+    existing_contact = {
+        "Id": "003000000000009",
+        "Email": "keep@example.com",
+        "CRM_ID__c": "existing-crm-id",
+        "Registration_ID__c": "REG-OLD",
+    }
+
+    result = await ensure_contact_identifiers(
+        sf,
+        existing_contact,
+        registration_id="REG-NEW",
+    )
+
+    sf.Contact.update.assert_not_called()
+    assert result == existing_contact
 
 
 @pytest.mark.asyncio

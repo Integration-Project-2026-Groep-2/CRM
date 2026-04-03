@@ -76,6 +76,8 @@ _Bron: ClickUp > Team Facturatie/Mailing > Doc Facturatie (FOSSBilling) > XML/XS
 | `facturatie.company.created` | `company.topic` | Facturatie → CRM |
 | `facturatie.company.updated` | `company.topic` | Facturatie → CRM |
 | `facturatie.company.deactivated` | `company.topic` | Facturatie → CRM |
+
+**CRM Contract 24 note:** Bij een uniek bestaand Contact hergebruikt CRM dat Contact en kent zo nodig eerst een CRM UUID toe. Deze flow publiceert geen `crm.mail.requested`.
 | `heartbeat.facturatie` | `heartbeat.direct` | Facturatie → Controlroom |
 
 ### Planning
