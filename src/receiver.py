@@ -17,8 +17,8 @@ from src.salesforce_client import (
     create_contact,
     deactivate_contact,
     get_contact_by_email,
-    get_unpaid_contacts,
     get_salesforce_client,
+    get_unpaid_contacts,
     update_payment_status,
     upsert_contact_by_email,
 )

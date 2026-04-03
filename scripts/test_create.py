@@ -68,7 +68,7 @@ async def main() -> None:
     email = f"demo.user.{r}@shiftfestival.be"
     reg_id = f"REG-DEMO-{r}"
 
-    print(f"=== TEST CREATE (C1 -> C13) ===")
+    print("=== TEST CREATE (C1 -> C13) ===")
     print(f"  Email:  {email}")
     print(f"  RegID:  {reg_id}")
     print()
@@ -93,8 +93,8 @@ async def main() -> None:
     <phone>+3247{r}</phone>
 </Registration>""".encode("utf-8")
 
-        print(f"  Publishing to: frontend.registration.created")
-        print(f"  Listening on:  contact.topic -> crm.user.confirmed (temporary test queue)")
+        print("  Publishing to: frontend.registration.created")
+        print("  Listening on:  contact.topic -> crm.user.confirmed (temporary test queue)")
         await user_exchange.publish(
             aio_pika.Message(body=xml, delivery_mode=DeliveryMode.PERSISTENT),
             routing_key="frontend.registration.created",
@@ -102,17 +102,17 @@ async def main() -> None:
 
         body = await _wait_for_message(confirmed_q, "crm.user.confirmed", email)
         if body:
-            print(f"  OK  crm.user.confirmed ontvangen (C13)")
+            print("  OK  crm.user.confirmed ontvangen (C13)")
             print()
             print(_pretty_xml(body))
             print()
-            print(f"  === GEBRUIK VOOR UPDATE/DELETE ===")
+            print("  === GEBRUIK VOOR UPDATE/DELETE ===")
             print(f"  docker exec crm python scripts/test_update.py {email} {reg_id}")
             print(f"  docker exec crm python scripts/test_delete.py {email} {reg_id}")
         else:
             print(f"  FAIL  Geen response na {POLL_TIMEOUT:.0f}s")
             print("  Verwacht outbound via: contact.topic -> crm.user.confirmed")
-            print(f"  Check: docker logs crm --tail 20")
+            print("  Check: docker logs crm --tail 20")
             raise SystemExit(1)
 
 
