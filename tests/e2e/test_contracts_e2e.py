@@ -1,21 +1,18 @@
 """E2E tests — verify full contract flows via RabbitMQ.
 
 Publishes inbound XML (simulating other teams) and verifies the CRM container
-produces the expected outbound XML on the correct exchange.
+produces the expected outbound XML or Salesforce side effects.
 
 Requires:
   - A running CRM container connected to RabbitMQ and Salesforce
   - RabbitMQ accessible on RABBITMQ_URL
 
 Usage:
-    # Against Azure VM (via SSH tunnel: ssh -p 60022 -L 5672:localhost:5672 ...)
-    RABBITMQ_URL=amqp://lapin:<password>@localhost/ python -m pytest tests/e2e/ -v
-
     # Against local Docker
     docker compose up --build -d
     python -m pytest tests/e2e/ -v
 
-    # Skip Salesforce-dependent tests (only test C9)
+    # Skip Salesforce-dependent tests
     python -m pytest tests/e2e/ -v -m "not salesforce"
 """
 
@@ -23,12 +20,14 @@ import asyncio
 import os
 import random
 import string
+from datetime import datetime, timezone
 
 import aio_pika
 import pytest
 from aio_pika import ExchangeType
 from dotenv import load_dotenv
 from lxml import etree
+from simple_salesforce import Salesforce
 
 load_dotenv()
 
@@ -74,6 +73,26 @@ async def outbound_exchange(channel):
     """Declare contact.topic to consume CRM's outbound messages."""
     return await channel.declare_exchange(
         "contact.topic", type=ExchangeType.TOPIC, durable=True,
+    )
+
+
+@pytest.fixture
+async def sf_client():
+    """Create a real Salesforce client for e2e verification."""
+    username = os.getenv("SALESFORCE_USERNAME")
+    password = os.getenv("SALESFORCE_PASSWORD")
+    security_token = os.getenv("SALESFORCE_SECURITY_TOKEN")
+    domain = os.getenv("SALESFORCE_DOMAIN", "login")
+
+    if not username or not password or not security_token:
+        pytest.skip("Salesforce credentials missing in environment for e2e test")
+
+    return await asyncio.to_thread(
+        Salesforce,
+        username=username,
+        password=password,
+        security_token=security_token,
+        domain=domain,
     )
 
 
@@ -140,6 +159,64 @@ async def _queue_message_count(channel, queue_name: str) -> int:
         return queue.declaration_result.message_count
     except Exception:
         return -1
+
+
+def _escape_soql(value: str) -> str:
+    """Escape single quotes for SOQL queries in e2e verification helpers."""
+    return value.replace("'", "''")
+
+
+def _normalize_utc_datetime(value: str) -> datetime:
+    """Normalize ISO-8601-like timestamps to UTC without microseconds."""
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    elif len(normalized) >= 5 and normalized[-5] in "+-" and normalized[-3] != ":":
+        normalized = normalized[:-5] + normalized[-5:-2] + ":" + normalized[-2:]
+
+    dt = datetime.fromisoformat(normalized)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).replace(microsecond=0)
+
+
+async def _get_unique_contact_by_email(sf_client, email: str) -> dict | None:
+    """Fetch exactly one Salesforce Contact by email for e2e verification."""
+    query = (
+        "SELECT Id, Email, CRM_ID__c, Registration_ID__c, Paid_At__c "
+        f"FROM Contact WHERE Email = '{_escape_soql(email)}'"
+    )
+    result = await asyncio.to_thread(sf_client.query, query)
+
+    if result["totalSize"] == 0:
+        return None
+    if result["totalSize"] > 1:
+        raise AssertionError(f"Expected unique Contact for {email}, found {result['totalSize']}")
+    return result["records"][0]
+
+
+async def _wait_for_contact_paid_at(
+    sf_client, email: str, expected_paid_at: str, timeout: float = TIMEOUT,
+) -> dict:
+    """Poll Salesforce until the Contact has the expected payment timestamp."""
+    expected_dt = _normalize_utc_datetime(expected_paid_at)
+    deadline = asyncio.get_event_loop().time() + timeout
+    last_seen_paid_at: str | None = None
+
+    while asyncio.get_event_loop().time() < deadline:
+        contact = await _get_unique_contact_by_email(sf_client, email)
+        if contact is not None:
+            last_seen_paid_at = contact.get("Paid_At__c")
+            if last_seen_paid_at is not None:
+                seen_dt = _normalize_utc_datetime(last_seen_paid_at)
+                if seen_dt == expected_dt:
+                    return contact
+        await asyncio.sleep(0.5)
+
+    raise AssertionError(
+        f"Contact {email} did not reach Paid_At__c={expected_paid_at!r} "
+        f"within {timeout}s (last seen: {last_seen_paid_at!r})"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -443,3 +520,69 @@ class TestContract2Cancelled:
 
         result = await _consume_one(q_deactivated, timeout=5)
         assert result is None, "UserDeactivated should NOT be produced for non-existent contact"
+
+
+# ---------------------------------------------------------------------------
+# Contract 16 — Payment Confirmed → Salesforce Paid_At__c update
+# ---------------------------------------------------------------------------
+
+
+# TODO: Add negative C16 e2e coverage for unknown contacts and registrationId mismatches.
+@pytest.mark.salesforce
+class TestContract16PaymentConfirmed:
+    """C16: kassa.payment.confirmed updates Contact.Paid_At__c in Salesforce."""
+
+    @pytest.mark.asyncio
+    async def test_payment_confirmed_updates_contact_paid_at(
+        self, channel, inbound_exchanges, outbound_exchange, sf_client,
+    ):
+        """Happy path: C16 is consumed and Paid_At__c is updated in Salesforce."""
+        email = _unique_email()
+        registration_id = f"REG-E2E-PAY-{random.randint(100000, 999999)}"
+
+        q_confirmed = await _create_temp_queue(channel, outbound_exchange, "crm.user.confirmed")
+        await _drain_queue(q_confirmed)
+
+        registration_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<Registration>
+    <registrationId>{registration_id}</registrationId>
+    <firstName>Payment</firstName>
+    <lastName>Test</lastName>
+    <email>{email}</email>
+    <sessionId>SESS-E2E-006</sessionId>
+    <role>VISITOR</role>
+    <gdprConsent>true</gdprConsent>
+</Registration>"""
+
+        await _publish(inbound_exchanges["user.topic"], "frontend.registration.created", registration_xml)
+
+        confirmed = await _consume_one(q_confirmed)
+        assert confirmed is not None, "Prerequisite: C1 must produce UserConfirmed first"
+
+        user_id = confirmed.findtext("id")
+        assert user_id is not None, "UserConfirmed did not contain an id for Contract 16 lookup"
+
+        queue_name = "kassa.payment.confirmed"
+        payment_queue = await channel.declare_queue(queue_name, durable=True)
+        await payment_queue.bind(inbound_exchanges["payment.topic"], routing_key=queue_name)
+        await _drain_queue(payment_queue)
+
+        paid_at = datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+        payment_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<PaymentConfirmed>
+    <userId>{user_id}</userId>
+    <email>{email}</email>
+    <registrationId>{registration_id}</registrationId>
+    <amount>49.95</amount>
+    <currency>EUR</currency>
+    <paidAt>{paid_at}</paidAt>
+</PaymentConfirmed>"""
+
+        await _publish(inbound_exchanges["payment.topic"], queue_name, payment_xml)
+
+        contact = await _wait_for_contact_paid_at(sf_client, email, paid_at)
+        remaining = await _queue_message_count(channel, queue_name)
+
+        assert remaining == 0, f"PaymentConfirmed message still in queue (count={remaining})"
+        assert contact["Email"] == email
+        assert _normalize_utc_datetime(contact["Paid_At__c"]) == _normalize_utc_datetime(paid_at)

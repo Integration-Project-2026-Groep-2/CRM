@@ -466,6 +466,16 @@ VALID_CANCEL_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <changeType>cancelled</changeType>
 </RegistrationChange>"""
 
+VALID_PAYMENT_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<PaymentConfirmed>
+    <userId>550e8400-e29b-41d4-a716-446655440099</userId>
+    <email>john.doe@example.com</email>
+    <registrationId>REG-12345</registrationId>
+    <amount>99.95</amount>
+    <currency>EUR</currency>
+    <paidAt>2026-04-02T09:30:00Z</paidAt>
+</PaymentConfirmed>"""
+
 UPDATED_CONTACT_RETURN = {
     "Id": "003000000000099",
     "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440099",
@@ -484,6 +494,14 @@ DEACTIVATED_CONTACT_RETURN = {
     "FirstName": "Cancelled",
     "LastName": "User",
     "IsActive__c": False,
+}
+
+PAID_CONTACT_RETURN = {
+    "Id": "003000000000077",
+    "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440099",
+    "Email": "john.doe@example.com",
+    "Registration_ID__c": "REG-12345",
+    "Paid_At__c": "2026-04-02T09:30:00Z",
 }
 
 
@@ -768,3 +786,119 @@ class TestHandleRegistrationUpdated:
 
             msg.reject.assert_called_once_with(requeue=True)
 
+
+# ==========================================================================
+# Contract 16: kassa.payment.confirmed
+# ==========================================================================
+
+
+class TestHandlePaymentConfirmed:
+    @pytest.fixture
+    def sf_mock(self):
+        return AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_payment_confirmed_calls_update_payment_status(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PAYMENT_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.update_payment_status", return_value=PAID_CONTACT_RETURN) as mock_update,
+        ):
+            from src.receiver import handle_payment_confirmed
+
+            await handle_payment_confirmed(_make_message(VALID_PAYMENT_XML), sf_mock)
+
+            mock_update.assert_called_once_with(
+                sf_mock,
+                user_id="550e8400-e29b-41d4-a716-446655440099",
+                email="john.doe@example.com",
+                registration_id="REG-12345",
+                paid_at="2026-04-02T09:30:00Z",
+            )
+
+    @pytest.mark.asyncio
+    async def test_payment_confirmed_acks_on_success(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PAYMENT_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.update_payment_status", return_value=PAID_CONTACT_RETURN),
+        ):
+            from src.receiver import handle_payment_confirmed
+
+            msg = _make_message(VALID_PAYMENT_XML)
+            await handle_payment_confirmed(msg, sf_mock)
+
+            msg.ack.assert_called_once()
+            msg.reject.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_payment_confirmed_acks_when_contact_not_found_or_ambiguous(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PAYMENT_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.update_payment_status", return_value=None),
+        ):
+            from src.receiver import handle_payment_confirmed
+
+            msg = _make_message(VALID_PAYMENT_XML)
+            await handle_payment_confirmed(msg, sf_mock)
+
+            msg.ack.assert_called_once()
+            msg.reject.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_payment_confirmed_invalid_xml_rejected(self, sf_mock):
+        with patch("src.xml_validator.validate", side_effect=ValueError("Bad XML")):
+            from src.receiver import handle_payment_confirmed
+
+            msg = _make_message(INVALID_XML)
+            await handle_payment_confirmed(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+
+    @pytest.mark.asyncio
+    async def test_payment_confirmed_salesforce_error_requeues(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PAYMENT_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.update_payment_status", side_effect=Exception("SF Down")),
+        ):
+            from src.receiver import handle_payment_confirmed
+
+            msg = _make_message(VALID_PAYMENT_XML)
+            await handle_payment_confirmed(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=True)
+
+
+class TestRunReceiver:
+    @pytest.mark.asyncio
+    async def test_run_receiver_registers_contract_16_queue(self):
+        warning_queue = AsyncMock()
+        registration_queue = AsyncMock()
+        updated_queue = AsyncMock()
+        payment_queue = AsyncMock()
+        sf_client = MagicMock()
+
+        async def _stop_receiver():
+            raise RuntimeError("stop receiver loop")
+
+        with (
+            patch("src.receiver.get_salesforce_client", return_value=sf_client),
+            patch(
+                "src.receiver._declare_and_bind",
+                side_effect=[warning_queue, registration_queue, updated_queue, payment_queue],
+            ) as mock_declare,
+            patch("src.receiver.asyncio.Future", return_value=_stop_receiver()),
+        ):
+            from src.receiver import handle_payment_confirmed, run_receiver
+
+            with pytest.raises(RuntimeError, match="stop receiver loop"):
+                await run_receiver(AsyncMock(), MagicMock())
+
+            assert mock_declare.call_args_list[3].args[1] == "kassa.payment.confirmed"
+            assert mock_declare.call_args_list[3].kwargs["durable"] is True
+
+            payment_callback = payment_queue.consume.call_args.args[0]
+            assert payment_callback.func is handle_payment_confirmed
+            assert payment_callback.keywords["sf"] is sf_client

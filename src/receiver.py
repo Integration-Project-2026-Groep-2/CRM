@@ -18,6 +18,7 @@ from src.salesforce_client import (
     deactivate_contact,
     get_contact_by_email,
     get_salesforce_client,
+    update_payment_status,
     upsert_contact_by_email,
 )
 
@@ -93,8 +94,8 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     # await queue_person_lookup.consume(handle_person_lookup)
 
     # Contract 16 — Kassa → CRM: payment confirmed
-    # queue_payment = await _declare_and_bind(channel, "kassa.payment.confirmed", durable=True)
-    # await queue_payment.consume(handle_payment_confirmed)
+    queue_payment = await _declare_and_bind(channel, "kassa.payment.confirmed", durable=True)
+    await queue_payment.consume(partial(handle_payment_confirmed, sf=sf_client))
 
     # Contract 17a — Kassa → CRM: unpaid persons request
     # queue_unpaid = await _declare_and_bind(channel, "kassa.unpaid.requested", durable=True)
@@ -136,6 +137,51 @@ async def handle_warning(message: aio_pika.IncomingMessage) -> None:
         etree.tostring(xml, encoding="unicode"),
     )
     await message.ack()
+
+
+async def handle_payment_confirmed(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 16 — Kassa -> CRM: payment confirmed.
+
+    Queue: kassa.payment.confirmed | durable: true | US-08, US-21
+
+    Behaviour:
+    - Validate XML against schema.
+    - Update Contact.Paid_At__c in Salesforce.
+    - Invalid XML: rejected without requeue.
+    - Unknown/ambiguous Contact or registrationId mismatch: ack without retry.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("PaymentConfirmed — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        user_id = xml.findtext("userId")
+        email = xml.findtext("email") or ""
+        registration_id = xml.findtext("registrationId")
+        paid_at = xml.findtext("paidAt") or ""
+
+        contact = await update_payment_status(
+            sf,
+            user_id=user_id,
+            email=email,
+            registration_id=registration_id,
+            paid_at=paid_at,
+        )
+        if contact is None:
+            await message.ack()
+            return
+
+        logger.info("Processed payment confirmation for %s", contact.get("Email", email))
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("PaymentConfirmed — error processing message: %s", exc)
+        await message.reject(requeue=True)
 
 
 def _build_user_data(contact: dict) -> dict:
