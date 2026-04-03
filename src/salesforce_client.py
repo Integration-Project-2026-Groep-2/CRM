@@ -33,6 +33,18 @@ def _escape_soql(value: str) -> str:
     return value.replace("'", "''")
 
 
+def _normalize_uuid_v4(value: Any) -> str | None:
+    """Return a canonical UUID v4 string or None when invalid."""
+    try:
+        parsed = uuid.UUID(str(value))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+    if parsed.version != 4:
+        return None
+    return str(parsed)
+
+
 async def get_salesforce_client(config: Config) -> Salesforce:
     """Create an authenticated Salesforce client.
 
@@ -76,6 +88,7 @@ async def create_contact(sf: Salesforce, data: dict[str, Any]) -> dict[str, Any]
         # Generate UUID v4 for crm.user.confirmed (Contract 13)
         crm_id = str(uuid.uuid4())
         data["CRM_ID__c"] = crm_id
+        data = await _ensure_contact_active(sf, data)
 
         # Create Contact
         result = await asyncio.to_thread(sf.Contact.create, data)
@@ -116,6 +129,8 @@ async def upsert_contact_by_email(
     existing = await get_contact_by_email(sf, email)
     if existing and existing.get("CRM_ID__c"):
         data["CRM_ID__c"] = existing["CRM_ID__c"]
+    if existing is None:
+        data = await _ensure_contact_active(sf, data)
 
     try:
         result = await asyncio.to_thread(sf.Contact.upsert, f"Email/{email}", data)
@@ -150,11 +165,21 @@ async def upsert_contact_by_email(
 _active_field_cache: str | None = None
 
 
-async def _resolve_contact_active_field(sf: Salesforce) -> str:
-    """Resolve which custom field is used as contact active flag in this org.
+async def _ensure_contact_active(sf: Salesforce, data: dict[str, Any]) -> dict[str, Any]:
+    """Ensure active Contacts are explicitly marked active in Salesforce."""
+    if any(field in data for field in ("IsActive__c", "Active__c", "Is_Active__c")):
+        return data
 
-    Result is cached after first call - custom fields don't change at runtime.
-    """
+    active_field = await _resolve_contact_active_field_optional(sf)
+    if active_field is None:
+        return data
+
+    data[active_field] = True
+    return data
+
+
+async def _resolve_contact_active_field_optional(sf: Salesforce) -> str | None:
+    """Resolve the optional Contact active field without requiring the migration."""
     global _active_field_cache  # noqa: PLW0603
     if _active_field_cache is not None:
         return _active_field_cache
@@ -162,11 +187,22 @@ async def _resolve_contact_active_field(sf: Salesforce) -> str:
     describe = await asyncio.to_thread(sf.Contact.describe)
     available_fields = {field["name"] for field in describe.get("fields", [])}
 
-    # Primary expected name first; fallbacks cover common org naming variants.
     for candidate in ("IsActive__c", "Active__c", "Is_Active__c"):
         if candidate in available_fields:
             _active_field_cache = candidate
             return candidate
+
+    return None
+
+
+async def _resolve_contact_active_field(sf: Salesforce) -> str:
+    """Resolve which custom field is used as contact active flag in this org.
+
+    Result is cached after first call - custom fields don't change at runtime.
+    """
+    active_field = await _resolve_contact_active_field_optional(sf)
+    if active_field is not None:
+        return active_field
 
     raise RuntimeError(
         "No supported Contact active field found. Expected one of: "
@@ -298,6 +334,74 @@ async def ensure_contact_identifiers(
         ", ".join(sorted(updates.keys())),
     )
     return await asyncio.to_thread(sf.Contact.get, contact_id)
+
+
+async def get_unpaid_contacts(sf: Salesforce) -> list[dict[str, Any]]:
+    """Return active Contacts without a payment timestamp for Contract 17.
+
+    Records missing CRM_ID__c or Email are skipped because they cannot be
+    serialized into the outbound XML contract safely.
+    """
+    active_field = await _resolve_contact_active_field_optional(sf)
+    select_fields = [
+        "CRM_ID__c",
+        "FirstName",
+        "LastName",
+        "Email",
+        "AccountId",
+        "Account.Name",
+        "Paid_At__c",
+    ]
+    if active_field is not None:
+        select_fields.append(active_field)
+
+    query = f"SELECT {', '.join(select_fields)} FROM Contact WHERE Paid_At__c = NULL"
+
+    try:
+        result = await asyncio.to_thread(sf.query_all, query)
+    except SalesforceError as e:
+        logger.error("Failed to get unpaid contacts: %s", str(e))
+        raise
+
+    persons: list[dict[str, Any]] = []
+    for record in result.get("records", []):
+        # Older contacts may not have the active field populated yet; treat
+        # missing values as active to avoid hiding valid unpaid participants.
+        if active_field is not None and record.get(active_field) is False:
+            continue
+
+        crm_id = record.get("CRM_ID__c")
+        email = record.get("Email")
+        if not crm_id or not email:
+            logger.warning(
+                "Skipping unpaid contact without required fields: CRM_ID__c=%s Email=%s",
+                crm_id,
+                email,
+            )
+            continue
+        normalized_crm_id = _normalize_uuid_v4(crm_id)
+        if normalized_crm_id is None:
+            logger.warning("Skipping unpaid contact with invalid CRM_ID__c: %s", crm_id)
+            continue
+
+        account = record.get("Account") or {}
+        linked_to_company = bool(record.get("AccountId"))
+
+        person = {
+            "id": normalized_crm_id,
+            "firstName": record.get("FirstName") or "",
+            "lastName": record.get("LastName") or "",
+            "email": email,
+            "linkedToCompany": linked_to_company,
+        }
+        if linked_to_company and account.get("Name"):
+            # Company linkage currently comes from the standard Account relation.
+            person["companyName"] = account["Name"]
+
+        persons.append(person)
+
+    persons.sort(key=lambda person: (person["lastName"], person["firstName"], person["email"]))
+    return persons
 
 
 async def update_payment_status(

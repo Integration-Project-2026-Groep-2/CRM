@@ -20,6 +20,7 @@ from src.salesforce_client import (
     get_contact_match_by_email,
     get_contact_by_email,
     get_salesforce_client,
+    get_unpaid_contacts,
     update_payment_status,
     upsert_contact_by_email,
 )
@@ -106,8 +107,8 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     await queue_payment.consume(partial(handle_payment_confirmed, sf=sf_client))
 
     # Contract 17a — Kassa → CRM: unpaid persons request
-    # queue_unpaid = await _declare_and_bind(channel, "kassa.unpaid.requested", durable=True)
-    # await queue_unpaid.consume(handle_unpaid_requested)
+    queue_unpaid = await _declare_and_bind(channel, "kassa.unpaid.requested", durable=True)
+    await queue_unpaid.consume(partial(handle_unpaid_requested, sf=sf_client))
 
     # Contract 11 — Planning → CRM: session update (Release 2)
     # queue_session = await _declare_and_bind(channel, "planning.session.updated", durable=True)
@@ -192,6 +193,46 @@ async def handle_payment_confirmed(
         await message.reject(requeue=True)
 
 
+async def handle_unpaid_requested(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 17a — Kassa -> CRM: unpaid persons request.
+
+    Queue: kassa.unpaid.requested | durable: true | US-07
+
+    Behaviour:
+    - Validate XML against schema.
+    - Query Salesforce for unpaid Contacts.
+    - Publish crm.unpaid.responded with the same requestId.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("UnpaidRequest — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        request_id = xml.findtext("requestId") or ""
+        persons = await get_unpaid_contacts(sf)
+        await sender.publish_unpaid_responded(request_id, persons)
+        logger.info("Processed unpaid request %s with %d unpaid contacts", request_id, len(persons))
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("UnpaidRequest — error processing message: %s", exc)
+        await message.reject(requeue=True)
+
+
+def _get_contact_is_active(contact: dict) -> bool:
+    """Return the normalized active flag across supported Salesforce field names."""
+    for active_field in ("IsActive__c", "Active__c", "Is_Active__c"):
+        if active_field in contact:
+            return bool(contact[active_field])
+    return True
+
+
 def _build_user_data(contact: dict) -> dict:
     """Build user_data payload dict from a Salesforce contact record."""
     data = {
@@ -200,7 +241,7 @@ def _build_user_data(contact: dict) -> dict:
         "firstName": contact.get("FirstName", ""),
         "lastName": contact.get("LastName", ""),
         "role": contact.get("Role__c", "VISITOR"),
-        "isActive": contact.get("IsActive__c", True),
+        "isActive": _get_contact_is_active(contact),
         "gdprConsent": contact.get("GDPR_Consent__c", True),
         "confirmedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
@@ -421,7 +462,7 @@ def _build_updated_user_data(contact: dict) -> dict:
         "firstName": contact.get("FirstName", ""),
         "lastName": contact.get("LastName", ""),
         "role": contact.get("Role__c", "VISITOR"),
-        "isActive": contact.get("IsActive__c", True),
+        "isActive": _get_contact_is_active(contact),
         "gdprConsent": contact.get("GDPR_Consent__c", True),
         "updatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }

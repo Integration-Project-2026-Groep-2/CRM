@@ -78,7 +78,7 @@ def _pretty_xml(body: bytes, indent: int = 6) -> str:
 
 async def _wait_for_message(queue: aio_pika.abc.AbstractQueue, label: str) -> bytes | None:
     """Poll queue every 500ms for up to POLL_TIMEOUT seconds."""
-    print(f"      Waiting for CRM response", end="", flush=True)
+    print("      Waiting for CRM response", end="", flush=True)
     elapsed = 0.0
     while elapsed < POLL_TIMEOUT:
         msg = await queue.get(fail=False)
@@ -129,9 +129,9 @@ async def main() -> None:
         results: list[bool] = []
 
         # ── STEP 1: CREATE ─────────────────────────────────────────
-        print(f"[1/5] CREATE -- Nieuwe inschrijving (C1 -> C13)")
+        print("[1/5] CREATE -- Nieuwe inschrijving (C1 -> C13)")
         print(f"      Email: {email}")
-        print(f"      Publishing to: frontend.registration.created")
+        print("      Publishing to: frontend.registration.created")
 
         create_xml = f"""<?xml version='1.0' encoding='utf-8'?>
 <Registration>
@@ -152,7 +152,7 @@ async def main() -> None:
 
         body = await _wait_for_message(confirmed_q, "crm.user.confirmed")
         if body:
-            print(f"      OK  crm.user.confirmed ontvangen (C13)")
+            print("      OK  crm.user.confirmed ontvangen (C13)")
             print(_pretty_xml(body))
             _push_event("CREATE", "C13", email)
             results.append(True)
@@ -162,8 +162,8 @@ async def main() -> None:
         print()
 
         # ── STEP 2: UPDATE ─────────────────────────────────────────
-        print(f"[2/5] UPDATE -- Wijzig deelnemerdata (C2 -> C18)")
-        print(f"      Publishing to: frontend.registration.updated (changeType=updated)")
+        print("[2/5] UPDATE -- Wijzig deelnemerdata (C2 -> C18)")
+        print("      Publishing to: frontend.registration.updated (changeType=updated)")
 
         update_xml = f"""<?xml version='1.0' encoding='utf-8'?>
 <RegistrationChange>
@@ -185,7 +185,7 @@ async def main() -> None:
 
         body = await _wait_for_message(updated_q, "crm.user.updated")
         if body:
-            print(f"      OK  crm.user.updated ontvangen (C18)")
+            print("      OK  crm.user.updated ontvangen (C18)")
             _push_event("UPDATE", "C18", email)
             results.append(True)
         else:
@@ -194,7 +194,7 @@ async def main() -> None:
         print()
 
         # ── STEP 3: VERIFY UPDATE ──────────────────────────────────
-        print(f"[3/5] VERIFY -- Gewijzigde velden in C18 response")
+        print("[3/5] VERIFY -- Gewijzigde velden in C18 response")
         if body:
             root = etree.fromstring(body)
             print(f"      id:        {root.findtext('id', 'N/A')}")
@@ -204,13 +204,13 @@ async def main() -> None:
             print(f"      isActive:  {root.findtext('isActive', 'N/A')}")
             print(f"      updatedAt: {root.findtext('updatedAt', 'N/A')}")
         else:
-            print(f"      (overgeslagen -- geen C18 response ontvangen)")
+            print("      (overgeslagen -- geen C18 response ontvangen)")
 
         print()
 
         # ── STEP 4: DELETE ─────────────────────────────────────────
-        print(f"[4/5] DELETE -- Annuleer inschrijving (C2 -> C22)")
-        print(f"      Publishing to: frontend.registration.updated (changeType=cancelled)")
+        print("[4/5] DELETE -- Annuleer inschrijving (C2 -> C22)")
+        print("      Publishing to: frontend.registration.updated (changeType=cancelled)")
 
         cancel_xml = f"""<?xml version='1.0' encoding='utf-8'?>
 <RegistrationChange>
@@ -227,7 +227,7 @@ async def main() -> None:
 
         body = await _wait_for_message(deactivated_q, "crm.user.deactivated")
         if body:
-            print(f"      OK  crm.user.deactivated ontvangen (C22)")
+            print("      OK  crm.user.deactivated ontvangen (C22)")
             print(_pretty_xml(body))
             _push_event("DELETE", "C22", email)
             results.append(True)
@@ -239,7 +239,7 @@ async def main() -> None:
         # ── STEP 5: SUMMARY ───────────────────────────────────────
         labels = ["CREATE", "UPDATE", "DELETE"]
         contracts = ["C1 -> C13", "C2 -> C18", "C2 -> C22"]
-        print(f"[5/5] SAMENVATTING")
+        print("[5/5] SAMENVATTING")
         print()
         for label, contract, ok in zip(labels, contracts, results):
             status = "OK" if ok else "FAIL"

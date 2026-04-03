@@ -579,6 +579,33 @@ class TestHandleFacturatieUserCreated:
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_existing_inactive_facturatie_user_keeps_fallback_active_field_state(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_CREATED_XML)
+        existing_contact = {
+            "Id": "003000000000029",
+            "Email": "els.peeters@example.com",
+        }
+        normalized_contact = {
+            **FACTURATIE_CONTACT_RETURN,
+            "Id": "003000000000029",
+            "Active__c": False,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact),
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+        ):
+            from src.receiver import handle_facturatie_user_created
+
+            msg = _make_message(VALID_FACTURATIE_USER_CREATED_XML)
+            await handle_facturatie_user_created(msg, sf_mock)
+
+            published_user = mock_publish.call_args.args[0]
+            assert published_user["isActive"] is False
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_ambiguous_facturatie_user_email_is_acked_without_publish(self, sf_mock, caplog):
         parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_CREATED_XML)
         with (
@@ -703,6 +730,11 @@ VALID_PAYMENT_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <paidAt>2026-04-02T09:30:00Z</paidAt>
 </PaymentConfirmed>"""
 
+VALID_UNPAID_REQUEST_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<UnpaidRequest>
+    <requestId>UNPAID-001</requestId>
+</UnpaidRequest>"""
+
 UPDATED_CONTACT_RETURN = {
     "Id": "003000000000099",
     "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440099",
@@ -730,6 +762,24 @@ PAID_CONTACT_RETURN = {
     "Registration_ID__c": "REG-12345",
     "Paid_At__c": "2026-04-02T09:30:00Z",
 }
+
+UNPAID_CONTACTS_RETURN = [
+    {
+        "id": "550e8400-e29b-41d4-a716-446655440010",
+        "firstName": "Anna",
+        "lastName": "Peeters",
+        "email": "anna.peeters@example.com",
+        "linkedToCompany": False,
+    },
+    {
+        "id": "550e8400-e29b-41d4-a716-446655440011",
+        "firstName": "Bert",
+        "lastName": "Smeets",
+        "email": "bert.smeets@example.com",
+        "linkedToCompany": True,
+        "companyName": "Acme NV",
+    },
+]
 
 
 class TestHandleRegistrationUpdated:
@@ -816,6 +866,27 @@ class TestHandleRegistrationUpdated:
             assert user_data["postalCode"] == "2000"
             assert user_data["city"] == "Antwerp"
             assert user_data["country"] == "Belgium"
+
+    @pytest.mark.asyncio
+    async def test_updated_uses_active_field_fallbacks_for_is_active(self, sf_mock):
+        """Contract 18: fallback active-field names must not publish stale isActive=true."""
+        parsed_xml = etree.fromstring(VALID_UPDATE_XML)
+        contact_with_fallback_active_field = {
+            **UPDATED_CONTACT_RETURN,
+            "Active__c": False,
+        }
+
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.upsert_contact_by_email", return_value=contact_with_fallback_active_field),
+            patch("src.sender.publish_user_updated") as mock_publish,
+        ):
+            from src.receiver import handle_registration_updated
+
+            await handle_registration_updated(_make_message(VALID_UPDATE_XML), sf_mock)
+
+            user_data = mock_publish.call_args[0][0]
+            assert user_data["isActive"] is False
 
     @pytest.mark.asyncio
     async def test_updated_acks_message(self, sf_mock):
@@ -1098,6 +1169,99 @@ class TestHandlePaymentConfirmed:
             msg.reject.assert_called_once_with(requeue=True)
 
 
+class TestHandleUnpaidRequested:
+    @pytest.fixture
+    def sf_mock(self):
+        return AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_unpaid_requested_calls_salesforce_and_publishes_response(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_UNPAID_REQUEST_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_unpaid_contacts", return_value=UNPAID_CONTACTS_RETURN) as mock_get,
+            patch("src.sender.publish_unpaid_responded") as mock_publish,
+        ):
+            from src.receiver import handle_unpaid_requested
+
+            await handle_unpaid_requested(_make_message(VALID_UNPAID_REQUEST_XML), sf_mock)
+
+            mock_get.assert_called_once_with(sf_mock)
+            mock_publish.assert_called_once_with("UNPAID-001", UNPAID_CONTACTS_RETURN)
+
+    @pytest.mark.asyncio
+    async def test_unpaid_requested_acks_on_success(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_UNPAID_REQUEST_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_unpaid_contacts", return_value=UNPAID_CONTACTS_RETURN),
+            patch("src.sender.publish_unpaid_responded"),
+        ):
+            from src.receiver import handle_unpaid_requested
+
+            msg = _make_message(VALID_UNPAID_REQUEST_XML)
+            await handle_unpaid_requested(msg, sf_mock)
+
+            msg.ack.assert_called_once()
+            msg.reject.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unpaid_requested_publishes_empty_list(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_UNPAID_REQUEST_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_unpaid_contacts", return_value=[]),
+            patch("src.sender.publish_unpaid_responded") as mock_publish,
+        ):
+            from src.receiver import handle_unpaid_requested
+
+            msg = _make_message(VALID_UNPAID_REQUEST_XML)
+            await handle_unpaid_requested(msg, sf_mock)
+
+            mock_publish.assert_called_once_with("UNPAID-001", [])
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_unpaid_requested_invalid_xml_rejected(self, sf_mock):
+        with patch("src.xml_validator.validate", side_effect=ValueError("Bad XML")):
+            from src.receiver import handle_unpaid_requested
+
+            msg = _make_message(INVALID_XML)
+            await handle_unpaid_requested(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+
+    @pytest.mark.asyncio
+    async def test_unpaid_requested_salesforce_error_requeues(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_UNPAID_REQUEST_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_unpaid_contacts", side_effect=Exception("SF Down")),
+            patch("src.sender.publish_unpaid_responded"),
+        ):
+            from src.receiver import handle_unpaid_requested
+
+            msg = _make_message(VALID_UNPAID_REQUEST_XML)
+            await handle_unpaid_requested(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=True)
+
+    @pytest.mark.asyncio
+    async def test_unpaid_requested_publish_error_requeues(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_UNPAID_REQUEST_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_unpaid_contacts", return_value=UNPAID_CONTACTS_RETURN),
+            patch("src.sender.publish_unpaid_responded", side_effect=Exception("RabbitMQ down")),
+        ):
+            from src.receiver import handle_unpaid_requested
+
+            msg = _make_message(VALID_UNPAID_REQUEST_XML)
+            await handle_unpaid_requested(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=True)
+
+
 class TestRunReceiver:
     @pytest.mark.asyncio
     async def test_run_receiver_registers_contract_24_queue(self):
@@ -1106,6 +1270,7 @@ class TestRunReceiver:
         updated_queue = AsyncMock()
         facturatie_created_queue = AsyncMock()
         payment_queue = AsyncMock()
+        unpaid_queue = AsyncMock()
         sf_client = MagicMock()
 
         async def _stop_receiver():
@@ -1121,6 +1286,7 @@ class TestRunReceiver:
                     updated_queue,
                     facturatie_created_queue,
                     payment_queue,
+                    unpaid_queue,
                 ],
             ) as mock_declare,
             patch("src.receiver.asyncio.Future", return_value=_stop_receiver()),
@@ -1147,6 +1313,7 @@ class TestRunReceiver:
         updated_queue = AsyncMock()
         facturatie_created_queue = AsyncMock()
         payment_queue = AsyncMock()
+        unpaid_queue = AsyncMock()
         sf_client = MagicMock()
 
         async def _stop_receiver():
@@ -1162,6 +1329,7 @@ class TestRunReceiver:
                     updated_queue,
                     facturatie_created_queue,
                     payment_queue,
+                    unpaid_queue,
                 ],
             ) as mock_declare,
             patch("src.receiver.asyncio.Future", return_value=_stop_receiver()),
@@ -1180,3 +1348,46 @@ class TestRunReceiver:
             payment_callback = payment_queue.consume.call_args.args[0]
             assert payment_callback.func is handle_payment_confirmed
             assert payment_callback.keywords["sf"] is sf_client
+
+    @pytest.mark.asyncio
+    async def test_run_receiver_registers_contract_17_queue(self):
+        warning_queue = AsyncMock()
+        registration_queue = AsyncMock()
+        updated_queue = AsyncMock()
+        facturatie_created_queue = AsyncMock()
+        payment_queue = AsyncMock()
+        unpaid_queue = AsyncMock()
+        sf_client = MagicMock()
+
+        async def _stop_receiver():
+            raise RuntimeError("stop receiver loop")
+
+        with (
+            patch("src.receiver.get_salesforce_client", return_value=sf_client),
+            patch(
+                "src.receiver._declare_and_bind",
+                side_effect=[
+                    warning_queue,
+                    registration_queue,
+                    updated_queue,
+                    facturatie_created_queue,
+                    payment_queue,
+                    unpaid_queue,
+                ],
+            ) as mock_declare,
+            patch("src.receiver.asyncio.Future", return_value=_stop_receiver()),
+        ):
+            from src.receiver import handle_unpaid_requested, run_receiver
+
+            with pytest.raises(RuntimeError, match="stop receiver loop"):
+                await run_receiver(AsyncMock(), MagicMock())
+
+            queue_call = next(
+                call for call in mock_declare.call_args_list
+                if call.args[1] == "kassa.unpaid.requested"
+            )
+            assert queue_call.kwargs["durable"] is True
+
+            unpaid_callback = unpaid_queue.consume.call_args.args[0]
+            assert unpaid_callback.func is handle_unpaid_requested
+            assert unpaid_callback.keywords["sf"] is sf_client
