@@ -32,6 +32,12 @@ pip install -r requirements-dev.txt
 
 # Tests
 pytest -v
+
+# E2E tegen bestaande lokale stack
+pytest tests/e2e -v
+
+# E2E met expliciete lokale docker autostart
+E2E_AUTO_START_LOCAL_STACK=1 pytest tests/e2e -v
 ```
 
 ## Architectuur
