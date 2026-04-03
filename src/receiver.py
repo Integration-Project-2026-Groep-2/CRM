@@ -4,9 +4,11 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
+from functools import partial
 
 import aio_pika
-from aio_pika.abc import AbstractRobustConnection
+from aio_pika import ExchangeType
+from aio_pika.abc import AbstractChannel, AbstractRobustConnection
 from lxml import etree
 
 from src import salesforce, sender, xml_validator
@@ -20,6 +22,35 @@ from src.salesforce_client import (
 
 logger = logging.getLogger(__name__)
 
+# Queue → topic exchange mapping (Infra-beheerd, zie docs/rabbitmq-exchanges.md)
+_INBOUND_EXCHANGE: dict[str, str] = {
+    "frontend.registration.created": "user.topic",
+    "frontend.registration.updated": "user.topic",
+    "frontend.company.created": "user.topic",
+    "facturatie.company.requested": "invoice.topic",
+    "kassa.person.lookup.requested": "payment.topic",
+    "kassa.payment.confirmed": "payment.topic",
+    "kassa.unpaid.requested": "payment.topic",
+    "planning.session.updated": "planning.topic",
+    "controlroom.warning.issued": "planning.topic",
+    "iot.badge.linked": "planning.topic",
+    "mailing.bounce.reported": "mail.topic",
+}
+
+
+async def _declare_and_bind(
+    channel: AbstractChannel, queue_name: str, durable: bool,
+) -> aio_pika.abc.AbstractQueue:
+    """Declare a queue and bind it to the mapped topic exchange."""
+    queue = await channel.declare_queue(queue_name, durable=durable)
+    exchange_name = _INBOUND_EXCHANGE.get(queue_name)
+    if exchange_name:
+        exchange = await channel.declare_exchange(
+            exchange_name, type=ExchangeType.TOPIC, durable=True,
+        )
+        await queue.bind(exchange, routing_key=queue_name)
+    return queue
+
 
 async def run_receiver(connection: AbstractRobustConnection, config: Config) -> None:
     """Consume messages from all inbound queues, validate XML, process in Salesforce."""
@@ -29,32 +60,47 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     channel = await connection.channel()
 
     # Contract 9 — Controlroom → CRM: system warning
-    # Queue: controlroom.warning.issued | durable: false | US-26
-    queue_warning = await channel.declare_queue(
-        "controlroom.warning.issued", durable=False
-    )
+    # Queue: controlroom.warning.issued | Exchange: planning.topic | durable: false | US-26
+    queue_warning = await _declare_and_bind(channel, "controlroom.warning.issued", durable=False)
     await queue_warning.consume(handle_warning)
 
     # Contract 1 — Frontend → CRM: new registration
-    # Queue: frontend.registration.created | durable: true | US-02, 03, 04, 05, 19
-    queue_registration = await channel.declare_queue(
-        "frontend.registration.created", durable=True
-    )
-    await queue_registration.consume(lambda msg: handle_registration(msg, sf))
+    # Queue: frontend.registration.created | Exchange: user.topic | durable: true
+    queue_registration = await _declare_and_bind(channel, "frontend.registration.created", durable=True)
+    await queue_registration.consume(partial(handle_registration, sf=sf))
 
     # Contract 2 — Frontend → CRM: update/cancel registration
-    # Queue: frontend.registration.updated | durable: true
-    queue_reg_updated = await channel.declare_queue(
-        "frontend.registration.updated", durable=True
-    )
-    await queue_reg_updated.consume(lambda msg: handle_registration_updated(msg, sf))
+    # Queue: frontend.registration.updated | Exchange: user.topic | durable: true
+    queue_reg_updated = await _declare_and_bind(channel, "frontend.registration.updated", durable=True)
+    await queue_reg_updated.consume(partial(handle_registration_updated, sf=sf))
 
     # Contract 3 — Frontend → CRM: create company
-    # Queue: frontend.company.created | durable: true | US-40, US-20
-    queue_company = await channel.declare_queue(
-        "frontend.company.created", durable=True
-    )
-    await queue_company.consume(handle_company_created)
+    # queue_company = await _declare_and_bind(channel, "frontend.company.created", durable=True)
+    # await queue_company.consume(handle_company_created)
+
+    # Contract 5a — Facturatie → CRM: request company data
+    # queue_company_req = await _declare_and_bind(channel, "facturatie.company.requested", durable=True)
+    # await queue_company_req.consume(handle_company_requested)
+
+    # Contract 10a — Kassa → CRM: person lookup request
+    # queue_person_lookup = await _declare_and_bind(channel, "kassa.person.lookup.requested", durable=True)
+    # await queue_person_lookup.consume(handle_person_lookup)
+
+    # Contract 16 — Kassa → CRM: payment confirmed
+    # queue_payment = await _declare_and_bind(channel, "kassa.payment.confirmed", durable=True)
+    # await queue_payment.consume(handle_payment_confirmed)
+
+    # Contract 17a — Kassa → CRM: unpaid persons request
+    # queue_unpaid = await _declare_and_bind(channel, "kassa.unpaid.requested", durable=True)
+    # await queue_unpaid.consume(handle_unpaid_requested)
+
+    # Contract 11 — Planning → CRM: session update (Release 2)
+    # queue_session = await _declare_and_bind(channel, "planning.session.updated", durable=True)
+    # await queue_session.consume(handle_session_updated)
+
+    # Contract 12 — IoT → CRM: badge linked (Release 2)
+    # queue_badge = await _declare_and_bind(channel, "iot.badge.linked", durable=True)
+    # await queue_badge.consume(handle_badge_linked)
 
     logger.info("Receiver started. Listening on all configured queues.")
     await asyncio.Future()  # run forever

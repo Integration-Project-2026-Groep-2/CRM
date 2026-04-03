@@ -132,22 +132,27 @@ class TestRunStatus:
             "disk": 0.15
         }
 
+        mock_exchange = AsyncMock()
+        mock_channel.declare_exchange.return_value = mock_exchange
+
         # Stop the loop after one iteration when publish is called
-        mock_channel.default_exchange.publish.side_effect = asyncio.CancelledError()
+        mock_exchange.publish.side_effect = asyncio.CancelledError()
 
         try:
             await run_status(mock_connection, config)
         except asyncio.CancelledError:
             pass
 
-        # Assert queue is correct and durable=False
-        mock_channel.declare_queue.assert_called_once_with("crm.status.checked", durable=False)
-        
+        # Assert contact.topic exchange is declared
+        mock_channel.declare_exchange.assert_called_once()
+        call_args = mock_channel.declare_exchange.call_args
+        assert call_args[0][0] == "contact.topic"
+
         # Assert publish is called using the correct routing key
-        mock_channel.default_exchange.publish.assert_called_once()
-        args, kwargs = mock_channel.default_exchange.publish.call_args
+        mock_exchange.publish.assert_called_once()
+        args, kwargs = mock_exchange.publish.call_args
         assert kwargs["routing_key"] == "crm.status.checked"
-        
+
         # Verify the published message is valid XML and has correct serviceId
         message = args[0]
         root = etree.fromstring(message.body)
@@ -175,8 +180,11 @@ class TestRunStatus:
             }
         ]
 
+        mock_exchange = AsyncMock()
+        mock_channel.declare_exchange.return_value = mock_exchange
+
         # Stop the loop when it successfully publishes for the first time
-        mock_channel.default_exchange.publish.side_effect = asyncio.CancelledError()
+        mock_exchange.publish.side_effect = asyncio.CancelledError()
 
         try:
             await run_status(mock_connection, config)
@@ -187,4 +195,4 @@ class TestRunStatus:
         assert mock_get_metrics.call_count == 2
         # Verify channel was opened twice (initial + recovery)
         assert mock_connection.channel.call_count == 2
-        mock_channel.default_exchange.publish.assert_called_once()
+        mock_exchange.publish.assert_called_once()
