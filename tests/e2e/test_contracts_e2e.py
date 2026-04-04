@@ -24,6 +24,7 @@ import asyncio
 import os
 import random
 import string
+import uuid
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -144,6 +145,7 @@ async def ensure_local_e2e_stack():
     await asyncio.to_thread(_compose_up_local_stack)
     await _wait_for_local_rabbitmq()
     await _wait_for_receiver_queue("frontend.registration.created")
+    await _wait_for_receiver_queue("mailing.user.created")
 
 
 @pytest.fixture
@@ -217,6 +219,13 @@ async def _create_temp_queue(channel, exchange, routing_key: str):
     return queue
 
 
+async def _create_temp_fanout_queue(channel, exchange):
+    """Create a temporary auto-delete queue bound to a fanout exchange."""
+    queue = await channel.declare_queue("", exclusive=True, auto_delete=True)
+    await queue.bind(exchange)
+    return queue
+
+
 async def _consume_one(queue, timeout: float = TIMEOUT) -> etree._Element | None:
     """Poll for one message until timeout. Returns parsed XML or None."""
     deadline = asyncio.get_event_loop().time() + timeout
@@ -262,6 +271,16 @@ async def _queue_message_count(channel, queue_name: str) -> int:
         return queue.declaration_result.message_count
     except Exception:
         return -1
+
+
+async def _require_salesforce_contact_field(sf_client, field_name: str) -> None:
+    """Skip the current e2e test when a required Salesforce Contact field is absent."""
+    describe = await asyncio.to_thread(sf_client.Contact.describe)
+    available_fields = {field["name"] for field in describe.get("fields", [])}
+    if field_name not in available_fields:
+        pytest.skip(
+            f"Salesforce Contact field {field_name} is missing in the configured org",
+        )
 
 
 def _escape_soql(value: str) -> str:
@@ -485,6 +504,117 @@ class TestContract1Registration:
 
         result = await _consume_one(q_confirmed, timeout=5)
         assert result is None, "UserConfirmed should NOT be produced for invalid XML"
+
+
+# ---------------------------------------------------------------------------
+# Contract 27 → Contract 13 / 15 — Mailing User Create → User Confirmed / Conflict
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.salesforce
+class TestContract27MailingUserCreated:
+    """C27: mailing.user.created → C13 crm.user.confirmed or C15 crm.user.conflict."""
+
+    @pytest.mark.asyncio
+    async def test_new_mailing_user_produces_user_confirmed_without_mail_request(
+        self, channel, inbound_exchanges, outbound_exchange, sf_client,
+    ):
+        await _wait_for_receiver_queue("mailing.user.created")
+        await _require_salesforce_contact_field(sf_client, "Mailing_ID__c")
+
+        email = _unique_email()
+        mailing_id = str(uuid.uuid4())
+        company_id = str(uuid.uuid4())
+
+        q_confirmed = await _create_temp_queue(channel, outbound_exchange, "crm.user.confirmed")
+        q_mail = await _create_temp_queue(channel, outbound_exchange, "crm.mail.requested")
+        await _drain_queue(q_confirmed)
+        await _drain_queue(q_mail)
+
+        xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<MailingUserCreated>
+    <id>{mailing_id}</id>
+    <email>{email}</email>
+    <firstName>Mailing</firstName>
+    <lastName>User</lastName>
+    <gdprConsent>true</gdprConsent>
+    <companyId>{company_id}</companyId>
+</MailingUserCreated>"""
+
+        await _publish(inbound_exchanges["user.topic"], "mailing.user.created", xml)
+
+        confirmed = await _consume_one(q_confirmed)
+        mail_request = await _consume_one(q_mail, timeout=5)
+
+        assert confirmed is not None, "No UserConfirmed message received within timeout"
+        assert confirmed.tag == "UserConfirmed"
+        assert confirmed.findtext("email") == email
+        assert confirmed.findtext("firstName") == "Mailing"
+        assert confirmed.findtext("lastName") == "User"
+        assert confirmed.findtext("role") == "COMPANY_CONTACT"
+        assert confirmed.findtext("companyId") == company_id
+        assert confirmed.findtext("gdprConsent") == "true"
+        assert confirmed.findtext("isActive") == "true"
+        assert confirmed.findtext("id") is not None
+        assert confirmed.findtext("id") != mailing_id
+        assert mail_request is None, "Contract 27 must not produce crm.mail.requested"
+
+    @pytest.mark.asyncio
+    async def test_duplicate_email_with_different_data_produces_user_conflict(
+        self, channel, inbound_exchanges, outbound_exchange, sf_client,
+    ):
+        await _wait_for_receiver_queue("mailing.user.created")
+        await _require_salesforce_contact_field(sf_client, "Mailing_ID__c")
+
+        email = _unique_email()
+
+        q_confirmed = await _create_temp_queue(channel, outbound_exchange, "crm.user.confirmed")
+        await _drain_queue(q_confirmed)
+
+        reg_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<Registration>
+    <registrationId>REG-E2E-MAIL-{random.randint(100000, 999999)}</registrationId>
+    <firstName>Existing</firstName>
+    <lastName>User</lastName>
+    <email>{email}</email>
+    <sessionId>SESS-E2E-MAIL-001</sessionId>
+    <role>VISITOR</role>
+    <gdprConsent>true</gdprConsent>
+</Registration>"""
+
+        await _publish(inbound_exchanges["user.topic"], "frontend.registration.created", reg_xml)
+        existing_confirmed = await _consume_one(q_confirmed)
+        assert existing_confirmed is not None, "Prerequisite: C1 must produce UserConfirmed first"
+
+        await _drain_queue(q_confirmed)
+
+        conflict_exchange = await channel.declare_exchange(
+            "crm.user.conflict", type=ExchangeType.FANOUT, durable=True,
+        )
+        q_conflict = await _create_temp_fanout_queue(channel, conflict_exchange)
+        await _drain_queue(q_conflict)
+
+        mailing_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<MailingUserCreated>
+    <id>{uuid.uuid4()}</id>
+    <email>{email}</email>
+    <firstName>Different</firstName>
+    <lastName>User</lastName>
+    <gdprConsent>true</gdprConsent>
+</MailingUserCreated>"""
+
+        await _publish(inbound_exchanges["user.topic"], "mailing.user.created", mailing_xml)
+
+        conflict = await _consume_one(q_conflict)
+        confirmed = await _consume_one(q_confirmed, timeout=5)
+
+        assert conflict is not None, "No UserConflict message received within timeout"
+        assert conflict.tag == "UserConflict"
+        assert conflict.findtext("email") == email
+        assert conflict.findtext("existingValue/firstName") == "Existing"
+        assert conflict.findtext("incomingValue/firstName") == "Different"
+        assert conflict.findtext("detectedAt") is not None
+        assert confirmed is None, "Conflicting duplicate should not publish UserConfirmed"
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ CUSTOM FIELDS REFERENCE (must be created in Salesforce Setup):
 - Contact.CRM_ID__c (Text, Unique) — UUID v4 for Contract 13, 18, 22
 - Contact.GDPR_Consent__c (Checkbox) — For Contract 1
 - Contact.Registration_ID__c (Text) — Deduplication key for Contract 1
+- Contact.Mailing_ID__c (Text, Unique) — Native Mailing UUID for Contracts 27-29
 - Contact.Role__c (Picklist: VISITOR | COMPANY_CONTACT) — For Contract 1, 13, 18
 - Contact.Paid_At__c (DateTime) — Payment timestamp for Contract 16 / Contract 17
 
@@ -163,6 +164,16 @@ async def upsert_contact_by_email(
 
 
 _active_field_cache: str | None = None
+_mailing_id_field_supported_cache: bool | None = None
+
+
+def _normalize_optional_field_value(value: Any) -> str | None:
+    """Normalize optional Salesforce/text values so blanks behave like absence."""
+    if value is None:
+        return None
+
+    normalized = str(value).strip()
+    return normalized or None
 
 
 async def _ensure_contact_active(sf: Salesforce, data: dict[str, Any]) -> dict[str, Any]:
@@ -208,6 +219,18 @@ async def _resolve_contact_active_field(sf: Salesforce) -> str:
         "No supported Contact active field found. Expected one of: "
         "IsActive__c, Active__c, Is_Active__c"
     )
+
+
+async def has_contact_mailing_id_field(sf: Salesforce) -> bool:
+    """Return whether the Salesforce org exposes Contact.Mailing_ID__c."""
+    global _mailing_id_field_supported_cache  # noqa: PLW0603
+    if _mailing_id_field_supported_cache is not None:
+        return _mailing_id_field_supported_cache
+
+    describe = await asyncio.to_thread(sf.Contact.describe)
+    available_fields = {field["name"] for field in describe.get("fields", [])}
+    _mailing_id_field_supported_cache = "Mailing_ID__c" in available_fields
+    return _mailing_id_field_supported_cache
 
 
 async def get_contact_by_email(
@@ -304,16 +327,42 @@ async def get_contact_match_by_email(
         raise
 
 
+async def get_contact_match_by_mailing_id(
+    sf: Salesforce, mailing_id: str
+) -> tuple[Literal["none", "unique", "ambiguous"], dict[str, Any] | None]:
+    """Classify a Mailing native-ID lookup as no match, unique match, or ambiguous match."""
+    try:
+        escaped_mailing_id = _escape_soql(mailing_id)
+        query = f"SELECT Id FROM Contact WHERE Mailing_ID__c = '{escaped_mailing_id}'"
+        result = await asyncio.to_thread(sf.query, query)
+
+        if result["totalSize"] == 0:
+            return "none", None
+        if result["totalSize"] > 1:
+            return "ambiguous", None
+
+        contact_id = result["records"][0]["Id"]
+        contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        logger.info("Found unique Contact by Mailing_ID__c: %s", mailing_id)
+        return "unique", contact_record
+    except SalesforceError as e:
+        logger.error("Failed to get contact match by Mailing_ID__c %s: %s", mailing_id, str(e))
+        raise
+
+
 async def ensure_contact_identifiers(
     sf: Salesforce,
     contact: dict[str, Any],
     registration_id: str | None = None,
+    mailing_id: str | None = None,
 ) -> dict[str, Any]:
     """Ensure a Contact has the canonical identifiers needed by CRM contracts.
 
     - Always ensure CRM_ID__c exists.
     - Only set Registration_ID__c when it is currently empty and an inbound
       registration_id is provided.
+    - Only set Mailing_ID__c when it is currently empty and an inbound
+      mailing_id is provided.
     """
     updates: dict[str, Any] = {}
 
@@ -323,6 +372,9 @@ async def ensure_contact_identifiers(
     if registration_id and not contact.get("Registration_ID__c"):
         updates["Registration_ID__c"] = registration_id
 
+    if mailing_id and not contact.get("Mailing_ID__c"):
+        updates["Mailing_ID__c"] = mailing_id
+
     if not updates:
         return contact
 
@@ -330,6 +382,63 @@ async def ensure_contact_identifiers(
     await asyncio.to_thread(sf.Contact.update, contact_id, updates)
     logger.info(
         "Normalized Contact %s identifiers: %s",
+        contact_id,
+        ", ".join(sorted(updates.keys())),
+    )
+    return await asyncio.to_thread(sf.Contact.get, contact_id)
+
+
+async def backfill_mailing_contact_fields(
+    sf: Salesforce,
+    contact: dict[str, Any],
+    *,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    company_id: str | None = None,
+    role: str | None = None,
+    gdpr_consent: bool | None = None,
+) -> dict[str, Any]:
+    """Backfill Mailing-owned fields on a compatible existing Contact.
+
+    Text fields are only filled when missing. Role enrichment is narrower:
+    Contract 27 may promote a blank/VISITOR role to COMPANY_CONTACT when the
+    incoming Mailing payload links the user to a company, but it must not
+    overwrite unrelated CRM roles such as ADMIN or SPEAKER.
+    """
+    updates: dict[str, Any] = {}
+
+    if first_name and _normalize_optional_field_value(contact.get("FirstName")) is None:
+        updates["FirstName"] = first_name
+
+    if last_name and _normalize_optional_field_value(contact.get("LastName")) is None:
+        updates["LastName"] = last_name
+
+    requested_role = _normalize_optional_field_value(role)
+    existing_role = _normalize_optional_field_value(contact.get("Role__c"))
+
+    if (
+        company_id
+        and _normalize_optional_field_value(contact.get("Company_ID__c")) is None
+        and existing_role in (None, "VISITOR", "COMPANY_CONTACT")
+    ):
+        updates["Company_ID__c"] = company_id
+
+    if requested_role == "VISITOR" and existing_role is None:
+        updates["Role__c"] = requested_role
+    elif requested_role == "COMPANY_CONTACT" and existing_role in (None, "VISITOR"):
+        if existing_role != "COMPANY_CONTACT":
+            updates["Role__c"] = requested_role
+
+    if gdpr_consent is True and contact.get("GDPR_Consent__c") is None:
+        updates["GDPR_Consent__c"] = True
+
+    if not updates:
+        return contact
+
+    contact_id = contact["Id"]
+    await asyncio.to_thread(sf.Contact.update, contact_id, updates)
+    logger.info(
+        "Backfilled Mailing Contact %s fields: %s",
         contact_id,
         ", ".join(sorted(updates.keys())),
     )

@@ -3,7 +3,7 @@
 Runs 3 asyncio tasks concurrently:
 - heartbeat: XML heartbeat every second (Contract 7)
 - status: CPU/mem/disk status to Controlroom (Contract 8)
-- receiver: listens on 11 RabbitMQ queues
+- receiver: listens on the configured inbound RabbitMQ queues
 
 The sender module is a utility library (not a task) — receiver handlers
 call sender.publish_*() functions to publish outbound messages.

@@ -140,7 +140,17 @@ channels:
     description: >-
       Contract 27 — Mailing → CRM: nieuwe Mailing-user synchroniseren naar
       Salesforce. Payload volgt de Mailing XSD met verplichte velden id, email
-      en gdprConsent.
+      en gdprConsent. CRM bewaart id als native Mailing-identiteit
+      (`Mailing_ID__c`) naast de eigen CRM UUID. Ontbreekt `lastName`, dan
+      normaliseert CRM dit voor Salesforce naar het emailadres. Een
+      company-linkage mag alleen een bestaand blank/VISITOR/COMPANY_CONTACT-contact
+      veilig verrijken zonder conflict-event; daarbij telt ook een reeds
+      opgeslagen `Company_ID__c` mee. Bij hergebruik van een bestaand Contact
+      zet CRM alleen ontbrekende role/GDPR-velden recht voor het
+      `crm.user.confirmed` verstuurt; een expliciete bestaande GDPR opt-out
+      leidt tot conflict. Replays met hetzelfde `Mailing_ID__c` vergelijken
+      e-mailadressen case-insensitief. Zonder dit Salesforce custom field
+      verwerpt CRM het bericht als configuratiefout.
     messages:
       mailingUserCreated:
         $ref: "#/components/messages/MailingUserCreated"
@@ -363,8 +373,9 @@ channels:
       Contract 13 — CRM → alle consumers: Contact aangemaakt of bevestigd in
       Salesforce (US-02, US-19 | R1). Bevat het door CRM gegenereerde UUID v4.
       Consumers slaan dit op naast hun eigen native ID (Option 2 UUID-strategie).
-      E-mail is de deduplicatiesleutel — dubbele inschrijving leidt tot
-      crm.user.conflict (Contract 16).
+      E-mail is de deduplicatiesleutel. Exacte replays of veilige identifier-
+      koppelingen mogen dit event opnieuw publiceren; alleen conflicterende
+      bestaande data leiden tot crm.user.conflict (Contract 15).
     messages:
       userConfirmed:
         $ref: "#/components/messages/UserConfirmed"
@@ -397,10 +408,12 @@ channels:
   crmUserConflict:
     address: crm.user.conflict
     description: >-
-      Contract 15 — CRM → Controlroom + Frontend: dubbele inschrijving
-      gedetecteerd op basis van e-mail (US-34, US-35 | R2). CRM logt beide
-      waarden en publiceert dit event zodat de eventbeheerder manueel kan
-      beslissen welke correct is. Geen crash — bestaand Contact blijft actief.
+      Contract 15 — CRM → Controlroom + Frontend: conflicterende bestaande
+      user-identiteit gedetecteerd tijdens create/sync (US-34, US-35 | R2).
+      Dit event wordt gebruikt bij dubbele inschrijving op e-mail en bij
+      conflicterende Mailing-ID-koppelingen. CRM logt beide waarden en
+      publiceert dit event zodat de eventbeheerder manueel kan beslissen welke
+      correct is. Geen crash — bestaand Contact blijft actief.
 
       BINDING: dit channel gebruikt een fanout exchange (geen named queue).
       Controlroom en Frontend moeten elk een eigen queue aanmaken en die binden
@@ -685,7 +698,9 @@ operations:
     summary: >-
       Ontvang nieuw user-syncverzoek uit Mailing, valideer de payload en
       publiceer daarna crm.user.confirmed zodat consumers de officiële CRM UUID
-      kennen.
+      kennen. CRM bewaart tegelijk de native Mailing ID op het Contact en mag
+      ontbrekende company-linkage, role en GDPR-state veilig aanvullen zolang
+      geen expliciete GDPR opt-out of conflicterende bestaande rol aanwezig is.
     tags:
       - name: mailing
       - name: contract-27
@@ -828,8 +843,9 @@ operations:
     summary: >-
       Publiceer bevestigd Contact met UUID na Salesforce-validatie. Getriggerd
       door receiveRegistrationCreated, receiveFacturatieUserCreated en
-      receiveMailingUserCreated. E-mail is deduplicatiesleutel — dubbele e-mail
-      leidt tot sendUserConflict in plaats van dit event.
+      receiveMailingUserCreated. E-mail is deduplicatiesleutel: exacte replays
+      of veilige identifier-koppelingen mogen opnieuw bevestigen; alleen
+      conflicterende bestaande data leiden tot sendUserConflict.
     tags:
       - name: frontend
       - name: facturatie
@@ -1155,8 +1171,9 @@ components:
       title: Mailing user aangemaakt
       summary: >-
         Mailing vraagt CRM om een nieuwe user uit de eigen databank te
-        synchroniseren naar Salesforce. CRM bevestigt daarna met
-        crm.user.confirmed zodat consumers de officiële CRM UUID kennen.
+        synchroniseren naar Salesforce. CRM bewaart de native Mailing-ID op het
+        Contact en bevestigt daarna met crm.user.confirmed zodat consumers de
+        officiële CRM UUID kennen.
       contentType: application/xml
       tags:
         - name: mailing

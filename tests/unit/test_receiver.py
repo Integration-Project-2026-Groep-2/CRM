@@ -3,6 +3,7 @@ Unit tests — receiver.py
 Contract 9: controlroom.warning.issued
 Contract 1 + 13: frontend.registration.created → crm.user.confirmed
 Contract 24: facturatie.user.created → crm.user.confirmed
+Contract 27 + 15: mailing.user.created → crm.user.confirmed / crm.user.conflict
 """
 
 import logging
@@ -141,6 +142,45 @@ FACTURATIE_CONTACT_RETURN = {
     "Phone": "+32470111222",
     "Company_ID__c": "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901",
     "Registration_ID__c": "REG-20260415-010",
+}
+
+VALID_MAILING_USER_CREATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<MailingUserCreated>
+    <id>323e4567-e89b-42d3-a456-426614174027</id>
+    <email>mia.mail@example.com</email>
+    <firstName>Mia</firstName>
+    <lastName>Mail</lastName>
+    <gdprConsent>true</gdprConsent>
+    <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
+</MailingUserCreated>"""
+
+VALID_MAILING_USER_CREATED_MINIMAL_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<MailingUserCreated>
+    <id>323e4567-e89b-42d3-a456-426614174027</id>
+    <email>mia.mail@example.com</email>
+    <gdprConsent>true</gdprConsent>
+</MailingUserCreated>"""
+
+MAILING_CONTACT_RETURN = {
+    "Id": "003000000000027",
+    "CRM_ID__c": "323e4567-e89b-42d3-a456-426614174127",
+    "Mailing_ID__c": "323e4567-e89b-42d3-a456-426614174027",
+    "Email": "mia.mail@example.com",
+    "FirstName": "Mia",
+    "LastName": "Mail",
+    "Role__c": "COMPANY_CONTACT",
+    "GDPR_Consent__c": True,
+    "Company_ID__c": "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901",
+}
+
+MAILING_MINIMAL_CONTACT_RETURN = {
+    "Id": "003000000000035",
+    "CRM_ID__c": "323e4567-e89b-42d3-a456-426614174128",
+    "Mailing_ID__c": "323e4567-e89b-42d3-a456-426614174027",
+    "Email": "mia.mail@example.com",
+    "LastName": "mia.mail@example.com",
+    "Role__c": "VISITOR",
+    "GDPR_Consent__c": True,
 }
 
 
@@ -694,6 +734,751 @@ class TestHandleFacturatieUserCreated:
             mock_publish.assert_called_once()
             mock_fallback_lookup.assert_not_called()
             msg.ack.assert_called_once()
+
+
+# ==========================================================================
+# Contract 27 + 13 + 15: mailing.user.created
+# ==========================================================================
+
+
+class TestHandleMailingUserCreated:
+    @pytest.fixture
+    def sf_mock(self):
+        return AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_new_mailing_user_creates_contact_and_publishes_confirmed(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_CREATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.receiver.create_contact", return_value=MAILING_CONTACT_RETURN) as mock_create,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+            patch("src.sender.publish_mail_requested") as mock_mail,
+        ):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(VALID_MAILING_USER_CREATED_XML)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            mock_create.assert_called_once()
+            create_payload = mock_create.call_args.args[1]
+            assert create_payload["Mailing_ID__c"] == "323e4567-e89b-42d3-a456-426614174027"
+            assert create_payload["Email"] == "mia.mail@example.com"
+            assert create_payload["FirstName"] == "Mia"
+            assert create_payload["LastName"] == "Mail"
+            assert create_payload["Company_ID__c"] == "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901"
+            assert create_payload["Role__c"] == "COMPANY_CONTACT"
+            mock_publish.assert_called_once()
+            mock_conflict.assert_not_called()
+            mock_mail.assert_not_called()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_new_mailing_user_without_last_name_uses_email_fallback(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_CREATED_MINIMAL_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch(
+                "src.receiver.create_contact",
+                return_value=MAILING_MINIMAL_CONTACT_RETURN,
+            ) as mock_create,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+        ):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(VALID_MAILING_USER_CREATED_MINIMAL_XML)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            mock_create.assert_called_once()
+            create_payload = mock_create.call_args.args[1]
+            assert create_payload["Email"] == "mia.mail@example.com"
+            assert create_payload["LastName"] == "mia.mail@example.com"
+            assert create_payload["Role__c"] == "VISITOR"
+            assert "FirstName" not in create_payload
+            assert "Company_ID__c" not in create_payload
+            mock_conflict.assert_not_called()
+            mock_publish.assert_called_once()
+            confirmed_payload = mock_publish.call_args.args[0]
+            assert confirmed_payload["lastName"] == "mia.mail@example.com"
+            assert confirmed_payload["role"] == "VISITOR"
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_existing_unique_email_without_mailing_id_attaches_identifier(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_CREATED_XML)
+        existing_contact = {
+            "Id": "003000000000028",
+            "Email": "mia.mail@example.com",
+            "FirstName": "Mia",
+            "LastName": "Mail",
+            "Role__c": "COMPANY_CONTACT",
+            "Company_ID__c": "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901",
+        }
+        normalized_contact = {
+            **MAILING_CONTACT_RETURN,
+            "Id": "003000000000028",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch(
+                "src.receiver.backfill_mailing_contact_fields",
+                return_value=normalized_contact,
+            ) as mock_backfill,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+            patch("src.receiver.create_contact") as mock_create,
+        ):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(VALID_MAILING_USER_CREATED_XML)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            mock_ensure.assert_called_once_with(
+                sf_mock,
+                existing_contact,
+                mailing_id="323e4567-e89b-42d3-a456-426614174027",
+            )
+            mock_backfill.assert_called_once_with(
+                sf_mock,
+                normalized_contact,
+                first_name="Mia",
+                last_name="Mail",
+                company_id="c3d4e5f6-a7b8-4901-8d23-ef4567ab8901",
+                role="COMPANY_CONTACT",
+                gdpr_consent=True,
+            )
+            mock_create.assert_not_called()
+            mock_conflict.assert_not_called()
+            mock_publish.assert_called_once()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_exact_replay_republishes_confirmed(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_CREATED_XML)
+        existing_contact = {
+            **MAILING_CONTACT_RETURN,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
+            patch(
+                "src.receiver.backfill_mailing_contact_fields",
+                return_value=existing_contact,
+            ) as mock_backfill,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+        ):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(VALID_MAILING_USER_CREATED_XML)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            mock_ensure.assert_called_once()
+            mock_backfill.assert_called_once_with(
+                sf_mock,
+                existing_contact,
+                first_name="Mia",
+                last_name="Mail",
+                company_id="c3d4e5f6-a7b8-4901-8d23-ef4567ab8901",
+                role="COMPANY_CONTACT",
+                gdpr_consent=True,
+            )
+            mock_publish.assert_called_once()
+            mock_conflict.assert_not_called()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_exact_replay_is_case_insensitive_for_email(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_CREATED_XML)
+        existing_contact = {
+            **MAILING_CONTACT_RETURN,
+            "Email": "Mia.Mail@Example.com",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
+            patch(
+                "src.receiver.backfill_mailing_contact_fields",
+                return_value=existing_contact,
+            ) as mock_backfill,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+        ):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(VALID_MAILING_USER_CREATED_XML)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            mock_ensure.assert_called_once()
+            mock_backfill.assert_called_once()
+            mock_publish.assert_called_once()
+            mock_conflict.assert_not_called()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_email_is_disambiguated_by_unique_mailing_id(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_CREATED_XML)
+        existing_contact = {
+            **MAILING_CONTACT_RETURN,
+            "Id": "003000000000031",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_email", return_value=("ambiguous", None)),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
+            patch(
+                "src.receiver.backfill_mailing_contact_fields",
+                return_value=existing_contact,
+            ) as mock_backfill,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+            patch("src.receiver.create_contact") as mock_create,
+        ):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(VALID_MAILING_USER_CREATED_XML)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            mock_create.assert_not_called()
+            mock_ensure.assert_called_once_with(
+                sf_mock,
+                existing_contact,
+                mailing_id="323e4567-e89b-42d3-a456-426614174027",
+            )
+            mock_backfill.assert_called_once()
+            mock_publish.assert_called_once()
+            mock_conflict.assert_not_called()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_conflicting_existing_email_publishes_user_conflict(self, sf_mock):
+        conflicting_xml = VALID_MAILING_USER_CREATED_XML.replace(
+            b"<firstName>Mia</firstName>",
+            b"<firstName>Different</firstName>",
+        )
+        parsed_xml = etree.fromstring(conflicting_xml)
+        existing_contact = {
+            "Id": "003000000000029",
+            "Email": "mia.mail@example.com",
+            "FirstName": "Mia",
+            "LastName": "Mail",
+            "Role__c": "COMPANY_CONTACT",
+            "Company_ID__c": "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.receiver.ensure_contact_identifiers") as mock_ensure,
+            patch("src.receiver.create_contact") as mock_create,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+        ):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(conflicting_xml)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            mock_create.assert_not_called()
+            mock_ensure.assert_not_called()
+            mock_publish.assert_not_called()
+            mock_conflict.assert_called_once()
+            conflict_payload = mock_conflict.call_args.args[0]
+            assert conflict_payload["existingValue"]["company"] == "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901"
+            assert conflict_payload["incomingValue"]["company"] == "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901"
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_mailing_id_already_linked_to_other_email_publishes_user_conflict(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_CREATED_XML)
+        existing_contact = {
+            "Id": "003000000000030",
+            "Email": "other@example.com",
+            "FirstName": "Other",
+            "LastName": "Person",
+            "Mailing_ID__c": "323e4567-e89b-42d3-a456-426614174027",
+            "Company_ID__c": "existing-company-id",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.create_contact") as mock_create,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(VALID_MAILING_USER_CREATED_XML)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            mock_create.assert_not_called()
+            mock_publish.assert_not_called()
+            mock_conflict.assert_called_once()
+            conflict_payload = mock_conflict.call_args.args[0]
+            assert conflict_payload["existingValue"]["company"] == "existing-company-id"
+            assert conflict_payload["incomingValue"]["company"] == "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901"
+            msg.ack.assert_called_once()
+            assert "Mailing ID 323e4567-e89b-42d3-a456-426614174027 already linked" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_cross_contact_conflict_uses_mailing_id_owner_in_payload(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_CREATED_XML)
+        email_contact = {
+            "Id": "003000000000032",
+            "Email": "mia.mail@example.com",
+            "FirstName": "Email",
+            "LastName": "Owner",
+            "Company_ID__c": "email-company-id",
+        }
+        mailing_contact = {
+            "Id": "003000000000033",
+            "Email": None,
+            "FirstName": "Mailing",
+            "LastName": "Owner",
+            "Mailing_ID__c": "323e4567-e89b-42d3-a456-426614174027",
+            "Company_ID__c": "mailing-company-id",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", email_contact)),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", mailing_contact)),
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(VALID_MAILING_USER_CREATED_XML)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            mock_conflict.assert_called_once()
+            conflict_payload = mock_conflict.call_args.args[0]
+            assert conflict_payload["existingValue"]["firstName"] == "Mailing"
+            assert conflict_payload["existingValue"]["lastName"] == "Owner"
+            assert conflict_payload["existingValue"]["company"] == "mailing-company-id"
+            msg.ack.assert_called_once()
+            assert "email mia.mail@example.com and Mailing ID" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_compatible_existing_contact_is_backfilled_before_confirmation(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_CREATED_XML)
+        existing_contact = {
+            "Id": "003000000000034",
+            "Email": "mia.mail@example.com",
+            "FirstName": "Mia",
+            "LastName": "Mail",
+            "Role__c": None,
+            "Mailing_ID__c": None,
+            "Company_ID__c": None,
+        }
+        normalized_contact = {
+            **existing_contact,
+            "Mailing_ID__c": "323e4567-e89b-42d3-a456-426614174027",
+        }
+        backfilled_contact = {
+            **MAILING_CONTACT_RETURN,
+            "Id": "003000000000034",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch(
+                "src.receiver.backfill_mailing_contact_fields",
+                return_value=backfilled_contact,
+            ) as mock_backfill,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+        ):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(VALID_MAILING_USER_CREATED_XML)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            mock_ensure.assert_called_once_with(
+                sf_mock,
+                existing_contact,
+                mailing_id="323e4567-e89b-42d3-a456-426614174027",
+            )
+            mock_backfill.assert_called_once_with(
+                sf_mock,
+                normalized_contact,
+                first_name="Mia",
+                last_name="Mail",
+                company_id="c3d4e5f6-a7b8-4901-8d23-ef4567ab8901",
+                role="COMPANY_CONTACT",
+                gdpr_consent=True,
+            )
+            mock_conflict.assert_not_called()
+            mock_publish.assert_called_once()
+            confirmed_payload = mock_publish.call_args.args[0]
+            assert confirmed_payload["id"] == "323e4567-e89b-42d3-a456-426614174127"
+            assert confirmed_payload["email"] == "mia.mail@example.com"
+            assert confirmed_payload["firstName"] == "Mia"
+            assert confirmed_payload["lastName"] == "Mail"
+            assert confirmed_payload["role"] == "COMPANY_CONTACT"
+            assert confirmed_payload["companyId"] == "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901"
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_existing_visitor_is_enriched_without_conflict(self, sf_mock):
+        no_last_name_xml = VALID_MAILING_USER_CREATED_XML.replace(
+            b"    <lastName>Mail</lastName>\n",
+            b"",
+        )
+        parsed_xml = etree.fromstring(no_last_name_xml)
+        existing_contact = {
+            "Id": "003000000000036",
+            "Email": "mia.mail@example.com",
+            "FirstName": "Mia",
+            "LastName": None,
+            "Role__c": "VISITOR",
+            "Mailing_ID__c": None,
+            "Company_ID__c": None,
+        }
+        normalized_contact = {
+            **existing_contact,
+            "Mailing_ID__c": "323e4567-e89b-42d3-a456-426614174027",
+        }
+        backfilled_contact = {
+            **MAILING_CONTACT_RETURN,
+            "Id": "003000000000036",
+            "LastName": "mia.mail@example.com",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch(
+                "src.receiver.backfill_mailing_contact_fields",
+                return_value=backfilled_contact,
+            ) as mock_backfill,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+        ):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(no_last_name_xml)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            mock_ensure.assert_called_once_with(
+                sf_mock,
+                existing_contact,
+                mailing_id="323e4567-e89b-42d3-a456-426614174027",
+            )
+            mock_backfill.assert_called_once_with(
+                sf_mock,
+                normalized_contact,
+                first_name="Mia",
+                last_name="mia.mail@example.com",
+                company_id="c3d4e5f6-a7b8-4901-8d23-ef4567ab8901",
+                role="COMPANY_CONTACT",
+                gdpr_consent=True,
+            )
+            mock_conflict.assert_not_called()
+            mock_publish.assert_called_once()
+            confirmed_payload = mock_publish.call_args.args[0]
+            assert confirmed_payload["lastName"] == "mia.mail@example.com"
+            assert confirmed_payload["role"] == "COMPANY_CONTACT"
+            assert confirmed_payload["companyId"] == "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901"
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_existing_specialized_role_with_company_id_publishes_conflict(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_CREATED_XML)
+        existing_contact = {
+            "Id": "003000000000038",
+            "Email": "mia.mail@example.com",
+            "FirstName": "Mia",
+            "LastName": "Mail",
+            "Role__c": "ADMIN",
+            "Mailing_ID__c": None,
+            "Company_ID__c": None,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.receiver.ensure_contact_identifiers") as mock_ensure,
+            patch("src.receiver.backfill_mailing_contact_fields") as mock_backfill,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+        ):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(VALID_MAILING_USER_CREATED_XML)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            mock_ensure.assert_not_called()
+            mock_backfill.assert_not_called()
+            mock_publish.assert_not_called()
+            mock_conflict.assert_called_once()
+            conflict_payload = mock_conflict.call_args.args[0]
+            assert conflict_payload["incomingValue"]["company"] == "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901"
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_existing_specialized_role_with_stored_company_linkage_publishes_conflict(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_CREATED_MINIMAL_XML)
+        existing_contact = {
+            "Id": "003000000000040",
+            "Email": "mia.mail@example.com",
+            "FirstName": "Mia",
+            "LastName": "Mail",
+            "Role__c": "ADMIN",
+            "Mailing_ID__c": None,
+            "Company_ID__c": "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.receiver.ensure_contact_identifiers") as mock_ensure,
+            patch("src.receiver.backfill_mailing_contact_fields") as mock_backfill,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+        ):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(VALID_MAILING_USER_CREATED_MINIMAL_XML)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            mock_ensure.assert_not_called()
+            mock_backfill.assert_not_called()
+            mock_publish.assert_not_called()
+            mock_conflict.assert_called_once()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_existing_company_linkage_sets_company_contact_role_on_reuse(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_CREATED_MINIMAL_XML)
+        existing_contact = {
+            "Id": "003000000000037",
+            "Email": "mia.mail@example.com",
+            "FirstName": None,
+            "LastName": None,
+            "Role__c": None,
+            "Mailing_ID__c": None,
+            "Company_ID__c": "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901",
+            "GDPR_Consent__c": None,
+        }
+        normalized_contact = {
+            **existing_contact,
+            "Mailing_ID__c": "323e4567-e89b-42d3-a456-426614174027",
+        }
+        backfilled_contact = {
+            "Id": "003000000000037",
+            "CRM_ID__c": "323e4567-e89b-42d3-a456-426614174129",
+            "Mailing_ID__c": "323e4567-e89b-42d3-a456-426614174027",
+            "Email": "mia.mail@example.com",
+            "FirstName": None,
+            "LastName": "mia.mail@example.com",
+            "Role__c": "COMPANY_CONTACT",
+            "Company_ID__c": "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901",
+            "GDPR_Consent__c": True,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch(
+                "src.receiver.backfill_mailing_contact_fields",
+                return_value=backfilled_contact,
+            ) as mock_backfill,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+        ):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(VALID_MAILING_USER_CREATED_MINIMAL_XML)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            mock_ensure.assert_called_once_with(
+                sf_mock,
+                existing_contact,
+                mailing_id="323e4567-e89b-42d3-a456-426614174027",
+            )
+            mock_backfill.assert_called_once_with(
+                sf_mock,
+                normalized_contact,
+                last_name="mia.mail@example.com",
+                company_id="c3d4e5f6-a7b8-4901-8d23-ef4567ab8901",
+                role="COMPANY_CONTACT",
+                gdpr_consent=True,
+            )
+            mock_conflict.assert_not_called()
+            mock_publish.assert_called_once()
+            confirmed_payload = mock_publish.call_args.args[0]
+            assert confirmed_payload["role"] == "COMPANY_CONTACT"
+            assert confirmed_payload["gdprConsent"] is True
+            assert confirmed_payload["lastName"] == "mia.mail@example.com"
+            assert confirmed_payload["companyId"] == "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901"
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_existing_contact_with_explicit_false_gdpr_publishes_conflict(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_CREATED_MINIMAL_XML)
+        existing_contact = {
+            "Id": "003000000000039",
+            "Email": "mia.mail@example.com",
+            "FirstName": None,
+            "LastName": "mia.mail@example.com",
+            "Role__c": None,
+            "Mailing_ID__c": None,
+            "GDPR_Consent__c": False,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.receiver.ensure_contact_identifiers") as mock_ensure,
+            patch("src.receiver.backfill_mailing_contact_fields") as mock_backfill,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+        ):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(VALID_MAILING_USER_CREATED_MINIMAL_XML)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            mock_ensure.assert_not_called()
+            mock_backfill.assert_not_called()
+            mock_publish.assert_not_called()
+            mock_conflict.assert_called_once()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_missing_mailing_id_field_rejects_without_requeue(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_CREATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=False),
+            caplog.at_level(logging.ERROR),
+        ):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(VALID_MAILING_USER_CREATED_XML)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+            assert "Mailing_ID__c is missing" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_mailing_user_created_invalid_xml_rejected(self, sf_mock):
+        with patch("src.xml_validator.validate", side_effect=ValueError("Bad XML")):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(INVALID_XML)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+
+    @pytest.mark.asyncio
+    async def test_mailing_user_created_without_gdpr_consent_rejected(self, sf_mock, caplog):
+        invalid_gdpr_xml = VALID_MAILING_USER_CREATED_XML.replace(
+            b"<gdprConsent>true</gdprConsent>",
+            b"<gdprConsent>false</gdprConsent>",
+        )
+        parsed_xml = etree.fromstring(invalid_gdpr_xml)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(invalid_gdpr_xml)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+            assert "MailingUserCreated refused — gdprConsent=false" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_email_is_acked_without_publish(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_CREATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_email", return_value=("ambiguous", None)),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.receiver.create_contact") as mock_create,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(VALID_MAILING_USER_CREATED_XML)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            mock_create.assert_not_called()
+            mock_publish.assert_not_called()
+            mock_conflict.assert_not_called()
+            msg.ack.assert_called_once()
+            assert "ambiguous email mia.mail@example.com" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_conflict_publish_failure_requeues(self, sf_mock):
+        conflicting_xml = VALID_MAILING_USER_CREATED_XML.replace(
+            b"<firstName>Mia</firstName>",
+            b"<firstName>Different</firstName>",
+        )
+        parsed_xml = etree.fromstring(conflicting_xml)
+        existing_contact = {
+            "Id": "003000000000029",
+            "Email": "mia.mail@example.com",
+            "FirstName": "Mia",
+            "LastName": "Mail",
+            "Role__c": "COMPANY_CONTACT",
+            "Company_ID__c": "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.sender.publish_user_conflict", side_effect=Exception("publish failed")),
+        ):
+            from src.receiver import handle_mailing_user_created
+
+            msg = _make_message(conflicting_xml)
+            await handle_mailing_user_created(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=True)
 
 
 # ==========================================================================
@@ -1269,6 +2054,7 @@ class TestRunReceiver:
         registration_queue = AsyncMock()
         updated_queue = AsyncMock()
         facturatie_created_queue = AsyncMock()
+        mailing_created_queue = AsyncMock()
         payment_queue = AsyncMock()
         unpaid_queue = AsyncMock()
         sf_client = MagicMock()
@@ -1285,6 +2071,7 @@ class TestRunReceiver:
                     registration_queue,
                     updated_queue,
                     facturatie_created_queue,
+                    mailing_created_queue,
                     payment_queue,
                     unpaid_queue,
                 ],
@@ -1312,6 +2099,7 @@ class TestRunReceiver:
         registration_queue = AsyncMock()
         updated_queue = AsyncMock()
         facturatie_created_queue = AsyncMock()
+        mailing_created_queue = AsyncMock()
         payment_queue = AsyncMock()
         unpaid_queue = AsyncMock()
         sf_client = MagicMock()
@@ -1328,6 +2116,7 @@ class TestRunReceiver:
                     registration_queue,
                     updated_queue,
                     facturatie_created_queue,
+                    mailing_created_queue,
                     payment_queue,
                     unpaid_queue,
                 ],
@@ -1355,6 +2144,7 @@ class TestRunReceiver:
         registration_queue = AsyncMock()
         updated_queue = AsyncMock()
         facturatie_created_queue = AsyncMock()
+        mailing_created_queue = AsyncMock()
         payment_queue = AsyncMock()
         unpaid_queue = AsyncMock()
         sf_client = MagicMock()
@@ -1371,6 +2161,7 @@ class TestRunReceiver:
                     registration_queue,
                     updated_queue,
                     facturatie_created_queue,
+                    mailing_created_queue,
                     payment_queue,
                     unpaid_queue,
                 ],
@@ -1391,3 +2182,48 @@ class TestRunReceiver:
             unpaid_callback = unpaid_queue.consume.call_args.args[0]
             assert unpaid_callback.func is handle_unpaid_requested
             assert unpaid_callback.keywords["sf"] is sf_client
+
+    @pytest.mark.asyncio
+    async def test_run_receiver_registers_contract_27_queue(self):
+        warning_queue = AsyncMock()
+        registration_queue = AsyncMock()
+        updated_queue = AsyncMock()
+        facturatie_created_queue = AsyncMock()
+        mailing_created_queue = AsyncMock()
+        payment_queue = AsyncMock()
+        unpaid_queue = AsyncMock()
+        sf_client = MagicMock()
+
+        async def _stop_receiver():
+            raise RuntimeError("stop receiver loop")
+
+        with (
+            patch("src.receiver.get_salesforce_client", return_value=sf_client),
+            patch(
+                "src.receiver._declare_and_bind",
+                side_effect=[
+                    warning_queue,
+                    registration_queue,
+                    updated_queue,
+                    facturatie_created_queue,
+                    mailing_created_queue,
+                    payment_queue,
+                    unpaid_queue,
+                ],
+            ) as mock_declare,
+            patch("src.receiver.asyncio.Future", return_value=_stop_receiver()),
+        ):
+            from src.receiver import handle_mailing_user_created, run_receiver
+
+            with pytest.raises(RuntimeError, match="stop receiver loop"):
+                await run_receiver(AsyncMock(), MagicMock())
+
+            queue_call = next(
+                call for call in mock_declare.call_args_list
+                if call.args[1] == "mailing.user.created"
+            )
+            assert queue_call.kwargs["durable"] is True
+
+            mailing_callback = mailing_created_queue.consume.call_args.args[0]
+            assert mailing_callback.func is handle_mailing_user_created
+            assert mailing_callback.keywords["sf"] is sf_client
