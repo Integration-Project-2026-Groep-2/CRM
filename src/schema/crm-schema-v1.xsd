@@ -619,7 +619,8 @@
        CONTRACT 18 — CRM → consumers: user updated
        CONTRACT 25 — Facturatie → CRM: user updated
        Queue: crm.user.updated / facturatie.user.updated | durable: true
-       Noot: gedeelde root met order-onafhankelijke veldvalidatie.
+       Noot: gedeelde root UserUpdated; gdprConsent is verplicht in beide
+         contracten.
   ============================================================ -->
   <xs:element name="UserUpdated">
     <xs:complexType>

@@ -79,6 +79,8 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 
 **Contract 24 runtime-gedrag:** Bij een uniek bestaand Contact hergebruikt CRM dat Contact en kent zo nodig eerst een CRM UUID toe. Deze flow publiceert geen `crm.mail.requested`.
 
+**Contract 25 runtime-gedrag:** `facturatie.user.updated` gebruikt dezelfde XML-root `UserUpdated` als het outbound CRM-event, maar blijft een apart inbound contract via `user.topic`. `gdprConsent` is verplicht en moet door XML-validatie aanwezig zijn.
+
 > Dezelfde exchange delen betekent **niet** dat berichten automatisch compatibel zijn. CRM moet elke routing key expliciet binden en de payload moet overeenkomen met het contract dat de receiver valideert.
 
 ### Speciale exchanges (apart van topic routing)

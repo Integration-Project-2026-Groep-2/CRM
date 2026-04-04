@@ -15,6 +15,7 @@ from src.salesforce_client import (
     get_contact_by_email,
     get_contact_match_by_email,
     get_unpaid_contacts,
+    update_contact_by_crm_id,
     update_payment_status,
     upsert_account_by_vat,
     upsert_contact_by_email,
@@ -185,6 +186,69 @@ async def test_get_contact_by_crm_id_found(sf):
 
     assert result["CRM_ID__c"] == "crm-123"
     sf.Contact.get.assert_called_once_with("003000000000005")
+
+
+@pytest.mark.asyncio
+async def test_update_contact_by_crm_id_updates_contact(sf):
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000031"}]}
+    sf.Contact.get.return_value = {
+        "Id": "003000000000031",
+        "CRM_ID__c": "crm-999",
+        "Email": "update@example.com",
+        "IsActive__c": True,
+    }
+
+    payload = {
+        "id": "crm-999",
+        "email": "update@example.com",
+        "firstName": "Jan",
+        "lastName": "Janssen",
+        "phone": "+32470000000",
+        "street": "Kerkstraat",
+        "houseNumber": "12",
+        "postalCode": "1000",
+        "city": "Brussels",
+        "country": "BE",
+        "role": "VISITOR",
+        "companyId": "11111111-2222-4333-8444-555555555555",
+        "badgeCode": "B-12",
+        "isActive": False,
+        "gdprConsent": True,
+    }
+
+    result = await update_contact_by_crm_id(sf, "crm-999", payload)
+
+    sf.Contact.update.assert_called_once_with(
+        "003000000000031",
+        {
+            "CRM_ID__c": "crm-999",
+            "Email": "update@example.com",
+            "FirstName": "Jan",
+            "LastName": "Janssen",
+            "Phone": "+32470000000",
+            "MailingStreet": "Kerkstraat",
+            "House_Number__c": "12",
+            "MailingPostalCode": "1000",
+            "MailingCity": "Brussels",
+            "MailingCountry": "BE",
+            "Role__c": "VISITOR",
+            "Company_ID__c": "11111111-2222-4333-8444-555555555555",
+            "Badge_Code__c": "B-12",
+            "GDPR_Consent__c": True,
+            "IsActive__c": False,
+        },
+    )
+    assert result == {"Id": "003000000000031", "CRM_ID__c": "crm-999", "Email": "update@example.com", "IsActive__c": True}
+
+
+@pytest.mark.asyncio
+async def test_update_contact_by_crm_id_returns_none_when_missing(sf):
+    sf.query.return_value = {"totalSize": 0, "records": []}
+
+    result = await update_contact_by_crm_id(sf, "missing-crm-id", {"email": "missing@example.com"})
+
+    assert result is None
+    sf.Contact.update.assert_not_called()
 
 
 @pytest.mark.asyncio

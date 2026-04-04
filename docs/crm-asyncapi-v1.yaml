@@ -107,7 +107,8 @@ channels:
     address: facturatie.user.updated
     description: >-
       Contract 25 — Facturatie → CRM: bestaande CRM-linked user vanuit
-      Facturatie bijwerken in Salesforce.
+      Facturatie bijwerken in Salesforce. XML-root: UserUpdated (gedeeld met
+      Contract 18); gdprConsent is verplicht in de payload.
     messages:
       facturatieUserUpdated:
         $ref: "#/components/messages/FacturatieUserUpdated"
@@ -1913,7 +1914,7 @@ components:
       description: >-
         Facturatie stuurt een volledig update-object voor een user die al een
         CRM UUID heeft. Routing key en richting onderscheiden dit contract van
-        het outbound CRM event met dezelfde XML-root.
+        het outbound CRM event met dezelfde XML-root UserUpdated.
       properties:
         id:
           type: string
@@ -1950,6 +1951,9 @@ components:
             - CASHIER
             - BAR_STAFF
             - ADMIN
+        badgeCode:
+          type: string
+          description: Optioneel — badgecode van de user indien Facturatie die al beheert.
         companyId:
           type: string
           format: uuid
@@ -1958,6 +1962,7 @@ components:
           type: boolean
         gdprConsent:
           type: boolean
+          description: Verplicht — contract 25 mag alleen verwerkt worden als dit veld aanwezig is.
         updatedAt:
           type: string
           format: date-time

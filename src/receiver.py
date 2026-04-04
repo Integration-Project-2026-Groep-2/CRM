@@ -21,6 +21,7 @@ from src.salesforce_client import (
     get_contact_match_by_email,
     get_salesforce_client,
     get_unpaid_contacts,
+    update_contact_by_crm_id,
     update_payment_status,
     upsert_contact_by_email,
 )
@@ -89,6 +90,11 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     # Queue: facturatie.user.created | Exchange: user.topic | durable: true
     queue_facturatie_user_created = await _declare_and_bind(channel, "facturatie.user.created", durable=True)
     await queue_facturatie_user_created.consume(partial(handle_facturatie_user_created, sf=sf_client))
+
+    # Contract 25 — Facturatie → CRM: user updated
+    # Queue: facturatie.user.updated | Exchange: user.topic | durable: true
+    queue_facturatie_user_updated = await _declare_and_bind(channel, "facturatie.user.updated", durable=True)
+    await queue_facturatie_user_updated.consume(partial(handle_facturatie_user_updated, sf=sf_client))
 
     # Contract 3 — Frontend → CRM: create company
     # queue_company = await _declare_and_bind(channel, "frontend.company.created", durable=True)
@@ -338,6 +344,73 @@ async def handle_facturatie_user_created(
         await message.ack()
     except Exception as exc:  # noqa: BLE001
         logger.error("FacturatieUserCreated — error processing message: %s", exc)
+        await message.reject(requeue=True)
+
+
+async def handle_facturatie_user_updated(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 25 — Facturatie -> CRM: existing CRM-linked user update.
+
+    Queue: facturatie.user.updated | durable: true
+
+    Behaviour:
+    - Validate XML against schema.
+    - Reject updates without GDPR consent.
+    - Update the unique Contact by CRM UUID (id).
+    - Publish crm.user.updated after Salesforce update.
+    - Missing/ambiguous CRM UUID: ack without retry.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("FacturatieUserUpdated — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        crm_id = xml.findtext("id") or ""
+        email = xml.findtext("email") or ""
+        gdpr_text = xml.findtext("gdprConsent")
+        if gdpr_text not in ("true", "1"):
+            logger.warning(
+                "FacturatieUserUpdated refused — gdprConsent=%s for email %s",
+                gdpr_text,
+                email,
+            )
+            await message.reject(requeue=False)
+            return
+
+        payload = {
+            "id": crm_id,
+            "email": email,
+            "firstName": xml.findtext("firstName"),
+            "lastName": xml.findtext("lastName"),
+            "phone": xml.findtext("phone"),
+            "street": xml.findtext("street"),
+            "houseNumber": xml.findtext("houseNumber"),
+            "postalCode": xml.findtext("postalCode"),
+            "city": xml.findtext("city"),
+            "country": xml.findtext("country"),
+            "role": xml.findtext("role"),
+            "companyId": xml.findtext("companyId"),
+            "badgeCode": xml.findtext("badgeCode"),
+            "isActive": xml.findtext("isActive") in ("true", "1"),
+            "gdprConsent": True,
+        }
+
+        contact = await update_contact_by_crm_id(sf, crm_id, payload)
+        if contact is None:
+            await message.ack()
+            return
+
+        await sender.publish_user_updated(_build_updated_user_data(contact))
+        logger.info("Published crm.user.updated for Facturatie user %s", email)
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("FacturatieUserUpdated — error processing message: %s", exc)
         await message.reject(requeue=True)
 
 

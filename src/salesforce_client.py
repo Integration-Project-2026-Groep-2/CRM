@@ -267,6 +267,53 @@ async def get_contact_by_crm_id(
         raise
 
 
+async def update_contact_by_crm_id(
+    sf: Salesforce,
+    crm_id: str,
+    data: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Update a Contact identified by CRM_ID__c.
+
+    Contract 25 uses the CRM UUID as canonical identifier, so the receiver
+    should update the matching Contact by CRM_ID__c instead of relying on email.
+    Returns the refreshed Contact record or None when no unique match exists.
+    """
+    contact = await get_contact_by_crm_id(sf, crm_id)
+    if contact is None:
+        logger.warning("No unique Contact found for CRM_ID__c %s", crm_id)
+        return None
+
+    updates: dict[str, Any] = {"CRM_ID__c": crm_id}
+    field_mapping = {
+        "email": "Email",
+        "firstName": "FirstName",
+        "lastName": "LastName",
+        "phone": "Phone",
+        "street": "MailingStreet",
+        "houseNumber": "House_Number__c",
+        "postalCode": "MailingPostalCode",
+        "city": "MailingCity",
+        "country": "MailingCountry",
+        "role": "Role__c",
+        "companyId": "Company_ID__c",
+        "badgeCode": "Badge_Code__c",
+        "gdprConsent": "GDPR_Consent__c",
+    }
+    for xml_field, sf_field in field_mapping.items():
+        value = data.get(xml_field)
+        if value is not None:
+            updates[sf_field] = value
+
+    if "isActive" in data:
+        active_field = await _resolve_contact_active_field(sf)
+        updates[active_field] = bool(data["isActive"])
+
+    contact_id = contact["Id"]
+    await asyncio.to_thread(sf.Contact.update, contact_id, updates)
+    logger.info("Updated Contact by CRM_ID__c: %s", crm_id)
+    return await asyncio.to_thread(sf.Contact.get, contact_id)
+
+
 async def find_unique_contact_by_email(
     sf: Salesforce, email: str
 ) -> dict[str, Any] | None:

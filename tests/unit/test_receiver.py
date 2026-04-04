@@ -143,6 +143,45 @@ FACTURATIE_CONTACT_RETURN = {
     "Registration_ID__c": "REG-20260415-010",
 }
 
+VALID_FACTURATIE_USER_UPDATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<UserUpdated>
+    <id>223e4567-e89b-12d3-a456-426614174024</id>
+    <email>els.peeters@example.com</email>
+    <firstName>Els</firstName>
+    <lastName>Peeters</lastName>
+    <phone>+32470111222</phone>
+    <street>Stationsstraat</street>
+    <houseNumber>12B</houseNumber>
+    <postalCode>9000</postalCode>
+    <city>Gent</city>
+    <country>BE</country>
+    <role>COMPANY_CONTACT</role>
+    <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
+    <badgeCode>B-42</badgeCode>
+    <isActive>true</isActive>
+    <gdprConsent>true</gdprConsent>
+    <updatedAt>2026-04-15T10:15:00Z</updatedAt>
+</UserUpdated>"""
+
+FACTURATIE_USER_UPDATED_CONTACT_RETURN = {
+    "Id": "003000000000027",
+    "CRM_ID__c": "223e4567-e89b-12d3-a456-426614174024",
+    "Email": "els.peeters@example.com",
+    "FirstName": "Els",
+    "LastName": "Peeters",
+    "Role__c": "COMPANY_CONTACT",
+    "GDPR_Consent__c": True,
+    "Phone": "+32470111222",
+    "MailingStreet": "Stationsstraat",
+    "House_Number__c": "12B",
+    "MailingPostalCode": "9000",
+    "MailingCity": "Gent",
+    "MailingCountry": "BE",
+    "Badge_Code__c": "B-42",
+    "Company_ID__c": "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901",
+    "IsActive__c": True,
+}
+
 
 def _registration_patches(
     parsed_xml=None, existing_contact=None, created_contact=None
@@ -693,6 +732,81 @@ class TestHandleFacturatieUserCreated:
             mock_create.assert_not_called()
             mock_publish.assert_called_once()
             mock_fallback_lookup.assert_not_called()
+            msg.ack.assert_called_once()
+
+
+class TestHandleFacturatieUserUpdated:
+    @pytest.fixture
+    def sf_mock(self):
+        return AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_facturatie_user_updated_updates_by_crm_id_and_publishes(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_UPDATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.update_contact_by_crm_id", return_value=FACTURATIE_USER_UPDATED_CONTACT_RETURN) as mock_update,
+            patch("src.sender.publish_user_updated") as mock_publish,
+        ):
+            from src.receiver import handle_facturatie_user_updated
+
+            msg = _make_message(VALID_FACTURATIE_USER_UPDATED_XML)
+            await handle_facturatie_user_updated(msg, sf_mock)
+
+            mock_update.assert_called_once()
+            update_args = mock_update.call_args.args
+            assert update_args[1] == "223e4567-e89b-12d3-a456-426614174024"
+            assert update_args[2]["isActive"] is True
+            assert update_args[2]["gdprConsent"] is True
+            mock_publish.assert_called_once()
+            published_user = mock_publish.call_args.args[0]
+            assert published_user["id"] == "223e4567-e89b-12d3-a456-426614174024"
+            assert published_user["badgeCode"] == "B-42"
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_facturatie_user_updated_without_gdpr_consent_rejected(self, sf_mock, caplog):
+        invalid_xml = VALID_FACTURATIE_USER_UPDATED_XML.replace(
+            b"<gdprConsent>true</gdprConsent>",
+            b"<gdprConsent>false</gdprConsent>",
+        )
+        parsed_xml = etree.fromstring(invalid_xml)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_facturatie_user_updated
+
+            msg = _make_message(invalid_xml)
+            await handle_facturatie_user_updated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+            assert "FacturatieUserUpdated refused — gdprConsent=false" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_facturatie_user_updated_invalid_xml_rejected(self, sf_mock):
+        with patch("src.xml_validator.validate", side_effect=ValueError("Bad XML")):
+            from src.receiver import handle_facturatie_user_updated
+
+            msg = _make_message(INVALID_XML)
+            await handle_facturatie_user_updated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+
+    @pytest.mark.asyncio
+    async def test_facturatie_user_updated_missing_contact_acks(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_UPDATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.update_contact_by_crm_id", return_value=None),
+            patch("src.sender.publish_user_updated") as mock_publish,
+        ):
+            from src.receiver import handle_facturatie_user_updated
+
+            msg = _make_message(VALID_FACTURATIE_USER_UPDATED_XML)
+            await handle_facturatie_user_updated(msg, sf_mock)
+
+            mock_publish.assert_not_called()
             msg.ack.assert_called_once()
 
 
@@ -1269,6 +1383,7 @@ class TestRunReceiver:
         registration_queue = AsyncMock()
         updated_queue = AsyncMock()
         facturatie_created_queue = AsyncMock()
+        facturatie_updated_queue = AsyncMock()
         payment_queue = AsyncMock()
         unpaid_queue = AsyncMock()
         sf_client = MagicMock()
@@ -1285,13 +1400,14 @@ class TestRunReceiver:
                     registration_queue,
                     updated_queue,
                     facturatie_created_queue,
+                    facturatie_updated_queue,
                     payment_queue,
                     unpaid_queue,
                 ],
             ) as mock_declare,
             patch("src.receiver.asyncio.Future", return_value=_stop_receiver()),
         ):
-            from src.receiver import handle_facturatie_user_created, run_receiver
+            from src.receiver import handle_facturatie_user_created, handle_facturatie_user_updated, run_receiver
 
             with pytest.raises(RuntimeError, match="stop receiver loop"):
                 await run_receiver(AsyncMock(), MagicMock())
@@ -1306,12 +1422,23 @@ class TestRunReceiver:
             assert facturatie_callback.func is handle_facturatie_user_created
             assert facturatie_callback.keywords["sf"] is sf_client
 
+            facturatie_updated_callback = facturatie_updated_queue.consume.call_args.args[0]
+            assert facturatie_updated_callback.func is handle_facturatie_user_updated
+            assert facturatie_updated_callback.keywords["sf"] is sf_client
+
+            updated_queue_call = next(
+                call for call in mock_declare.call_args_list
+                if call.args[1] == "facturatie.user.updated"
+            )
+            assert updated_queue_call.kwargs["durable"] is True
+
     @pytest.mark.asyncio
     async def test_run_receiver_registers_contract_16_queue(self):
         warning_queue = AsyncMock()
         registration_queue = AsyncMock()
         updated_queue = AsyncMock()
         facturatie_created_queue = AsyncMock()
+        facturatie_updated_queue = AsyncMock()
         payment_queue = AsyncMock()
         unpaid_queue = AsyncMock()
         sf_client = MagicMock()
@@ -1328,6 +1455,7 @@ class TestRunReceiver:
                     registration_queue,
                     updated_queue,
                     facturatie_created_queue,
+                    facturatie_updated_queue,
                     payment_queue,
                     unpaid_queue,
                 ],
@@ -1355,6 +1483,7 @@ class TestRunReceiver:
         registration_queue = AsyncMock()
         updated_queue = AsyncMock()
         facturatie_created_queue = AsyncMock()
+        facturatie_updated_queue = AsyncMock()
         payment_queue = AsyncMock()
         unpaid_queue = AsyncMock()
         sf_client = MagicMock()
@@ -1371,6 +1500,7 @@ class TestRunReceiver:
                     registration_queue,
                     updated_queue,
                     facturatie_created_queue,
+                    facturatie_updated_queue,
                     payment_queue,
                     unpaid_queue,
                 ],
