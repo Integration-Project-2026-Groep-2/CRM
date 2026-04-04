@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import uuid
 from datetime import datetime, timezone
 from functools import partial
 
@@ -11,11 +10,13 @@ from aio_pika import ExchangeType
 from aio_pika.abc import AbstractChannel, AbstractRobustConnection
 from lxml import etree
 
-from src import salesforce, sender, xml_validator
+from src import sender, xml_validator
 from src.config import Config
 from src.salesforce_client import (
+    create_account,
     create_contact,
     deactivate_contact,
+    get_account_by_vat,
     get_contact_by_email,
     upsert_contact_by_email,
 )
@@ -75,8 +76,9 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     await queue_reg_updated.consume(partial(handle_registration_updated, sf=sf))
 
     # Contract 3 — Frontend → CRM: create company
-    # queue_company = await _declare_and_bind(channel, "frontend.company.created", durable=True)
-    # await queue_company.consume(handle_company_created)
+    # Queue: frontend.company.created | Exchange: user.topic | durable: true | US-40, US-20
+    queue_company = await _declare_and_bind(channel, "frontend.company.created", durable=True)
+    await queue_company.consume(partial(handle_company_created, sf=sf))
 
     # Contract 5a — Facturatie → CRM: request company data
     # queue_company_req = await _declare_and_bind(channel, "facturatie.company.requested", durable=True)
@@ -282,14 +284,21 @@ async def handle_registration(
     if phone:
         user_data["phone"] = phone
 
-    await sender.publish_user_confirmed(user_data)
-
     # ── Step 6: publish crm.mail.requested (C6) ───────────────────────────
-    await sender.publish_mail_requested(
-        "registration_confirmation",
-        {"email": email, "name": full_name},
-        {"guest_name": full_name},
-    )
+    try:
+        await sender.publish_user_confirmed(user_data)
+        await sender.publish_mail_requested(
+            "registration_confirmation",
+            {"email": email, "name": full_name},
+            {"guest_name": full_name},
+        )
+    except Exception as exc:
+        logger.error(
+            "Contract 1 — publish failed (email=%s): %s",
+            email, exc,
+        )
+        await message.reject(requeue=True)
+        return
 
     await message.ack()
     logger.info(
@@ -312,7 +321,6 @@ _UPDATED_FIELD_MAP = {
 }
 
 _OPTIONAL_CONTACT_FIELDS = [
-    ("IsActive__c", "isActive"),
     ("Company_ID__c", "companyId"),
     ("Badge_Code__c", "badgeCode"),
     ("MailingStreet", "street"),
@@ -375,6 +383,11 @@ async def handle_registration_updated(
         user_data: dict = {
             "id": contact["CRM_ID__c"],
             "email": email,
+            "firstName": contact.get("FirstName", ""),
+            "lastName": contact.get("LastName", ""),
+            "role": contact.get("Role__c", ""),
+            "isActive": contact.get("IsActive__c", False),
+            "gdprConsent": contact.get("GDPR_Consent__c", False),
             "updatedAt": updated_at,
         }
         for sf_field, key in _OPTIONAL_CONTACT_FIELDS:
@@ -440,95 +453,121 @@ async def handle_registration_updated(
 # Contract 3 — Frontend → CRM: create company
 # ---------------------------------------------------------------------------
 
-async def handle_company_created(message: aio_pika.IncomingMessage) -> None:
+async def handle_company_created(
+    message: aio_pika.IncomingMessage,
+    sf: object,
+) -> None:
     """Contract 3 — Frontend → CRM: create company.
 
     Queue: frontend.company.created | durable: true | US-40, US-20
+
+    Flow:
+    1. Validate XML
+    2. Look up existing Account by VAT number (idempotency)
+    3. Create Account in Salesforce
+    4. Publish crm.company.confirmed (C14)
+    5. Ack
+
+    Error handling:
+    - Invalid XML          → reject (requeue=False)
+    - Salesforce error     → reject (requeue=True)
+    - Publish failure      → reject (requeue=True)
     """
-    async with message.process(ignore_processed=True):
-        try:
-            xml = xml_validator.validate(message.body)
-        except Exception as exc:
-            logger.error("Contract 3 — invalid XML, rejecting: %s", exc)
-            await message.reject(requeue=False)
-            return
+    # ── Step 1: validate XML ──────────────────────────────────────────────
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:
+        logger.error("Contract 3 — invalid XML, rejecting: %s", exc)
+        await message.reject(requeue=False)
+        return
 
-        vat_number = xml.findtext("vatNumber")
-        name = xml.findtext("name")
-        email = xml.findtext("email")
-        phone = xml.findtext("phone")
-        street = xml.findtext("street")
-        house_number = xml.findtext("houseNumber")
-        postal_code = xml.findtext("postalCode")
-        city = xml.findtext("city")
-        country = xml.findtext("country")
+    vat_number = xml.findtext("vatNumber")
+    name = xml.findtext("name")
+    email = xml.findtext("email")
+    phone = xml.findtext("phone")
+    street = xml.findtext("street")
+    house_number = xml.findtext("houseNumber")
+    postal_code = xml.findtext("postalCode")
+    city = xml.findtext("city")
+    country = xml.findtext("country")
 
-        try:
-            existing_account = await salesforce.find_account_by_vat(vat_number)
-        except salesforce.SalesforceUnavailableError as exc:
-            logger.error(
-                "Contract 3 — Salesforce unavailable during VAT lookup "
-                "(vatNumber=%s), requeueing: %s",
-                vat_number, exc,
-            )
-            await message.reject(requeue=True)
-            return
-
-        if existing_account:
-            logger.info(
-                "Contract 3 — Account with vatNumber=%s already exists "
-                "(id=%s), skipping (idempotent).",
-                vat_number, existing_account.get("CRM_ID__c"),
-            )
-            return
-
-        crm_id = str(uuid.uuid4())
-        confirmed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-        account_payload: dict = {
-            "CRM_ID__c": crm_id,
-            "Name": name,
-            "VAT_Number__c": vat_number,
-            "IsActive__c": True,
-        }
-        if email:
-            account_payload["Email__c"] = email
-        if phone:
-            account_payload["Phone"] = phone
-        if street:
-            account_payload["BillingStreet"] = (
-                f"{street} {house_number}".strip() if house_number else street
-            )
-        if postal_code:
-            account_payload["BillingPostalCode"] = postal_code
-        if city:
-            account_payload["BillingCity"] = city
-        if country:
-            account_payload["BillingCountry"] = country
-
-        try:
-            await salesforce.create_account(account_payload)
-        except salesforce.SalesforceUnavailableError as exc:
-            logger.error(
-                "Contract 3 — Salesforce unavailable during account creation "
-                "(vatNumber=%s), requeueing: %s",
-                vat_number, exc,
-            )
-            await message.reject(requeue=True)
-            return
-
-        logger.info(
-            "Contract 3 — Account created (vatNumber=%s, crm_id=%s).",
-            vat_number, crm_id,
+    # ── Step 2: idempotency check ─────────────────────────────────────────
+    try:
+        existing_account = await get_account_by_vat(sf, vat_number)
+    except Exception as exc:
+        logger.error(
+            "Contract 3 — Salesforce error during VAT lookup (vatNumber=%s): %s",
+            vat_number, exc,
         )
+        await message.reject(requeue=True)
+        return
 
-        company_data: dict = {
-            "id": crm_id,
-            "vatNumber": vat_number,
-            "name": name,
-            "email": email or "",
-            "isActive": True,
-            "confirmedAt": confirmed_at,
-        }
+    if existing_account:
+        logger.info(
+            "Contract 3 — Account with vatNumber=%s already exists "
+            "(id=%s), skipping (idempotent).",
+            vat_number, existing_account.get("CRM_ID__c"),
+        )
+        await message.ack()
+        return
+
+    confirmed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    account_payload: dict = {
+        "Name": name,
+        "VAT_Number__c": vat_number,
+        "IsActive__c": True,
+    }
+    if email:
+        account_payload["Email__c"] = email
+    if phone:
+        account_payload["Phone"] = phone
+    if street:
+        account_payload["BillingStreet"] = (
+            f"{street} {house_number}".strip() if house_number else street
+        )
+    if postal_code:
+        account_payload["BillingPostalCode"] = postal_code
+    if city:
+        account_payload["BillingCity"] = city
+    if country:
+        account_payload["BillingCountry"] = country
+
+    # ── Step 3: create Account in Salesforce ──────────────────────────────
+    try:
+        account = await create_account(sf, account_payload)
+    except Exception as exc:
+        logger.error(
+            "Contract 3 — Salesforce error creating account (vatNumber=%s): %s",
+            vat_number, exc,
+        )
+        await message.reject(requeue=True)
+        return
+
+    crm_id = account["CRM_ID__c"]
+    logger.info(
+        "Contract 3 — Account created (vatNumber=%s, crm_id=%s).",
+        vat_number, crm_id,
+    )
+
+    # ── Step 4: publish crm.company.confirmed (C14) ───────────────────────
+    company_data: dict = {
+        "id": crm_id,
+        "vatNumber": vat_number,
+        "name": name,
+        "email": email or "",
+        "isActive": True,
+        "confirmedAt": confirmed_at,
+    }
+    try:
         await sender.publish_company_confirmed(company_data)
-        logger.info("Contract 3 — crm.company.confirmed published (crm_id=%s).", crm_id)
+    except Exception as exc:
+        logger.error(
+            "Contract 3 — publish_company_confirmed failed (vatNumber=%s): %s",
+            vat_number, exc,
+        )
+        await message.reject(requeue=True)
+        return
+
+    await message.ack()
+    logger.info("Contract 3 — crm.company.confirmed published (crm_id=%s).", crm_id)
