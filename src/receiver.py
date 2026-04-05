@@ -1,4 +1,4 @@
-"""RabbitMQ queue consumer — listens on 11 queues from other teams."""
+"""RabbitMQ queue consumer — listens on the configured inbound queues."""
 
 import asyncio
 import logging
@@ -14,13 +14,16 @@ from lxml import etree
 from src import sender, xml_validator
 from src.config import Config
 from src.salesforce_client import (
+    backfill_mailing_contact_fields,
     create_contact,
     deactivate_contact,
     ensure_contact_identifiers,
     get_contact_by_email,
     get_contact_match_by_email,
+    get_contact_match_by_mailing_id,
     get_salesforce_client,
     get_unpaid_contacts,
+    has_contact_mailing_id_field,
     update_payment_status,
     upsert_contact_by_email,
 )
@@ -36,6 +39,7 @@ _INBOUND_EXCHANGE: dict[str, str] = {
     "frontend.registration.updated": "user.topic",
     "frontend.company.created": "user.topic",
     "facturatie.user.created": "user.topic",
+    "mailing.user.created": "user.topic",
     "facturatie.company.requested": "invoice.topic",
     "kassa.person.lookup.requested": "payment.topic",
     "kassa.payment.confirmed": "payment.topic",
@@ -62,7 +66,7 @@ async def _declare_and_bind(
 
 
 async def run_receiver(connection: AbstractRobustConnection, config: Config) -> None:
-    """Consume messages from all inbound queues, validate XML, process in Salesforce.
+    """Consume configured inbound messages, validate XML, process in Salesforce.
 
     Contract 9 is the first implemented handler and establishes the base structure
     for all future contract handlers.
@@ -89,6 +93,11 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     # Queue: facturatie.user.created | Exchange: user.topic | durable: true
     queue_facturatie_user_created = await _declare_and_bind(channel, "facturatie.user.created", durable=True)
     await queue_facturatie_user_created.consume(partial(handle_facturatie_user_created, sf=sf_client))
+
+    # Contract 27 — Mailing → CRM: new Mailing user sync
+    # Queue: mailing.user.created | Exchange: user.topic | durable: true
+    queue_mailing_user_created = await _declare_and_bind(channel, "mailing.user.created", durable=True)
+    await queue_mailing_user_created.consume(partial(handle_mailing_user_created, sf=sf_client))
 
     # Contract 3 — Frontend → CRM: create company
     # queue_company = await _declare_and_bind(channel, "frontend.company.created", durable=True)
@@ -235,14 +244,19 @@ def _get_contact_is_active(contact: dict) -> bool:
 
 def _build_user_data(contact: dict) -> dict:
     """Build user_data payload dict from a Salesforce contact record."""
+    role = _normalize_optional_text(contact.get("Role__c")) or "VISITOR"
+    gdpr_consent = contact.get("GDPR_Consent__c")
+    if gdpr_consent is None:
+        gdpr_consent = True
+
     data = {
         "id": contact["CRM_ID__c"],
         "email": contact["Email"],
         "firstName": contact.get("FirstName", ""),
         "lastName": contact.get("LastName", ""),
-        "role": contact.get("Role__c", "VISITOR"),
+        "role": role,
         "isActive": _get_contact_is_active(contact),
-        "gdprConsent": contact.get("GDPR_Consent__c", True),
+        "gdprConsent": gdpr_consent,
         "confirmedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     if contact.get("Phone"):
@@ -255,6 +269,323 @@ def _build_user_data(contact: dict) -> dict:
 def _build_full_name(first_name: str | None, last_name: str | None) -> str:
     """Build a display name from first/last name, skipping missing parts."""
     return f"{first_name or ''} {last_name or ''}".strip()
+
+
+def _normalize_optional_text(value: str | None) -> str | None:
+    """Normalize optional text fields so blank values behave like absence."""
+    if value is None:
+        return None
+
+    normalized = value.strip()
+    return normalized or None
+
+
+def _normalize_email_for_compare(value: str | None) -> str | None:
+    """Normalize email values for dedupe/conflict comparisons."""
+    normalized = _normalize_optional_text(value)
+    if normalized is None:
+        return None
+
+    return normalized.casefold()
+
+
+def _derive_mailing_user_role(company_id: str | None) -> str:
+    """Derive the CRM role for Mailing user sync payloads."""
+    return "COMPANY_CONTACT" if company_id else "VISITOR"
+
+
+def _get_mailing_last_name_for_contact(xml: etree._Element) -> str:
+    """Resolve the Contact last name for Mailing payloads.
+
+    Mailing's XSD allows lastName to be omitted, but Salesforce requires
+    Contact.LastName. In that case CRM falls back to the validated email.
+    """
+    last_name = _normalize_optional_text(xml.findtext("lastName"))
+    if last_name is not None:
+        return last_name
+
+    return _normalize_optional_text(xml.findtext("email")) or ""
+
+
+def _get_effective_mailing_company_id(contact: dict, xml: etree._Element) -> str | None:
+    """Return the effective company linkage for a Mailing create/reuse flow."""
+    inbound_company_id = _normalize_optional_text(xml.findtext("companyId"))
+    if inbound_company_id is not None:
+        return inbound_company_id
+
+    return _normalize_optional_text(contact.get("Company_ID__c"))
+
+
+def _has_conflicting_optional_value(existing_value: str | None, incoming_value: str | None) -> bool:
+    """Return True when a provided incoming value conflicts with a non-empty existing value."""
+    normalized_incoming = _normalize_optional_text(incoming_value)
+    if normalized_incoming is None:
+        return False
+
+    normalized_existing = _normalize_optional_text(existing_value)
+    return normalized_existing is not None and normalized_existing != normalized_incoming
+
+
+def _mailing_user_has_conflicting_data(contact: dict, xml: etree._Element) -> bool:
+    """Detect create-path conflicts for Mailing user sync without mutating CRM data."""
+    if _has_conflicting_optional_value(contact.get("FirstName"), xml.findtext("firstName")):
+        return True
+    if _has_conflicting_optional_value(contact.get("LastName"), xml.findtext("lastName")):
+        return True
+
+    incoming_company_id = _normalize_optional_text(xml.findtext("companyId"))
+    effective_company_id = _get_effective_mailing_company_id(contact, xml)
+    existing_role = _normalize_optional_text(contact.get("Role__c"))
+    if effective_company_id is not None and existing_role not in (None, "VISITOR", "COMPANY_CONTACT"):
+        return True
+
+    return _has_conflicting_optional_value(contact.get("Company_ID__c"), incoming_company_id)
+
+
+def _build_conflict_value(
+    first_name: str | None,
+    last_name: str | None,
+    company: str | None = None,
+) -> dict[str, str]:
+    """Build one side of a Contract 15 payload with required name fields."""
+    value = {
+        "firstName": _normalize_optional_text(first_name) or "",
+        "lastName": _normalize_optional_text(last_name) or "",
+    }
+
+    normalized_company = _normalize_optional_text(company)
+    if normalized_company is not None:
+        value["company"] = normalized_company
+    return value
+
+
+def _build_mailing_user_conflict_data(email: str, contact: dict, xml: etree._Element) -> dict:
+    """Build a Contract 15 payload from an existing Contact and incoming Mailing payload."""
+    return {
+        "email": email,
+        "existingValue": _build_conflict_value(
+            contact.get("FirstName"),
+            contact.get("LastName"),
+            contact.get("Company_ID__c"),
+        ),
+        "incomingValue": _build_conflict_value(
+            xml.findtext("firstName"),
+            xml.findtext("lastName"),
+            xml.findtext("companyId"),
+        ),
+        "detectedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+def _build_mailing_contact_data(xml: etree._Element) -> dict:
+    """Map Contract 27 XML fields to Salesforce Contact fields."""
+    company_id = _normalize_optional_text(xml.findtext("companyId"))
+    contact_data = {
+        "Mailing_ID__c": xml.findtext("id"),
+        "Email": xml.findtext("email"),
+        "GDPR_Consent__c": True,
+        "LastName": _get_mailing_last_name_for_contact(xml),
+        "Role__c": _derive_mailing_user_role(company_id),
+    }
+
+    first_name = _normalize_optional_text(xml.findtext("firstName"))
+    if first_name is not None:
+        contact_data["FirstName"] = first_name
+
+    if company_id is not None:
+        contact_data["Company_ID__c"] = company_id
+
+    return contact_data
+
+
+def _get_mailing_backfill_kwargs(contact: dict, xml: etree._Element) -> dict[str, object]:
+    """Build the safe backfill fields for a compatible existing Mailing contact."""
+    company_id = _get_effective_mailing_company_id(contact, xml)
+    kwargs: dict[str, object] = {}
+
+    first_name = _normalize_optional_text(xml.findtext("firstName"))
+    if first_name is not None:
+        kwargs["first_name"] = first_name
+
+    kwargs["last_name"] = _get_mailing_last_name_for_contact(xml)
+
+    if company_id is not None:
+        kwargs["company_id"] = company_id
+
+    kwargs["role"] = _derive_mailing_user_role(company_id)
+    kwargs["gdpr_consent"] = True
+    return kwargs
+
+
+async def handle_mailing_user_created(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 27 — Mailing -> CRM: create or attach a Mailing user identity.
+
+    Queue: mailing.user.created | durable: true
+
+    Behaviour:
+    - Validate XML against schema.
+    - Reject users without GDPR consent.
+    - Create a new Contact when the email and Mailing ID are new.
+    - Reuse a unique existing Contact when the Mailing payload is idempotent.
+    - Publish crm.user.conflict when the email already exists with conflicting data.
+    - Invalid XML: rejected without requeue.
+    - Ambiguous Contacts: ack without retry.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("MailingUserCreated — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        email = xml.findtext("email") or ""
+        mailing_id = xml.findtext("id") or ""
+        gdpr_text = xml.findtext("gdprConsent")
+        if gdpr_text not in ("true", "1"):
+            logger.warning(
+                "MailingUserCreated refused — gdprConsent=%s for email %s",
+                gdpr_text,
+                email,
+            )
+            await message.reject(requeue=False)
+            return
+
+        if not await has_contact_mailing_id_field(sf):
+            logger.error(
+                "MailingUserCreated rejected — Salesforce Contact field Mailing_ID__c is missing",
+            )
+            await message.reject(requeue=False)
+            return
+
+        email_match_status, existing_by_email = await get_contact_match_by_email(sf, email)
+        mailing_match_status, existing_by_mailing_id = await get_contact_match_by_mailing_id(sf, mailing_id)
+
+        if mailing_match_status == "ambiguous":
+            logger.warning(
+                "MailingUserCreated ignored — ambiguous Mailing_ID__c %s in Salesforce",
+                mailing_id,
+            )
+            await message.ack()
+            return
+
+        if mailing_match_status == "unique":
+            existing_contact = existing_by_mailing_id
+        else:
+            if email_match_status == "ambiguous":
+                logger.warning(
+                    "MailingUserCreated ignored — ambiguous email %s in Salesforce",
+                    email,
+                )
+                await message.ack()
+                return
+
+            if email_match_status == "none":
+                contact = await create_contact(sf, _build_mailing_contact_data(xml))
+                await sender.publish_user_confirmed(_build_user_data(contact))
+                logger.info("Published crm.user.confirmed for new Mailing user %s", email)
+                await message.ack()
+                return
+
+            existing_contact = existing_by_email
+
+        if email_match_status == "none":
+            existing_email = _normalize_email_for_compare(existing_contact.get("Email"))
+            incoming_email = _normalize_email_for_compare(email)
+            if existing_email != incoming_email:
+                logger.warning(
+                    "MailingUserCreated conflict — Mailing ID %s already linked to email %s",
+                    mailing_id,
+                    existing_contact.get("Email"),
+                )
+                await sender.publish_user_conflict(
+                    _build_mailing_user_conflict_data(email, existing_contact, xml)
+                )
+                await message.ack()
+                return
+
+        if mailing_match_status == "unique":
+            existing_email = _normalize_email_for_compare(existing_contact.get("Email"))
+            incoming_email = _normalize_email_for_compare(email)
+            if existing_email is not None and existing_email != incoming_email:
+                logger.warning(
+                    "MailingUserCreated conflict — Mailing ID %s already linked to email %s",
+                    mailing_id,
+                    existing_contact.get("Email"),
+                )
+                await sender.publish_user_conflict(
+                    _build_mailing_user_conflict_data(email, existing_contact, xml)
+                )
+                await message.ack()
+                return
+
+        if email_match_status == "unique" and existing_by_email["Id"] != existing_contact["Id"]:
+            logger.warning(
+                "MailingUserCreated conflict — email %s and Mailing ID %s point to different Contacts",
+                email,
+                mailing_id,
+            )
+            await sender.publish_user_conflict(
+                _build_mailing_user_conflict_data(email, existing_contact, xml)
+            )
+            await message.ack()
+            return
+
+        existing_mailing_id = _normalize_optional_text(existing_contact.get("Mailing_ID__c"))
+
+        if existing_mailing_id is not None and existing_mailing_id != mailing_id:
+            logger.warning(
+                "MailingUserCreated conflict — email %s already linked to Mailing ID %s",
+                email,
+                existing_mailing_id,
+            )
+            await sender.publish_user_conflict(
+                _build_mailing_user_conflict_data(email, existing_contact, xml)
+            )
+            await message.ack()
+            return
+
+        if _mailing_user_has_conflicting_data(existing_contact, xml):
+            logger.warning(
+                "MailingUserCreated conflict — email %s already exists with differing data",
+                email,
+            )
+            await sender.publish_user_conflict(
+                _build_mailing_user_conflict_data(email, existing_contact, xml)
+            )
+            await message.ack()
+            return
+
+        if existing_contact.get("GDPR_Consent__c") is False:
+            logger.warning(
+                "MailingUserCreated conflict — email %s already has explicit GDPR opt-out",
+                email,
+            )
+            await sender.publish_user_conflict(
+                _build_mailing_user_conflict_data(email, existing_contact, xml)
+            )
+            await message.ack()
+            return
+
+        contact = await ensure_contact_identifiers(
+            sf,
+            existing_contact,
+            mailing_id=mailing_id,
+        )
+        contact = await backfill_mailing_contact_fields(
+            sf,
+            contact,
+            **_get_mailing_backfill_kwargs(contact, xml),
+        )
+        await sender.publish_user_confirmed(_build_user_data(contact))
+        logger.info("Published crm.user.confirmed for existing Mailing user %s", email)
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("MailingUserCreated — error processing message: %s", exc)
+        await message.reject(requeue=True)
 
 
 async def handle_facturatie_user_created(
