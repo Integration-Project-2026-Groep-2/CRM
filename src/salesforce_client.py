@@ -74,7 +74,6 @@ async def create_contact(sf: Salesforce, data: dict[str, Any]) -> dict[str, Any]
         crm_id = str(uuid.uuid4())
         data["CRM_ID__c"] = crm_id
 
-        # Create Contact
         result = await asyncio.to_thread(sf.Contact.create, data)
         contact_id = result["id"]
         logger.info("Created Contact with ID %s (CRM_ID: %s)", contact_id, crm_id)
@@ -134,7 +133,9 @@ async def upsert_contact_by_email(
         if contact_id is None:
             refreshed = await get_contact_by_email(sf, email)
             if refreshed is None:
-                raise RuntimeError(f"Upsert succeeded but contact not found for email {email}")
+                raise RuntimeError(
+                    f"Upsert succeeded but contact not found for email {email}"
+                )
             return refreshed
 
         contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
@@ -150,7 +151,7 @@ _active_field_cache: str | None = None
 async def _resolve_contact_active_field(sf: Salesforce) -> str:
     """Resolve which custom field is used as contact active flag in this org.
 
-    Result is cached after first call - custom fields don't change at runtime.
+    Result is cached after first call — custom fields don't change at runtime.
     """
     global _active_field_cache  # noqa: PLW0603
     if _active_field_cache is not None:
@@ -174,7 +175,7 @@ async def _resolve_contact_active_field(sf: Salesforce) -> str:
 async def get_contact_by_email(
     sf: Salesforce, email: str
 ) -> dict[str, Any] | None:
-    """Look up a Contact by email (Contracts 5a, 10a, 20).
+    """Look up a Contact by email (Contracts 1, 2, 10a, 20).
 
     Args:
         sf: Authenticated Salesforce client.
@@ -251,12 +252,12 @@ async def deactivate_contact(
 async def create_account(sf: Salesforce, data: dict[str, Any]) -> dict[str, Any]:
     """Create a new Account (company) in Salesforce (Contract 3).
 
-    Maps XML CompanyRequest fields to Account fields and returns complete record
+    Maps XML CompanyCreated fields to Account fields and returns complete record
     for crm.company.confirmed serialization.
 
     Args:
         sf: Authenticated Salesforce client.
-        data: Account fields (Name, VAT_Number__c, Email, Phone, etc.).
+        data: Account fields (Name, VAT_Number__c, Email__c, Phone, etc.).
 
     Returns:
         Complete Account record as dictionary.
@@ -271,7 +272,6 @@ async def create_account(sf: Salesforce, data: dict[str, Any]) -> dict[str, Any]
         crm_id = str(uuid.uuid4())
         data["CRM_ID__c"] = crm_id
 
-        # Create Account
         result = await asyncio.to_thread(sf.Account.create, data)
         account_id = result["id"]
         logger.info("Created Account with ID %s (CRM_ID: %s)", account_id, crm_id)
@@ -334,7 +334,7 @@ async def upsert_account_by_vat(
 async def get_account_by_vat(
     sf: Salesforce, vat_number: str
 ) -> dict[str, Any] | None:
-    """Look up an Account by VAT number (Contracts 5a, 5b).
+    """Look up an Account by VAT number (Contracts 3, 5a, 5b).
 
     Args:
         sf: Authenticated Salesforce client.

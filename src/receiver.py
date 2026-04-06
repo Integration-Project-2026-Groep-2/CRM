@@ -146,7 +146,7 @@ async def handle_registration(
     1. Validate XML
     2. Reject if gdprConsent is not true/1
     3. Look up existing contact by email
-       - Same registrationId → retry: republish and ack
+       - Same registrationId → retry: republish using Salesforce values and ack
        - Different registrationId → conflict: log warning, ack
     4. Create Contact in Salesforce
     5. Publish crm.user.confirmed (C13) and crm.mail.requested (C6)
@@ -174,7 +174,9 @@ async def handle_registration(
     session_id = xml.findtext("sessionId")
     gdpr_raw = xml.findtext("gdprConsent", "false")
     phone = xml.findtext("phone")
-    company_el = xml.find("company")
+    # FIX (Issue 1): company is xs:string in the XSD — read as plain text,
+    # not as a complex element with child nodes.
+    company = xml.findtext("company")
 
     # ── Step 2: check gdprConsent ─────────────────────────────────────────
     gdpr_consent = gdpr_raw.lower() in ("true", "1")
@@ -185,7 +187,7 @@ async def handle_registration(
         await message.reject(requeue=False)
         return
 
-    if role == "COMPANY_CONTACT" and company_el is None:
+    if role == "COMPANY_CONTACT" and not company:
         logger.warning(
             "COMPANY_CONTACT registration without company field for %s", email
         )
@@ -206,18 +208,22 @@ async def handle_registration(
 
     if existing_contact is not None:
         if existing_contact.get("Registration_ID__c") == registration_id:
-            # Retry path — same registrationId, republish and ack
+            # Retry path — same registrationId.
+            # FIX (Issue 4): use Salesforce values (authoritative), not XML values.
+            # phone is explicitly included from the Salesforce record.
             crm_id = existing_contact["CRM_ID__c"]
             user_data: dict = {
                 "id": crm_id,
-                "email": email,
-                "firstName": first_name,
-                "lastName": last_name,
-                "role": role,
-                "isActive": True,
-                "gdprConsent": gdpr_consent,
+                "email": existing_contact.get("Email", email),
+                "firstName": existing_contact.get("FirstName", first_name),
+                "lastName": existing_contact.get("LastName", last_name),
+                "role": existing_contact.get("Role__c", role),
+                "isActive": existing_contact.get("IsActive__c", True),
+                "gdprConsent": existing_contact.get("GDPR_Consent__c", gdpr_consent),
                 "confirmedAt": confirmed_at,
             }
+            if existing_contact.get("Phone"):
+                user_data["phone"] = existing_contact["Phone"]
             try:
                 await sender.publish_user_confirmed(user_data)
                 await sender.publish_mail_requested(
@@ -234,7 +240,7 @@ async def handle_registration(
                 return
             await message.ack()
         else:
-            # Conflict — different registrationId
+            # Conflict — different registrationId for the same email
             logger.warning(
                 "Conflict: email %s exists with different registrationId", email
             )
@@ -253,9 +259,9 @@ async def handle_registration(
     }
     if phone:
         payload["Phone"] = phone
-    if company_el is not None:
-        payload["Company_Name__c"] = company_el.findtext("name")
-        payload["Company_VAT__c"] = company_el.findtext("vatNumber")
+    # FIX (Issue 1): company is a plain string — store directly, no child access.
+    if company:
+        payload["Company_Name__c"] = company
 
     try:
         contact = await create_contact(sf, payload)
@@ -339,14 +345,15 @@ async def handle_registration_updated(
 
     Queue: frontend.registration.updated | durable: true
 
-    changeType=updated  → upsert Contact, publish crm.user.updated (C18)
+    changeType=updated   → upsert Contact, publish crm.user.updated (C18)
     changeType=cancelled → deactivate Contact, publish crm.user.deactivated (C22)
 
     Error handling:
-    - Invalid XML          → reject (requeue=False)
-    - Salesforce error     → reject (requeue=True)
-    - Publish failure      → reject (requeue=True)
-    - Contact not found (cancelled) → log warning, ack without publish
+    - Invalid XML                      → reject (requeue=False)
+    - Unknown changeType               → reject (requeue=False)
+    - Salesforce error                 → reject (requeue=True)
+    - Publish failure                  → reject (requeue=True)
+    - Contact not found (cancelled)    → log warning, ack without publish
     """
     # ── Step 1: validate XML ──────────────────────────────────────────────
     try:
@@ -380,12 +387,14 @@ async def handle_registration_updated(
             return
 
         updated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # FIX (Issue 5): default Role__c to "VISITOR" (valid FacturatieUserRoleType
+        # enum value) instead of "" which fails XSD validation on C18 outbound.
         user_data: dict = {
             "id": contact["CRM_ID__c"],
             "email": email,
             "firstName": contact.get("FirstName", ""),
             "lastName": contact.get("LastName", ""),
-            "role": contact.get("Role__c", ""),
+            "role": contact.get("Role__c", "VISITOR"),
             "isActive": contact.get("IsActive__c", False),
             "gdprConsent": contact.get("GDPR_Consent__c", False),
             "updatedAt": updated_at,
@@ -448,6 +457,16 @@ async def handle_registration_updated(
         await message.ack()
         logger.info("Contract 2 — Contact deactivated and published (email=%s).", email)
 
+    else:
+        # FIX (Issue 3): unknown changeType must be explicitly rejected.
+        # Without this branch the message stays unacked → infinite requeue loop
+        # when the channel closes.
+        logger.error(
+            "Contract 2 — unknown changeType '%s' for email %s, rejecting.",
+            change_type, email,
+        )
+        await message.reject(requeue=False)
+
 
 # ---------------------------------------------------------------------------
 # Contract 3 — Frontend → CRM: create company
@@ -463,13 +482,15 @@ async def handle_company_created(
 
     Flow:
     1. Validate XML
-    2. Look up existing Account by VAT number (idempotency)
-    3. Create Account in Salesforce
-    4. Publish crm.company.confirmed (C14)
-    5. Ack
+    2. Reject if email is absent (required for C14 CompanyConfirmed)
+    3. Look up existing Account by VAT number (idempotency)
+    4. Create Account in Salesforce
+    5. Publish crm.company.confirmed (C14)
+    6. Ack
 
     Error handling:
     - Invalid XML          → reject (requeue=False)
+    - Email absent         → reject (requeue=False)
     - Salesforce error     → reject (requeue=True)
     - Publish failure      → reject (requeue=True)
     """
@@ -490,6 +511,18 @@ async def handle_company_created(
     postal_code = xml.findtext("postalCode")
     city = xml.findtext("city")
     country = xml.findtext("country")
+
+    # FIX (Issue 2): email is optional in CompanyCreated (C3) but required in
+    # CompanyConfirmed (C14) — XSD EmailType rejects empty strings.
+    # Reject early instead of passing "" which would fail XSD validation downstream.
+    if not email:
+        logger.error(
+            "Contract 3 — email is required for C14 (CompanyConfirmed) but absent "
+            "(vatNumber=%s), rejecting.",
+            vat_number,
+        )
+        await message.reject(requeue=False)
+        return
 
     # ── Step 2: idempotency check ─────────────────────────────────────────
     try:
@@ -551,11 +584,12 @@ async def handle_company_created(
     )
 
     # ── Step 4: publish crm.company.confirmed (C14) ───────────────────────
+    # email is guaranteed non-empty here (checked at top of handler).
     company_data: dict = {
         "id": crm_id,
         "vatNumber": vat_number,
         "name": name,
-        "email": email or "",
+        "email": email,
         "isActive": True,
         "confirmedAt": confirmed_at,
     }
