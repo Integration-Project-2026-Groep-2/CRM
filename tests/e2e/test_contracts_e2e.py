@@ -618,6 +618,75 @@ class TestContract27MailingUserCreated:
 
 
 # ---------------------------------------------------------------------------
+# Contract 28 → Contract 18 — Mailing User Update → User Updated
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.salesforce
+class TestContract28MailingUserUpdated:
+    """C28: mailing.user.updated → C18 crm.user.updated."""
+
+    @pytest.mark.asyncio
+    async def test_existing_mailing_user_update_produces_user_updated(
+        self, channel, inbound_exchanges, outbound_exchange, sf_client,
+    ):
+        await _wait_for_receiver_queue("mailing.user.created")
+        await _wait_for_receiver_queue("mailing.user.updated")
+        await _require_salesforce_contact_field(sf_client, "Mailing_ID__c")
+
+        email = _unique_email()
+        mailing_id = str(uuid.uuid4())
+        company_id = str(uuid.uuid4())
+
+        q_confirmed = await _create_temp_queue(channel, outbound_exchange, "crm.user.confirmed")
+        q_updated = await _create_temp_queue(channel, outbound_exchange, "crm.user.updated")
+        await _drain_queue(q_confirmed)
+        await _drain_queue(q_updated)
+
+        create_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<MailingUserCreated>
+    <id>{mailing_id}</id>
+    <email>{email}</email>
+    <firstName>Before</firstName>
+    <lastName>Update</lastName>
+    <gdprConsent>true</gdprConsent>
+    <companyId>{company_id}</companyId>
+</MailingUserCreated>"""
+
+        await _publish(inbound_exchanges["user.topic"], "mailing.user.created", create_xml)
+
+        confirmed = await _consume_one(q_confirmed)
+        assert confirmed is not None, "Prerequisite: C27 must produce UserConfirmed first"
+        confirmed_id = confirmed.findtext("id")
+        assert confirmed_id is not None, "UserConfirmed did not contain a CRM UUID"
+
+        await _drain_queue(q_updated)
+
+        update_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<MailingUserUpdated>
+    <id>{mailing_id}</id>
+    <email>{email}</email>
+    <firstName>After</firstName>
+    <gdprConsent>true</gdprConsent>
+</MailingUserUpdated>"""
+
+        await _publish(inbound_exchanges["user.topic"], "mailing.user.updated", update_xml)
+
+        result = await _consume_one(q_updated)
+
+        assert result is not None, "No UserUpdated message received within timeout"
+        assert result.tag == "UserUpdated"
+        assert result.findtext("id") == confirmed_id
+        assert result.findtext("email") == email
+        assert result.findtext("firstName") == "After"
+        assert result.findtext("lastName") == email
+        assert result.findtext("role") == "VISITOR"
+        assert result.findtext("companyId") is None
+        assert result.findtext("gdprConsent") == "true"
+        assert result.findtext("updatedAt") is not None
+
+
+# ---------------------------------------------------------------------------
 # Contract 2 (updated) → Contract 18 — Registration Update → User Updated
 # ---------------------------------------------------------------------------
 

@@ -445,6 +445,63 @@ async def backfill_mailing_contact_fields(
     return await asyncio.to_thread(sf.Contact.get, contact_id)
 
 
+async def update_mailing_contact(
+    sf: Salesforce,
+    contact: dict[str, Any],
+    *,
+    email: str,
+    first_name: str | None,
+    last_name: str,
+    company_id: str | None,
+) -> dict[str, Any]:
+    """Authoritatively update Mailing-owned fields on an existing Contact.
+
+    Contract 28 sends the full Mailing-side object. CRM therefore overwrites the
+    Mailing-owned Contact fields to match that payload, while preserving
+    CRM-owned fields such as active state, badge data, and registration
+    identifiers. Specialized existing roles keep their role and company linkage.
+    """
+    updates: dict[str, Any] = {}
+    existing_role = _normalize_optional_field_value(contact.get("Role__c"))
+    can_manage_company_link = existing_role in (None, "VISITOR", "COMPANY_CONTACT")
+
+    if contact.get("Email") != email:
+        updates["Email"] = email
+
+    if _normalize_optional_field_value(contact.get("FirstName")) != _normalize_optional_field_value(first_name):
+        updates["FirstName"] = first_name
+
+    if _normalize_optional_field_value(contact.get("LastName")) != _normalize_optional_field_value(last_name):
+        updates["LastName"] = last_name
+
+    if (
+        can_manage_company_link
+        and _normalize_optional_field_value(contact.get("Company_ID__c"))
+        != _normalize_optional_field_value(company_id)
+    ):
+        updates["Company_ID__c"] = company_id
+
+    if contact.get("GDPR_Consent__c") is not True:
+        updates["GDPR_Consent__c"] = True
+
+    if can_manage_company_link:
+        desired_role = "COMPANY_CONTACT" if company_id else "VISITOR"
+        if existing_role != desired_role:
+            updates["Role__c"] = desired_role
+
+    if not updates:
+        return contact
+
+    contact_id = contact["Id"]
+    await asyncio.to_thread(sf.Contact.update, contact_id, updates)
+    logger.info(
+        "Updated Mailing Contact %s fields: %s",
+        contact_id,
+        ", ".join(sorted(updates.keys())),
+    )
+    return await asyncio.to_thread(sf.Contact.get, contact_id)
+
+
 async def get_unpaid_contacts(sf: Salesforce) -> list[dict[str, Any]]:
     """Return active Contacts without a payment timestamp for Contract 17.
 
