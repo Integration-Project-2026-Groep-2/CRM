@@ -3,6 +3,8 @@ Unit tests — receiver.py
 Contract 9: controlroom.warning.issued
 Contract 1 + 13: frontend.registration.created → crm.user.confirmed
 Contract 24: facturatie.user.created → crm.user.confirmed
+Contract 25: facturatie.user.updated → crm.user.updated
+Contract 26: facturatie.user.deactivated → crm.user.deactivated
 """
 
 import logging
@@ -163,6 +165,13 @@ VALID_FACTURATIE_USER_UPDATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <updatedAt>2026-04-15T10:15:00Z</updatedAt>
 </UserUpdated>"""
 
+VALID_FACTURATIE_USER_DEACTIVATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<UserDeactivated>
+    <id>223e4567-e89b-12d3-a456-426614174024</id>
+    <email>els.peeters@example.com</email>
+    <deactivatedAt>2026-04-15T16:00:00Z</deactivatedAt>
+</UserDeactivated>"""
+
 FACTURATIE_USER_UPDATED_CONTACT_RETURN = {
     "Id": "003000000000027",
     "CRM_ID__c": "223e4567-e89b-12d3-a456-426614174024",
@@ -180,6 +189,13 @@ FACTURATIE_USER_UPDATED_CONTACT_RETURN = {
     "Badge_Code__c": "B-42",
     "Company_ID__c": "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901",
     "IsActive__c": True,
+}
+
+FACTURATIE_USER_DEACTIVATED_CONTACT_RETURN = {
+    "Id": "003000000000030",
+    "CRM_ID__c": "223e4567-e89b-12d3-a456-426614174024",
+    "Email": "els.peeters@example.com",
+    "IsActive__c": False,
 }
 
 
@@ -810,6 +826,65 @@ class TestHandleFacturatieUserUpdated:
             msg.ack.assert_called_once()
 
 
+class TestHandleFacturatieUserDeactivated:
+    @pytest.fixture
+    def sf_mock(self):
+        return AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_facturatie_user_deactivated_soft_deletes_by_crm_id_and_publishes(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_DEACTIVATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch(
+                "src.receiver.deactivate_contact_by_crm_id",
+                return_value=FACTURATIE_USER_DEACTIVATED_CONTACT_RETURN,
+            ) as mock_deactivate,
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+        ):
+            from src.receiver import handle_facturatie_user_deactivated
+
+            msg = _make_message(VALID_FACTURATIE_USER_DEACTIVATED_XML)
+            await handle_facturatie_user_deactivated(msg, sf_mock)
+
+            mock_deactivate.assert_called_once_with(
+                sf_mock,
+                "223e4567-e89b-12d3-a456-426614174024",
+            )
+            mock_publish.assert_called_once()
+            published_data = mock_publish.call_args.args[0]
+            assert published_data["id"] == "223e4567-e89b-12d3-a456-426614174024"
+            assert published_data["email"] == "els.peeters@example.com"
+            assert "deactivatedAt" in published_data
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_facturatie_user_deactivated_invalid_xml_rejected(self, sf_mock):
+        with patch("src.xml_validator.validate", side_effect=ValueError("Bad XML")):
+            from src.receiver import handle_facturatie_user_deactivated
+
+            msg = _make_message(INVALID_XML)
+            await handle_facturatie_user_deactivated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+
+    @pytest.mark.asyncio
+    async def test_facturatie_user_deactivated_missing_contact_acks(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_DEACTIVATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.deactivate_contact_by_crm_id", return_value=None),
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+        ):
+            from src.receiver import handle_facturatie_user_deactivated
+
+            msg = _make_message(VALID_FACTURATIE_USER_DEACTIVATED_XML)
+            await handle_facturatie_user_deactivated(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            msg.ack.assert_called_once()
+
+
 # ==========================================================================
 # Contract 2 + 18 + 22: frontend.registration.updated
 # ==========================================================================
@@ -1384,6 +1459,7 @@ class TestRunReceiver:
         updated_queue = AsyncMock()
         facturatie_created_queue = AsyncMock()
         facturatie_updated_queue = AsyncMock()
+        facturatie_deactivated_queue = AsyncMock()
         payment_queue = AsyncMock()
         unpaid_queue = AsyncMock()
         sf_client = MagicMock()
@@ -1401,13 +1477,19 @@ class TestRunReceiver:
                     updated_queue,
                     facturatie_created_queue,
                     facturatie_updated_queue,
+                    facturatie_deactivated_queue,
                     payment_queue,
                     unpaid_queue,
                 ],
             ) as mock_declare,
             patch("src.receiver.asyncio.Future", return_value=_stop_receiver()),
         ):
-            from src.receiver import handle_facturatie_user_created, handle_facturatie_user_updated, run_receiver
+            from src.receiver import (
+                handle_facturatie_user_created,
+                handle_facturatie_user_deactivated,
+                handle_facturatie_user_updated,
+                run_receiver,
+            )
 
             with pytest.raises(RuntimeError, match="stop receiver loop"):
                 await run_receiver(AsyncMock(), MagicMock())
@@ -1426,11 +1508,21 @@ class TestRunReceiver:
             assert facturatie_updated_callback.func is handle_facturatie_user_updated
             assert facturatie_updated_callback.keywords["sf"] is sf_client
 
+            facturatie_deactivated_callback = facturatie_deactivated_queue.consume.call_args.args[0]
+            assert facturatie_deactivated_callback.func is handle_facturatie_user_deactivated
+            assert facturatie_deactivated_callback.keywords["sf"] is sf_client
+
             updated_queue_call = next(
                 call for call in mock_declare.call_args_list
                 if call.args[1] == "facturatie.user.updated"
             )
             assert updated_queue_call.kwargs["durable"] is True
+
+            deactivated_queue_call = next(
+                call for call in mock_declare.call_args_list
+                if call.args[1] == "facturatie.user.deactivated"
+            )
+            assert deactivated_queue_call.kwargs["durable"] is True
 
     @pytest.mark.asyncio
     async def test_run_receiver_registers_contract_16_queue(self):
@@ -1439,6 +1531,7 @@ class TestRunReceiver:
         updated_queue = AsyncMock()
         facturatie_created_queue = AsyncMock()
         facturatie_updated_queue = AsyncMock()
+        facturatie_deactivated_queue = AsyncMock()
         payment_queue = AsyncMock()
         unpaid_queue = AsyncMock()
         sf_client = MagicMock()
@@ -1456,6 +1549,7 @@ class TestRunReceiver:
                     updated_queue,
                     facturatie_created_queue,
                     facturatie_updated_queue,
+                    facturatie_deactivated_queue,
                     payment_queue,
                     unpaid_queue,
                 ],
@@ -1484,6 +1578,7 @@ class TestRunReceiver:
         updated_queue = AsyncMock()
         facturatie_created_queue = AsyncMock()
         facturatie_updated_queue = AsyncMock()
+        facturatie_deactivated_queue = AsyncMock()
         payment_queue = AsyncMock()
         unpaid_queue = AsyncMock()
         sf_client = MagicMock()
@@ -1501,6 +1596,7 @@ class TestRunReceiver:
                     updated_queue,
                     facturatie_created_queue,
                     facturatie_updated_queue,
+                    facturatie_deactivated_queue,
                     payment_queue,
                     unpaid_queue,
                 ],

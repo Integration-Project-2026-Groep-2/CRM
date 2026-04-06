@@ -1,7 +1,7 @@
 asyncapi: 3.1.0
 info:
   title: Integratieproject 2026 — CRM (Salesforce) RabbitMQ Contracts
-  version: 1.6.0
+  version: 1.7.0
   description: >
     XML-contracten voor alle integraties waarbij het CRM-team (Salesforce)
     betrokken is.
@@ -13,6 +13,13 @@ info:
     tenzij anders vermeld.
 
     Alle berichten zijn XML-formaat (projectbrede afspraak, bevestigd door PMs).
+  x-changelog:
+    - version: 1.7.0
+      date: 2026-04-06
+      changes:
+        - Contract 25 en 26 zijn formeel opgenomen als inbound op user.topic.
+        - Shared root UserUpdated blijft sequentieel en gebruikt de gedeelde user-rolset.
+        - Contract 26 is expliciet soft delete only (nooit fysiek verwijderen).
   contact:
     name: Lars Cowé — CRM Team Lead
     email: lars.cowe@student.ehb.be
@@ -108,7 +115,8 @@ channels:
     description: >-
       Contract 25 — Facturatie → CRM: bestaande CRM-linked user vanuit
       Facturatie bijwerken in Salesforce. XML-root: UserUpdated (gedeeld met
-      Contract 18); gdprConsent is verplicht in de payload.
+      Contract 18) met dezelfde veldvolgorde en rolset; gdprConsent is
+      verplicht in de payload.
     messages:
       facturatieUserUpdated:
         $ref: "#/components/messages/FacturatieUserUpdated"
@@ -122,7 +130,7 @@ channels:
     address: facturatie.user.deactivated
     description: >-
       Contract 26 — Facturatie → CRM: bestaande CRM-linked user soft-deactiveren
-      in Salesforce.
+      in Salesforce. Soft delete only: CRM verwijdert nooit fysiek.
     messages:
       facturatieUserDeactivated:
         $ref: "#/components/messages/FacturatieUserDeactivated"
@@ -1864,7 +1872,9 @@ components:
       properties:
         facturatieCustomerId:
           type: string
-          description: Interne klant-ID in FOSSBilling. Inbound-only voor CRM in v1.6.0.
+          description: >-
+            Interne klant-ID in FOSSBilling. CRM bewaart dit op Contact wanneer
+            de Salesforce-org een ondersteund custom veld bevat.
         registrationId:
           type: string
           description: Optioneel — doorgegeven als er al een registratiereferentie bestaat.
@@ -1975,7 +1985,7 @@ components:
         - deactivatedAt
       description: >-
         Facturatie vraagt CRM om een bestaande CRM-linked user soft te
-        deactiveren.
+        deactiveren. Soft delete only: CRM zet enkel de actieve vlag op false.
       properties:
         id:
           type: string

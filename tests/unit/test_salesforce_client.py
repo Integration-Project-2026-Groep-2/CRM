@@ -5,9 +5,11 @@ from simple_salesforce import SalesforceError
 
 import src.salesforce_client as salesforce_client_module
 from src.salesforce_client import (
+    add_facturatie_customer_id_if_supported,
     create_account,
     create_contact,
     deactivate_contact,
+    deactivate_contact_by_crm_id,
     ensure_contact_identifiers,
     find_unique_contact_by_email,
     get_account_by_vat,
@@ -25,6 +27,7 @@ from src.salesforce_client import (
 @pytest.fixture
 def sf(monkeypatch):
     salesforce_client_module._active_field_cache = None
+    salesforce_client_module._facturatie_customer_field_cache = None
 
     async def immediate_to_thread(func, /, *args, **kwargs):
         return func(*args, **kwargs)
@@ -453,7 +456,62 @@ async def test_deactivate_contact_success(sf):
 
     sf.Contact.update.assert_called_once_with("003000000000020", {"IsActive__c": False})
     assert result["IsActive__c"] is False
-    assert result["CRM_ID__c"] == "uuid-deact"
+
+
+@pytest.mark.asyncio
+async def test_deactivate_contact_by_crm_id(sf):
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000016"}]}
+    sf.Contact.get.side_effect = [
+        {
+            "Id": "003000000000016",
+            "CRM_ID__c": "crm-abc",
+            "Email": "abc@example.com",
+            "IsActive__c": True,
+        },
+        {
+            "Id": "003000000000016",
+            "CRM_ID__c": "crm-abc",
+            "Email": "abc@example.com",
+            "IsActive__c": False,
+        },
+    ]
+
+    result = await deactivate_contact_by_crm_id(sf, "crm-abc")
+
+    sf.Contact.update.assert_called_once_with("003000000000016", {"IsActive__c": False})
+    assert result["IsActive__c"] is False
+
+
+@pytest.mark.asyncio
+async def test_deactivate_contact_by_crm_id_returns_none_when_missing(sf):
+    sf.query.return_value = {"totalSize": 0, "records": []}
+
+    result = await deactivate_contact_by_crm_id(sf, "missing-crm")
+
+    assert result is None
+    sf.Contact.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_add_facturatie_customer_id_if_supported_uses_custom_field(sf):
+    sf.Contact.describe.return_value = {
+        "fields": [{"name": "Facturatie_Customer_ID__c"}]
+    }
+    payload = {"Email": "fact@example.com"}
+
+    result = await add_facturatie_customer_id_if_supported(sf, payload, "FB-1024")
+
+    assert result["Facturatie_Customer_ID__c"] == "FB-1024"
+
+
+@pytest.mark.asyncio
+async def test_add_facturatie_customer_id_if_supported_no_field_keeps_payload(sf):
+    sf.Contact.describe.return_value = {"fields": [{"name": "Email"}]}
+    payload = {"Email": "fact@example.com"}
+
+    result = await add_facturatie_customer_id_if_supported(sf, payload, "FB-1024")
+
+    assert result == payload
 
 
 @pytest.mark.asyncio

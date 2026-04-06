@@ -14,8 +14,10 @@ from lxml import etree
 from src import sender, xml_validator
 from src.config import Config
 from src.salesforce_client import (
+    add_facturatie_customer_id_if_supported,
     create_contact,
     deactivate_contact,
+    deactivate_contact_by_crm_id,
     ensure_contact_identifiers,
     get_contact_by_email,
     get_contact_match_by_email,
@@ -37,6 +39,8 @@ _INBOUND_EXCHANGE: dict[str, str] = {
     "frontend.registration.updated": "user.topic",
     "frontend.company.created": "user.topic",
     "facturatie.user.created": "user.topic",
+    "facturatie.user.updated": "user.topic",
+    "facturatie.user.deactivated": "user.topic",
     "facturatie.company.requested": "invoice.topic",
     "kassa.person.lookup.requested": "payment.topic",
     "kassa.payment.confirmed": "payment.topic",
@@ -95,6 +99,11 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     # Queue: facturatie.user.updated | Exchange: user.topic | durable: true
     queue_facturatie_user_updated = await _declare_and_bind(channel, "facturatie.user.updated", durable=True)
     await queue_facturatie_user_updated.consume(partial(handle_facturatie_user_updated, sf=sf_client))
+
+    # Contract 26 — Facturatie → CRM: user deactivated (soft delete only)
+    # Queue: facturatie.user.deactivated | Exchange: user.topic | durable: true
+    queue_facturatie_user_deactivated = await _declare_and_bind(channel, "facturatie.user.deactivated", durable=True)
+    await queue_facturatie_user_deactivated.consume(partial(handle_facturatie_user_deactivated, sf=sf_client))
 
     # Contract 3 — Frontend → CRM: create company
     # queue_company = await _declare_and_bind(channel, "frontend.company.created", durable=True)
@@ -338,6 +347,12 @@ async def handle_facturatie_user_created(
         if company_id:
             contact_data["Company_ID__c"] = company_id
 
+        contact_data = await add_facturatie_customer_id_if_supported(
+            sf,
+            contact_data,
+            xml.findtext("facturatieCustomerId"),
+        )
+
         contact = await create_contact(sf, contact_data)
         await sender.publish_user_confirmed(_build_user_data(contact))
         logger.info("Published crm.user.confirmed for new Facturatie user %s", email)
@@ -411,6 +426,50 @@ async def handle_facturatie_user_updated(
         await message.ack()
     except Exception as exc:  # noqa: BLE001
         logger.error("FacturatieUserUpdated — error processing message: %s", exc)
+        await message.reject(requeue=True)
+
+
+async def handle_facturatie_user_deactivated(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 26 — Facturatie -> CRM: CRM-linked user deactivation.
+
+    Queue: facturatie.user.deactivated | durable: true
+
+    Behaviour:
+    - Validate XML against schema.
+    - Soft-delete the unique Contact by CRM UUID (id) only.
+    - Publish crm.user.deactivated after Salesforce update.
+    - Missing/ambiguous CRM UUID: ack without retry.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("FacturatieUserDeactivated — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        crm_id = xml.findtext("id") or ""
+        email = xml.findtext("email") or ""
+
+        contact = await deactivate_contact_by_crm_id(sf, crm_id)
+        if contact is None:
+            await message.ack()
+            return
+
+        deactivation_data = {
+            "id": contact["CRM_ID__c"],
+            "email": contact["Email"],
+            "deactivatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        await sender.publish_user_deactivated(deactivation_data)
+        logger.info("Published crm.user.deactivated for Facturatie user %s", email)
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("FacturatieUserDeactivated — error processing message: %s", exc)
         await message.reject(requeue=True)
 
 
