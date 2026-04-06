@@ -24,6 +24,7 @@ from src.salesforce_client import (
     get_salesforce_client,
     get_unpaid_contacts,
     has_contact_mailing_id_field,
+    update_mailing_contact,
     update_payment_status,
     upsert_contact_by_email,
 )
@@ -40,6 +41,7 @@ _INBOUND_EXCHANGE: dict[str, str] = {
     "frontend.company.created": "user.topic",
     "facturatie.user.created": "user.topic",
     "mailing.user.created": "user.topic",
+    "mailing.user.updated": "user.topic",
     "facturatie.company.requested": "invoice.topic",
     "kassa.person.lookup.requested": "payment.topic",
     "kassa.payment.confirmed": "payment.topic",
@@ -98,6 +100,11 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     # Queue: mailing.user.created | Exchange: user.topic | durable: true
     queue_mailing_user_created = await _declare_and_bind(channel, "mailing.user.created", durable=True)
     await queue_mailing_user_created.consume(partial(handle_mailing_user_created, sf=sf_client))
+
+    # Contract 28 — Mailing → CRM: update existing Mailing user sync
+    # Queue: mailing.user.updated | Exchange: user.topic | durable: true
+    queue_mailing_user_updated = await _declare_and_bind(channel, "mailing.user.updated", durable=True)
+    await queue_mailing_user_updated.consume(partial(handle_mailing_user_updated, sf=sf_client))
 
     # Contract 3 — Frontend → CRM: create company
     # queue_company = await _declare_and_bind(channel, "frontend.company.created", durable=True)
@@ -585,6 +592,113 @@ async def handle_mailing_user_created(
         await message.ack()
     except Exception as exc:  # noqa: BLE001
         logger.error("MailingUserCreated — error processing message: %s", exc)
+        await message.reject(requeue=True)
+
+
+async def handle_mailing_user_updated(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 28 — Mailing -> CRM: update an existing Mailing-linked user.
+
+    Queue: mailing.user.updated | durable: true
+
+    Behaviour:
+    - Validate XML against schema.
+    - Reject users without GDPR consent.
+    - Resolve the Contact strictly by Mailing_ID__c.
+    - Requeue unknown Mailing identities so out-of-order create/update can recover.
+    - Ack ambiguous Mailing identities without retry.
+    - Publish crm.user.conflict on email collisions.
+    - Update Mailing-owned fields authoritatively in Salesforce.
+    - Publish crm.user.updated after a successful update.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("MailingUserUpdated — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        email = xml.findtext("email") or ""
+        mailing_id = xml.findtext("id") or ""
+        gdpr_text = xml.findtext("gdprConsent")
+        if gdpr_text not in ("true", "1"):
+            logger.warning(
+                "MailingUserUpdated refused — gdprConsent=%s for email %s",
+                gdpr_text,
+                email,
+            )
+            await message.reject(requeue=False)
+            return
+
+        if not await has_contact_mailing_id_field(sf):
+            logger.error(
+                "MailingUserUpdated rejected — Salesforce Contact field Mailing_ID__c is missing",
+            )
+            await message.reject(requeue=False)
+            return
+
+        mailing_match_status, existing_contact = await get_contact_match_by_mailing_id(sf, mailing_id)
+        if mailing_match_status == "none":
+            logger.warning(
+                "MailingUserUpdated deferred — no Contact found for Mailing_ID__c %s; retrying for possible out-of-order create/update",
+                mailing_id,
+            )
+            await message.reject(requeue=True)
+            return
+
+        if mailing_match_status == "ambiguous":
+            logger.warning(
+                "MailingUserUpdated ignored — ambiguous Mailing_ID__c %s in Salesforce",
+                mailing_id,
+            )
+            await message.ack()
+            return
+
+        email_match_status, existing_by_email = await get_contact_match_by_email(sf, email)
+        if email_match_status == "ambiguous":
+            logger.warning(
+                "MailingUserUpdated conflict — email %s is ambiguous in Salesforce",
+                email,
+            )
+            await sender.publish_user_conflict(
+                _build_mailing_user_conflict_data(email, existing_contact, xml)
+            )
+            await message.ack()
+            return
+
+        if email_match_status == "unique" and existing_by_email["Id"] != existing_contact["Id"]:
+            logger.warning(
+                "MailingUserUpdated conflict — email %s already linked to another Contact",
+                email,
+            )
+            await sender.publish_user_conflict(
+                _build_mailing_user_conflict_data(email, existing_by_email, xml)
+            )
+            await message.ack()
+            return
+
+        contact = await ensure_contact_identifiers(
+            sf,
+            existing_contact,
+            mailing_id=mailing_id,
+        )
+        contact = await update_mailing_contact(
+            sf,
+            contact,
+            email=email,
+            first_name=_normalize_optional_text(xml.findtext("firstName")),
+            last_name=_get_mailing_last_name_for_contact(xml),
+            company_id=_normalize_optional_text(xml.findtext("companyId")),
+        )
+        await sender.publish_user_updated(_build_updated_user_data(contact))
+        logger.info("Published crm.user.updated for Mailing user %s", email)
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("MailingUserUpdated — error processing message: %s", exc)
         await message.reject(requeue=True)
 
 
