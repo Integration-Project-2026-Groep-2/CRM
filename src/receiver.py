@@ -13,19 +13,19 @@ from lxml import etree
 from src import sender, xml_validator
 from src.config import Config
 from src.salesforce_client import (
-
     add_facturatie_customer_id_if_supported,
+    create_account,
     create_contact,
     deactivate_contact,
     deactivate_contact_by_crm_id,
     ensure_contact_identifiers,
+    get_account_by_vat,
     get_contact_by_email,
     get_contact_match_by_email,
     get_salesforce_client,
     get_unpaid_contacts,
     update_contact_by_crm_id,
     update_payment_status,
-
     upsert_contact_by_email,
 )
 
@@ -89,17 +89,17 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     # Contract 24 — Facturatie → CRM: manually created user
     # Queue: facturatie.user.created | Exchange: user.topic | durable: true
     queue_facturatie_user_created = await _declare_and_bind(channel, "facturatie.user.created", durable=True)
-    await queue_facturatie_user_created.consume(partial(handle_facturatie_user_created, sf=sf_client))
+    await queue_facturatie_user_created.consume(partial(handle_facturatie_user_created, sf=sf))
 
     # Contract 25 — Facturatie → CRM: user updated
     # Queue: facturatie.user.updated | Exchange: user.topic | durable: true
     queue_facturatie_user_updated = await _declare_and_bind(channel, "facturatie.user.updated", durable=True)
-    await queue_facturatie_user_updated.consume(partial(handle_facturatie_user_updated, sf=sf_client))
+    await queue_facturatie_user_updated.consume(partial(handle_facturatie_user_updated, sf=sf))
 
     # Contract 26 — Facturatie → CRM: user deactivated (soft delete only)
     # Queue: facturatie.user.deactivated | Exchange: user.topic | durable: true
     queue_facturatie_user_deactivated = await _declare_and_bind(channel, "facturatie.user.deactivated", durable=True)
-    await queue_facturatie_user_deactivated.consume(partial(handle_facturatie_user_deactivated, sf=sf_client))
+    await queue_facturatie_user_deactivated.consume(partial(handle_facturatie_user_deactivated, sf=sf))
 
     # Contract 3 — Frontend → CRM: create company
     # Queue: frontend.company.created | Exchange: user.topic | durable: true | US-40, US-20
@@ -116,11 +116,11 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
 
     # Contract 16 — Kassa → CRM: payment confirmed
     queue_payment = await _declare_and_bind(channel, "kassa.payment.confirmed", durable=True)
-    await queue_payment.consume(partial(handle_payment_confirmed, sf=sf_client))
+    await queue_payment.consume(partial(handle_payment_confirmed, sf=sf))
 
     # Contract 17a — Kassa → CRM: unpaid persons request
     queue_unpaid = await _declare_and_bind(channel, "kassa.unpaid.requested", durable=True)
-    await queue_unpaid.consume(partial(handle_unpaid_requested, sf=sf_client))
+    await queue_unpaid.consume(partial(handle_unpaid_requested, sf=sf))
 
     # Contract 11 — Planning → CRM: session update (Release 2)
     # queue_session = await _declare_and_bind(channel, "planning.session.updated", durable=True)
@@ -158,12 +158,6 @@ async def handle_warning(message: aio_pika.IncomingMessage) -> None:
         await message.reject(requeue=False)
 
         return
-
-    logger.error(
-        "Controlroom warning received: %s",
-        etree.tostring(xml, encoding="unicode"),
-    )
-    await message.ack()
 
 
 async def handle_payment_confirmed(
