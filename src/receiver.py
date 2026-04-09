@@ -967,3 +967,4 @@ async def handle_company_created(
 
     await message.ack()
     logger.info("Contract 3 — crm.company.confirmed published (crm_id=%s).", crm_id)
+    
