@@ -1,6 +1,6 @@
 """
 Unit tests — sender.py
-Contracten 15, 13, 14, 5b, 10b, 17b, 6, 18, 22
+Contracten 15, 13, 14, 23, 5b, 10b, 17b, 6, 18, 22
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -274,6 +274,48 @@ class TestPublishCompanyConfirmed:
             await sender.publish_company_confirmed(self.BASE_DATA)
         xml = _get_published_xml(setup_sender)
         for field in ["id", "vatNumber", "name", "email", "isActive", "confirmedAt"]:
+            assert xml.find(field) is not None, f"Required field '{field}' missing"
+
+
+# ---------------------------------------------------------------------------
+# Contract 23 — publish_company_deactivated
+# ---------------------------------------------------------------------------
+
+class TestPublishCompanyDeactivated:
+
+    BASE_DATA = {
+        "id": "660e8400-e29b-41d4-a716-446655440001",
+        "vatNumber": "BE0123456789",
+        "deactivatedAt": "2025-01-01T10:00:00Z",
+    }
+
+    @pytest.mark.asyncio
+    async def test_publishes_to_correct_queue(self, setup_sender):
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_company_deactivated(self.BASE_DATA)
+        assert _get_routing_key(setup_sender) == "crm.company.deactivated"
+
+    @pytest.mark.asyncio
+    async def test_message_is_persistent(self, setup_sender):
+        from aio_pika import DeliveryMode
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_company_deactivated(self.BASE_DATA)
+        assert _get_delivery_mode(setup_sender) == DeliveryMode.PERSISTENT
+
+    @pytest.mark.asyncio
+    async def test_root_element_is_company_deactivated(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_company_deactivated(self.BASE_DATA)
+        assert _get_published_xml(setup_sender).tag == "CompanyDeactivated"
+
+    @pytest.mark.asyncio
+    async def test_required_fields_present(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_company_deactivated(self.BASE_DATA)
+        xml = _get_published_xml(setup_sender)
+        for field in ["id", "vatNumber", "deactivatedAt"]:
             assert xml.find(field) is not None, f"Required field '{field}' missing"
 
 

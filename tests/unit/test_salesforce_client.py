@@ -8,9 +8,11 @@ from src.salesforce_client import (
     backfill_mailing_contact_fields,
     create_account,
     create_contact,
+    deactivate_account_by_crm_id,
     deactivate_contact,
     ensure_contact_identifiers,
     find_unique_contact_by_email,
+    get_account_by_crm_id,
     get_account_by_vat,
     get_contact_by_crm_id,
     get_contact_by_email,
@@ -28,6 +30,8 @@ from src.salesforce_client import (
 def sf(monkeypatch):
     salesforce_client_module._active_field_cache = None
     salesforce_client_module._mailing_id_field_supported_cache = None
+    salesforce_client_module._account_active_field_cache = None
+    salesforce_client_module._facturatie_customer_field_cache = None
 
     async def immediate_to_thread(func, /, *args, **kwargs):
         return func(*args, **kwargs)
@@ -870,6 +874,62 @@ async def test_deactivate_contact_raises_salesforce_error(sf):
 
     with pytest.raises(SalesforceError):
         await deactivate_contact(sf, "err@example.com")
+
+
+# ---------------------------------------------------------------------------
+# deactivate_account_by_crm_id (Contract 23)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_account_by_crm_id_returns_unique_match(sf):
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "001000000000010"}]}
+    sf.Account.get.return_value = {
+        "Id": "001000000000010",
+        "CRM_ID__c": "crm-company-1",
+        "VAT_Number__c": "BE0123456789",
+    }
+
+    result = await get_account_by_crm_id(sf, "crm-company-1")
+
+    assert result["Id"] == "001000000000010"
+
+
+@pytest.mark.asyncio
+async def test_deactivate_account_by_crm_id_success(sf):
+    sf.Account.describe.return_value = {
+        "fields": [{"name": "IsActive__c"}]
+    }
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "001000000000011"}]}
+    sf.Account.get.side_effect = [
+        {
+            "Id": "001000000000011",
+            "CRM_ID__c": "crm-company-2",
+            "VAT_Number__c": "BE9876543210",
+            "IsActive__c": True,
+        },
+        {
+            "Id": "001000000000011",
+            "CRM_ID__c": "crm-company-2",
+            "VAT_Number__c": "BE9876543210",
+            "IsActive__c": False,
+        },
+    ]
+
+    result = await deactivate_account_by_crm_id(sf, "crm-company-2")
+
+    sf.Account.update.assert_called_once_with("001000000000011", {"IsActive__c": False})
+    assert result["IsActive__c"] is False
+
+
+@pytest.mark.asyncio
+async def test_deactivate_account_by_crm_id_returns_none_when_missing(sf):
+    sf.query.return_value = {"totalSize": 0, "records": []}
+
+    result = await deactivate_account_by_crm_id(sf, "missing-company")
+
+    assert result is None
+    sf.Account.update.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -16,6 +16,7 @@ from src.config import Config
 from src.salesforce_client import (
     backfill_mailing_contact_fields,
     create_contact,
+    deactivate_account_by_crm_id,
     deactivate_contact,
     deactivate_contact_record,
     ensure_contact_identifiers,
@@ -1126,4 +1127,38 @@ async def _handle_cancellation(
     )
     await sender.publish_user_deactivated(deactivation_data)
     logger.info("Published crm.user.deactivated for %s", email)
+
+    company_id = contact.get("Company_ID__c")
+    if company_id:
+        account = await deactivate_account_by_crm_id(sf, company_id)
+        if account is None:
+            logger.warning(
+                "Skipping crm.company.deactivated for %s — Account not found for Company_ID__c=%s",
+                email,
+                company_id,
+            )
+        else:
+            account_crm_id = account.get("CRM_ID__c")
+            account_vat = account.get("VAT_Number__c")
+            if account_crm_id and account_vat:
+                await sender.publish_company_deactivated(
+                    {
+                        "id": account_crm_id,
+                        "vatNumber": account_vat,
+                        "deactivatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    }
+                )
+                logger.info(
+                    "Published crm.company.deactivated for %s (companyId=%s)",
+                    email,
+                    company_id,
+                )
+            else:
+                logger.warning(
+                    "Skipping crm.company.deactivated for %s — missing account fields CRM_ID__c=%s VAT_Number__c=%s",
+                    email,
+                    account_crm_id,
+                    account_vat,
+                )
+
     await message.ack()

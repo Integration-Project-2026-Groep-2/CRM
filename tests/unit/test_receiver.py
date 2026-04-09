@@ -2139,6 +2139,23 @@ DEACTIVATED_CONTACT_RETURN = {
     "IsActive__c": False,
 }
 
+DEACTIVATED_CONTACT_WITH_COMPANY_RETURN = {
+    "Id": "003000000000089",
+    "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440089",
+    "Email": "cancel@example.com",
+    "FirstName": "Cancelled",
+    "LastName": "User",
+    "IsActive__c": False,
+    "Company_ID__c": "660e8400-e29b-41d4-a716-446655440001",
+}
+
+DEACTIVATED_ACCOUNT_RETURN = {
+    "Id": "001000000000001",
+    "CRM_ID__c": "660e8400-e29b-41d4-a716-446655440001",
+    "VAT_Number__c": "BE0123456789",
+    "IsActive__c": False,
+}
+
 PAID_CONTACT_RETURN = {
     "Id": "003000000000077",
     "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440099",
@@ -2405,6 +2422,77 @@ class TestHandleRegistrationUpdated:
             msg.ack.assert_called_once()
             assert "acking without action" in caplog.text
 
+    @pytest.mark.asyncio
+    async def test_cancelled_with_company_deactivates_account(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch(
+                "src.receiver.deactivate_contact",
+                return_value=DEACTIVATED_CONTACT_WITH_COMPANY_RETURN,
+            ),
+            patch(
+                "src.receiver.deactivate_account_by_crm_id",
+                return_value=DEACTIVATED_ACCOUNT_RETURN,
+            ) as mock_deact_account,
+            patch("src.sender.publish_user_deactivated"),
+            patch("src.sender.publish_company_deactivated"),
+        ):
+            from src.receiver import handle_registration_updated
+
+            await handle_registration_updated(_make_message(VALID_CANCEL_XML), sf_mock)
+            mock_deact_account.assert_called_once_with(
+                sf_mock,
+                "660e8400-e29b-41d4-a716-446655440001",
+            )
+
+    @pytest.mark.asyncio
+    async def test_cancelled_with_company_publishes_company_deactivated(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch(
+                "src.receiver.deactivate_contact",
+                return_value=DEACTIVATED_CONTACT_WITH_COMPANY_RETURN,
+            ),
+            patch(
+                "src.receiver.deactivate_account_by_crm_id",
+                return_value=DEACTIVATED_ACCOUNT_RETURN,
+            ),
+            patch("src.sender.publish_user_deactivated"),
+            patch("src.sender.publish_company_deactivated") as mock_publish_company,
+        ):
+            from src.receiver import handle_registration_updated
+
+            await handle_registration_updated(_make_message(VALID_CANCEL_XML), sf_mock)
+
+            mock_publish_company.assert_called_once()
+            company_data = mock_publish_company.call_args[0][0]
+            assert company_data["id"] == "660e8400-e29b-41d4-a716-446655440001"
+            assert company_data["vatNumber"] == "BE0123456789"
+            assert "deactivatedAt" in company_data
+
+    @pytest.mark.asyncio
+    async def test_cancelled_with_company_missing_account_skips_company_publish(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch(
+                "src.receiver.deactivate_contact",
+                return_value=DEACTIVATED_CONTACT_WITH_COMPANY_RETURN,
+            ),
+            patch("src.receiver.deactivate_account_by_crm_id", return_value=None),
+            patch("src.sender.publish_user_deactivated"),
+            patch("src.sender.publish_company_deactivated") as mock_publish_company,
+        ):
+            from src.receiver import handle_registration_updated
+
+            msg = _make_message(VALID_CANCEL_XML)
+            await handle_registration_updated(msg, sf_mock)
+
+            mock_publish_company.assert_not_called()
+            msg.ack.assert_called_once()
+
     # ------------------------------------------------------------------
     # Error handling
     # ------------------------------------------------------------------
@@ -2460,6 +2548,30 @@ class TestHandleRegistrationUpdated:
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.receiver.deactivate_contact", return_value=DEACTIVATED_CONTACT_RETURN),
             patch("src.sender.publish_user_deactivated", side_effect=Exception("RabbitMQ down")),
+        ):
+            from src.receiver import handle_registration_updated
+
+            msg = _make_message(VALID_CANCEL_XML)
+            await handle_registration_updated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=True)
+
+    @pytest.mark.asyncio
+    async def test_publish_failure_on_company_deactivated_requeues(self, sf_mock):
+        """If company deactivation publish fails, message must requeue."""
+        parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch(
+                "src.receiver.deactivate_contact",
+                return_value=DEACTIVATED_CONTACT_WITH_COMPANY_RETURN,
+            ),
+            patch(
+                "src.receiver.deactivate_account_by_crm_id",
+                return_value=DEACTIVATED_ACCOUNT_RETURN,
+            ),
+            patch("src.sender.publish_user_deactivated"),
+            patch("src.sender.publish_company_deactivated", side_effect=Exception("RabbitMQ down")),
         ):
             from src.receiver import handle_registration_updated
 
