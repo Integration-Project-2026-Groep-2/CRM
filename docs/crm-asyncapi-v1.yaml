@@ -1,7 +1,7 @@
 asyncapi: 3.1.0
 info:
   title: Integratieproject 2026 — CRM (Salesforce) RabbitMQ Contracts
-  version: 1.5.0
+  version: 1.7.0
   description: >
     XML-contracten voor alle integraties waarbij het CRM-team (Salesforce)
     betrokken is.
@@ -13,6 +13,13 @@ info:
     tenzij anders vermeld.
 
     Alle berichten zijn XML-formaat (projectbrede afspraak, bevestigd door PMs).
+  x-changelog:
+    - version: 1.7.0
+      date: 2026-04-06
+      changes:
+        - Contract 25 en 26 zijn formeel opgenomen als inbound op user.topic.
+        - Shared root UserUpdated blijft sequentieel en gebruikt de gedeelde user-rolset.
+        - Contract 26 is expliciet soft delete only (nooit fysiek verwijderen).
   contact:
     name: Lars Cowé — CRM Team Lead
     email: lars.cowe@student.ehb.be
@@ -79,6 +86,54 @@ channels:
     messages:
       companyCreated:
         $ref: "#/components/messages/CompanyCreated"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: true
+
+  # ============================================================
+  # FACTURATIE → CRM (user sync)
+  # ============================================================
+
+  facturatieUserCreated:
+    address: facturatie.user.created
+    description: >-
+      Contract 24 — Facturatie → CRM: handmatig aangemaakte klant in FOSSBilling
+      synchroniseren naar Salesforce en een officiële CRM UUID laten toekennen.
+    messages:
+      facturatieUserCreated:
+        $ref: "#/components/messages/FacturatieUserCreated"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: true
+
+  facturatieUserUpdated:
+    address: facturatie.user.updated
+    description: >-
+      Contract 25 — Facturatie → CRM: bestaande CRM-linked user vanuit
+      Facturatie bijwerken in Salesforce. XML-root: UserUpdated (gedeeld met
+      Contract 18) met dezelfde veldvolgorde en rolset; gdprConsent is
+      verplicht in de payload.
+    messages:
+      facturatieUserUpdated:
+        $ref: "#/components/messages/FacturatieUserUpdated"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: true
+
+  facturatieUserDeactivated:
+    address: facturatie.user.deactivated
+    description: >-
+      Contract 26 — Facturatie → CRM: bestaande CRM-linked user soft-deactiveren
+      in Salesforce. Soft delete only: CRM verwijdert nooit fysiek.
+    messages:
+      facturatieUserDeactivated:
+        $ref: "#/components/messages/FacturatieUserDeactivated"
     bindings:
       amqp:
         is: queue
@@ -541,6 +596,47 @@ operations:
       - name: frontend
       - name: release-1
 
+  receiveFacturatieUserCreated:
+    action: receive
+    channel:
+      $ref: "#/channels/facturatieUserCreated"
+    messages:
+      - $ref: "#/channels/facturatieUserCreated/messages/facturatieUserCreated"
+    summary: >-
+      Ontvang handmatig aangemaakte klant uit Facturatie, valideer voor
+      Salesforce en publiceer daarna crm.user.confirmed met de CRM UUID.
+      Bij een uniek bestaand Contact hergebruikt CRM dat Contact en kent zo nodig
+      eerst een CRM UUID toe. Deze flow publiceert geen crm.mail.requested.
+    tags:
+      - name: facturatie
+      - name: contract-24
+
+  receiveFacturatieUserUpdated:
+    action: receive
+    channel:
+      $ref: "#/channels/facturatieUserUpdated"
+    messages:
+      - $ref: "#/channels/facturatieUserUpdated/messages/facturatieUserUpdated"
+    summary: >-
+      Ontvang update van een CRM-linked user uit Facturatie, werk Contact in
+      Salesforce bij en publiceer daarna crm.user.updated.
+    tags:
+      - name: facturatie
+      - name: contract-25
+
+  receiveFacturatieUserDeactivated:
+    action: receive
+    channel:
+      $ref: "#/channels/facturatieUserDeactivated"
+    messages:
+      - $ref: "#/channels/facturatieUserDeactivated/messages/facturatieUserDeactivated"
+    summary: >-
+      Ontvang deactivatieverzoek uit Facturatie, voer enkel soft delete uit in
+      Salesforce en publiceer daarna crm.user.deactivated.
+    tags:
+      - name: facturatie
+      - name: contract-26
+
   receiveCompanyDataRequest:
     action: receive
     channel:
@@ -652,8 +748,9 @@ operations:
       - $ref: "#/channels/crmUserConfirmed/messages/userConfirmed"
     summary: >-
       Publiceer bevestigd Contact met UUID na Salesforce-validatie. Getriggerd
-      door receiveRegistrationCreated. E-mail is deduplicatiesleutel — dubbele
-      e-mail leidt tot sendUserConflict in plaats van dit event.
+      door receiveRegistrationCreated en receiveFacturatieUserCreated. E-mail is
+      deduplicatiesleutel — dubbele e-mail leidt tot sendUserConflict in plaats
+      van dit event.
     tags:
       - name: frontend
       - name: facturatie
@@ -729,7 +826,8 @@ operations:
       - $ref: "#/channels/crmUserUpdated/messages/userUpdated"
     summary: >-
       Publiceer volledig bijgewerkt Contact na update in Salesforce (US-21,
-      US-41). Consumers updaten hun lokale kopie.
+      US-41) vanuit Frontend- of Facturatie-sync. Consumers updaten hun lokale
+      kopie.
     tags:
       - name: frontend
       - name: facturatie
@@ -784,8 +882,9 @@ operations:
     messages:
       - $ref: "#/channels/crmUserDeactivated/messages/userDeactivated"
     summary: >-
-      Publiceer deactivatie van Contact na GDPR-verwijderverzoek (US-55).
-      isActive=false — geen fysieke verwijdering.
+      Publiceer deactivatie van Contact na Frontend-cancellation,
+      Facturatie-sync of GDPR-verwijderverzoek (US-55). isActive=false — geen
+      fysieke verwijdering.
     tags:
       - name: facturatie
       - name: mailing
@@ -884,6 +983,93 @@ components:
               <sessionId>SESSION-001</sessionId>
               <changeType>cancelled</changeType>
             </RegistrationChange>
+
+    FacturatieUserCreated:
+      name: FacturatieUserCreated
+      title: Facturatie user aangemaakt
+      summary: >-
+        Facturatie meldt een handmatig aangemaakte klant zodat CRM een Contact
+        in Salesforce kan aanmaken en een CRM UUID kan toekennen.
+        Bij een uniek bestaand Contact hergebruikt CRM dat Contact en kent zo nodig
+        eerst een CRM UUID toe. Deze flow publiceert geen crm.mail.requested.
+      contentType: application/xml
+      tags:
+        - name: facturatie
+        - name: contract-24
+      payload:
+        $ref: "#/components/schemas/FacturatieUserCreated"
+      examples:
+        - name: handmatige_klant
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <UserCreated>
+              <facturatieCustomerId>FB-1024</facturatieCustomerId>
+              <registrationId>REG-20260415-010</registrationId>
+              <firstName>Els</firstName>
+              <lastName>Peeters</lastName>
+              <email>els.peeters@example.com</email>
+              <phone>+32470111222</phone>
+              <role>COMPANY_CONTACT</role>
+              <gdprConsent>true</gdprConsent>
+              <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
+              <createdAt>2026-04-15T09:30:00Z</createdAt>
+            </UserCreated>
+
+    FacturatieUserUpdated:
+      name: FacturatieUserUpdated
+      title: Facturatie user bijgewerkt
+      summary: >-
+        Facturatie stuurt een volledig update-object voor een reeds aan CRM
+        gekoppelde user.
+      contentType: application/xml
+      tags:
+        - name: facturatie
+        - name: contract-25
+      payload:
+        $ref: "#/components/schemas/FacturatieUserUpdated"
+      examples:
+        - name: adreswijziging
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <UserUpdated>
+              <id>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</id>
+              <email>els.peeters@example.com</email>
+              <firstName>Els</firstName>
+              <lastName>Peeters</lastName>
+              <phone>+32470111222</phone>
+              <role>COMPANY_CONTACT</role>
+              <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
+              <street>Stationsstraat</street>
+              <houseNumber>12B</houseNumber>
+              <postalCode>9000</postalCode>
+              <city>Gent</city>
+              <country>BE</country>
+              <isActive>true</isActive>
+              <gdprConsent>true</gdprConsent>
+              <updatedAt>2026-04-15T10:15:00Z</updatedAt>
+            </UserUpdated>
+
+    FacturatieUserDeactivated:
+      name: FacturatieUserDeactivated
+      title: Facturatie user gedeactiveerd
+      summary: >-
+        Facturatie vraagt CRM om een bestaande CRM-linked user soft te
+        deactiveren.
+      contentType: application/xml
+      tags:
+        - name: facturatie
+        - name: contract-26
+      payload:
+        $ref: "#/components/schemas/FacturatieUserDeactivated"
+      examples:
+        - name: deactivatie
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <UserDeactivated>
+              <id>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</id>
+              <email>els.peeters@example.com</email>
+              <deactivatedAt>2026-04-15T16:00:00Z</deactivatedAt>
+            </UserDeactivated>
 
     CompanyCreated:
       name: CompanyCreated
@@ -1667,6 +1853,150 @@ components:
                 - COMPANY_CONTACT
             company:
               type: string
+
+    FacturatieUserCreated:
+      type: object
+      required:
+        - facturatieCustomerId
+        - firstName
+        - lastName
+        - email
+        - role
+        - gdprConsent
+        - createdAt
+      description: >-
+        Facturatie meldt een handmatig aangemaakte klant zodat CRM een Contact
+        kan aanmaken in Salesforce en een CRM UUID kan toekennen.
+        Bij een uniek bestaand Contact hergebruikt CRM dat Contact en kent zo nodig
+        eerst een CRM UUID toe. Deze flow publiceert geen crm.mail.requested.
+      properties:
+        facturatieCustomerId:
+          type: string
+          description: >-
+            Interne klant-ID in FOSSBilling. CRM bewaart dit op Contact wanneer
+            de Salesforce-org een ondersteund custom veld bevat.
+        registrationId:
+          type: string
+          description: Optioneel — doorgegeven als er al een registratiereferentie bestaat.
+        firstName:
+          type: string
+        lastName:
+          type: string
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+          description: Optioneel — internationaal formaat (+32...)
+        role:
+          type: string
+          enum:
+            - VISITOR
+            - COMPANY_CONTACT
+            - SPEAKER
+            - EVENT_MANAGER
+            - CASHIER
+            - BAR_STAFF
+            - ADMIN
+        gdprConsent:
+          type: boolean
+          description: Verplicht — CRM mag deze flow alleen verwerken met expliciete toestemming.
+        companyId:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          description: Optioneel — UUID v4 van gekoppeld bedrijf indien al gekend in Facturatie.
+        createdAt:
+          type: string
+          format: date-time
+
+    FacturatieUserUpdated:
+      type: object
+      required:
+        - id
+        - email
+        - firstName
+        - lastName
+        - role
+        - isActive
+        - gdprConsent
+        - updatedAt
+      description: >-
+        Facturatie stuurt een volledig update-object voor een user die al een
+        CRM UUID heeft. Routing key en richting onderscheiden dit contract van
+        het outbound CRM event met dezelfde XML-root UserUpdated.
+      properties:
+        id:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        email:
+          type: string
+          format: email
+        firstName:
+          type: string
+        lastName:
+          type: string
+        phone:
+          type: string
+          description: Optioneel — internationaal formaat (+32...)
+        street:
+          type: string
+        houseNumber:
+          type: string
+        postalCode:
+          type: string
+        city:
+          type: string
+        country:
+          type: string
+          pattern: "^[A-Z]{2}$"
+        role:
+          type: string
+          enum:
+            - VISITOR
+            - COMPANY_CONTACT
+            - SPEAKER
+            - EVENT_MANAGER
+            - CASHIER
+            - BAR_STAFF
+            - ADMIN
+        badgeCode:
+          type: string
+          description: Optioneel — badgecode van de user indien Facturatie die al beheert.
+        companyId:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        isActive:
+          type: boolean
+        gdprConsent:
+          type: boolean
+          description: Verplicht — contract 25 mag alleen verwerkt worden als dit veld aanwezig is.
+        updatedAt:
+          type: string
+          format: date-time
+
+    FacturatieUserDeactivated:
+      type: object
+      required:
+        - id
+        - email
+        - deactivatedAt
+      description: >-
+        Facturatie vraagt CRM om een bestaande CRM-linked user soft te
+        deactiveren. Soft delete only: CRM zet enkel de actieve vlag op false.
+      properties:
+        id:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        email:
+          type: string
+          format: email
+        deactivatedAt:
+          type: string
+          format: date-time
 
     CompanyCreated:
       type: object

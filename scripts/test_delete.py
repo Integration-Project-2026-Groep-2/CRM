@@ -32,15 +32,29 @@ def _pretty_xml(body: bytes) -> str:
         return body.decode(errors="replace")
 
 
-async def _wait_for_message(queue: aio_pika.abc.AbstractQueue, label: str) -> bytes | None:
+def _message_matches_email(body: bytes, expected_email: str) -> bool:
+    try:
+        root = etree.fromstring(body)
+    except Exception:
+        return False
+    return root.findtext("email") == expected_email
+
+
+async def _wait_for_message(
+    queue: aio_pika.abc.AbstractQueue,
+    label: str,
+    expected_email: str,
+) -> bytes | None:
     print(f"  Waiting for {label}", end="", flush=True)
     elapsed = 0.0
     while elapsed < POLL_TIMEOUT:
         msg = await queue.get(fail=False)
         if msg:
+            body = msg.body
             await msg.ack()
-            print()
-            return msg.body
+            if _message_matches_email(body, expected_email):
+                print()
+                return body
         print(".", end="", flush=True)
         await asyncio.sleep(POLL_INTERVAL)
         elapsed += POLL_INTERVAL
@@ -58,7 +72,7 @@ async def main() -> None:
     reg_id = sys.argv[2]
     rmq_url = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost/")
 
-    print(f"=== TEST DELETE (C2 -> C22) ===")
+    print("=== TEST DELETE (C2 -> C22) ===")
     print(f"  Email:  {email}")
     print(f"  RegID:  {reg_id}")
     print()
@@ -67,14 +81,9 @@ async def main() -> None:
     async with connection:
         channel = await connection.channel()
         user_exchange = await channel.declare_exchange("user.topic", ExchangeType.TOPIC, durable=True)
-        deactivated_q = await channel.declare_queue("crm.user.deactivated", durable=True)
-
-        # Drain stale messages
-        while True:
-            stale = await deactivated_q.get(fail=False)
-            if not stale:
-                break
-            await stale.ack()
+        outbound_exchange = await channel.declare_exchange("contact.topic", ExchangeType.TOPIC, durable=True)
+        deactivated_q = await channel.declare_queue("", exclusive=True, auto_delete=True)
+        await deactivated_q.bind(outbound_exchange, routing_key="crm.user.deactivated")
 
         xml = f"""<?xml version='1.0' encoding='utf-8'?>
 <RegistrationChange>
@@ -84,22 +93,24 @@ async def main() -> None:
     <changeType>cancelled</changeType>
 </RegistrationChange>""".encode("utf-8")
 
-        print(f"  Publishing to: frontend.registration.updated (changeType=cancelled)")
+        print("  Publishing to: frontend.registration.updated (changeType=cancelled)")
+        print("  Listening on:  contact.topic -> crm.user.deactivated (temporary test queue)")
         await user_exchange.publish(
             aio_pika.Message(body=xml, delivery_mode=DeliveryMode.PERSISTENT),
             routing_key="frontend.registration.updated",
         )
 
-        body = await _wait_for_message(deactivated_q, "crm.user.deactivated")
+        body = await _wait_for_message(deactivated_q, "crm.user.deactivated", email)
         if body:
-            print(f"  OK  crm.user.deactivated ontvangen (C22)")
+            print("  OK  crm.user.deactivated ontvangen (C22)")
             print()
             print(_pretty_xml(body))
             print()
-            print(f"  Contact is gedeactiveerd (soft delete, GDPR compliant)")
+            print("  Contact is gedeactiveerd (soft delete, GDPR compliant)")
         else:
             print(f"  FAIL  Geen response na {POLL_TIMEOUT:.0f}s")
-            print(f"  Check: docker logs crm --tail 20")
+            print("  Verwacht outbound via: contact.topic -> crm.user.deactivated")
+            print("  Check: docker logs crm --tail 20")
             raise SystemExit(1)
 
 

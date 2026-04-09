@@ -32,15 +32,29 @@ def _pretty_xml(body: bytes) -> str:
         return body.decode(errors="replace")
 
 
-async def _wait_for_message(queue: aio_pika.abc.AbstractQueue, label: str) -> bytes | None:
+def _message_matches_email(body: bytes, expected_email: str) -> bool:
+    try:
+        root = etree.fromstring(body)
+    except Exception:
+        return False
+    return root.findtext("email") == expected_email
+
+
+async def _wait_for_message(
+    queue: aio_pika.abc.AbstractQueue,
+    label: str,
+    expected_email: str,
+) -> bytes | None:
     print(f"  Waiting for {label}", end="", flush=True)
     elapsed = 0.0
     while elapsed < POLL_TIMEOUT:
         msg = await queue.get(fail=False)
         if msg:
+            body = msg.body
             await msg.ack()
-            print()
-            return msg.body
+            if _message_matches_email(body, expected_email):
+                print()
+                return body
         print(".", end="", flush=True)
         await asyncio.sleep(POLL_INTERVAL)
         elapsed += POLL_INTERVAL
@@ -58,7 +72,7 @@ async def main() -> None:
     reg_id = sys.argv[2]
     rmq_url = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost/")
 
-    print(f"=== TEST UPDATE (C2 -> C18) ===")
+    print("=== TEST UPDATE (C2 -> C18) ===")
     print(f"  Email:  {email}")
     print(f"  RegID:  {reg_id}")
     print()
@@ -67,14 +81,9 @@ async def main() -> None:
     async with connection:
         channel = await connection.channel()
         user_exchange = await channel.declare_exchange("user.topic", ExchangeType.TOPIC, durable=True)
-        updated_q = await channel.declare_queue("crm.user.updated", durable=True)
-
-        # Drain stale messages
-        while True:
-            stale = await updated_q.get(fail=False)
-            if not stale:
-                break
-            await stale.ack()
+        outbound_exchange = await channel.declare_exchange("contact.topic", ExchangeType.TOPIC, durable=True)
+        updated_q = await channel.declare_queue("", exclusive=True, auto_delete=True)
+        await updated_q.bind(outbound_exchange, routing_key="crm.user.updated")
 
         xml = f"""<?xml version='1.0' encoding='utf-8'?>
 <RegistrationChange>
@@ -89,15 +98,16 @@ async def main() -> None:
     </updatedFields>
 </RegistrationChange>""".encode("utf-8")
 
-        print(f"  Publishing to: frontend.registration.updated (changeType=updated)")
+        print("  Publishing to: frontend.registration.updated (changeType=updated)")
+        print("  Listening on:  contact.topic -> crm.user.updated (temporary test queue)")
         await user_exchange.publish(
             aio_pika.Message(body=xml, delivery_mode=DeliveryMode.PERSISTENT),
             routing_key="frontend.registration.updated",
         )
 
-        body = await _wait_for_message(updated_q, "crm.user.updated")
+        body = await _wait_for_message(updated_q, "crm.user.updated", email)
         if body:
-            print(f"  OK  crm.user.updated ontvangen (C18)")
+            print("  OK  crm.user.updated ontvangen (C18)")
             print()
             root = etree.fromstring(body)
             print(f"  id:        {root.findtext('id', 'N/A')}")
@@ -107,11 +117,12 @@ async def main() -> None:
             print(f"  isActive:  {root.findtext('isActive', 'N/A')}")
             print(f"  updatedAt: {root.findtext('updatedAt', 'N/A')}")
             print()
-            print(f"  === VOOR DELETE ===")
+            print("  === VOOR DELETE ===")
             print(f"  docker exec crm python scripts/test_delete.py {email} {reg_id}")
         else:
             print(f"  FAIL  Geen response na {POLL_TIMEOUT:.0f}s")
-            print(f"  Check: docker logs crm --tail 20")
+            print("  Verwacht outbound via: contact.topic -> crm.user.updated")
+            print("  Check: docker logs crm --tail 20")
             raise SystemExit(1)
 
 
