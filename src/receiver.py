@@ -10,6 +10,7 @@ from aio_pika import ExchangeType
 from aio_pika.abc import AbstractChannel, AbstractRobustConnection
 from lxml import etree
 from simple_salesforce import Salesforce
+
 from src import sender, xml_validator
 from src.config import Config
 from src.salesforce_client import (
