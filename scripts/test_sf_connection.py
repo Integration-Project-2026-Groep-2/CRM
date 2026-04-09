@@ -13,10 +13,10 @@ import sys
 
 from dotenv import load_dotenv
 
-load_dotenv()
-
 from src.config import load_config
-from src.salesforce_client import get_salesforce_client, create_contact
+from src.salesforce_client import create_contact, get_salesforce_client
+
+load_dotenv()
 
 
 async def main() -> None:
@@ -63,7 +63,7 @@ async def main() -> None:
             "Role__c": "VISITOR",
             "GDPR_Consent__c": True,
         })
-        print(f"PASS — Contact aangemaakt!")
+        print("PASS — Contact aangemaakt!")
         print(f"  ID:       {result.get('Id')}")
         print(f"  CRM UUID: {result.get('CRM_ID__c')}")
         print(f"  Email:    {result.get('Email')}")

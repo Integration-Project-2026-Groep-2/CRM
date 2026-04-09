@@ -32,33 +32,39 @@ pip install -r requirements-dev.txt
 
 # Tests
 pytest -v
+
+# E2E tegen bestaande lokale stack
+pytest tests/e2e -v
+
+# E2E met expliciete lokale docker autostart
+E2E_AUTO_START_LOCAL_STACK=1 pytest tests/e2e -v
 ```
 
 ## Architectuur
 
 Eén Docker container → één Python process → 3 asyncio tasks + sender utility:
 
-| Module | Verantwoordelijkheid |
-|---|---|
+| Module         | Verantwoordelijkheid                                                  |
+| -------------- | --------------------------------------------------------------------- |
 | `heartbeat.py` | XML heartbeat elke seconde → `heartbeat.direct` exchange (Contract 7) |
-| `status.py` | CPU/mem/disk → `crm.status.checked` (Contract 8) |
-| `receiver.py` | Luistert op 11 queues van andere teams |
-| `sender.py` | Utility module — receiver handlers roepen publish functies aan |
+| `status.py`    | CPU/mem/disk → `crm.status.checked` (Contract 8)                      |
+| `receiver.py`  | Luistert op 11 queues van andere teams                                |
+| `sender.py`    | Utility module — receiver handlers roepen publish functies aan        |
 
 ## Contracten
 
-23 XML-contracten (AsyncAPI v1.5.0). Formele spec:
+26 XML-contracten (AsyncAPI v1.7.0). Formele spec:
 
 - **Bron**: [`docs/crm-asyncapi-v1.yaml`](docs/crm-asyncapi-v1.yaml)
 - **Online bekijken**: [AsyncAPI Studio](https://studio.asyncapi.com/?url=https://raw.githubusercontent.com/Integration-Project-2026-Groep-2/CRM/main/docs/crm-asyncapi-v1.yaml)
 
 ## Team
 
-| Rol | Naam |
-|---|---|
-| Team Lead | Lars Cowé |
+| Rol                | Naam                |
+| ------------------ | ------------------- |
+| Team Lead          | Lars Cowé           |
 | Developer / Tester | Brend Van Den Eynde |
-| Developer / Tester | Waïl Zemouri |
-| Developer / Tester | Jelle Schroeven |
-| Project Manager | Iliès Mazouz |
-| Project Manager | Andrei Mikhaylov |
+| Developer / Tester | Waïl Zemouri        |
+| Developer / Tester | Jelle Schroeven     |
+| Project Manager    | Iliès Mazouz        |
+| Project Manager    | Andrei Mikhaylov    |

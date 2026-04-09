@@ -13,11 +13,19 @@ from lxml import etree
 from src import sender, xml_validator
 from src.config import Config
 from src.salesforce_client import (
-    create_account,
+
+    add_facturatie_customer_id_if_supported,
     create_contact,
     deactivate_contact,
-    get_account_by_vat,
+    deactivate_contact_by_crm_id,
+    ensure_contact_identifiers,
     get_contact_by_email,
+    get_contact_match_by_email,
+    get_salesforce_client,
+    get_unpaid_contacts,
+    update_contact_by_crm_id,
+    update_payment_status,
+
     upsert_contact_by_email,
 )
 
@@ -28,6 +36,9 @@ _INBOUND_EXCHANGE: dict[str, str] = {
     "frontend.registration.created": "user.topic",
     "frontend.registration.updated": "user.topic",
     "frontend.company.created": "user.topic",
+    "facturatie.user.created": "user.topic",
+    "facturatie.user.updated": "user.topic",
+    "facturatie.user.deactivated": "user.topic",
     "facturatie.company.requested": "invoice.topic",
     "kassa.person.lookup.requested": "payment.topic",
     "kassa.payment.confirmed": "payment.topic",
@@ -75,6 +86,21 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     queue_reg_updated = await _declare_and_bind(channel, "frontend.registration.updated", durable=True)
     await queue_reg_updated.consume(partial(handle_registration_updated, sf=sf))
 
+    # Contract 24 — Facturatie → CRM: manually created user
+    # Queue: facturatie.user.created | Exchange: user.topic | durable: true
+    queue_facturatie_user_created = await _declare_and_bind(channel, "facturatie.user.created", durable=True)
+    await queue_facturatie_user_created.consume(partial(handle_facturatie_user_created, sf=sf_client))
+
+    # Contract 25 — Facturatie → CRM: user updated
+    # Queue: facturatie.user.updated | Exchange: user.topic | durable: true
+    queue_facturatie_user_updated = await _declare_and_bind(channel, "facturatie.user.updated", durable=True)
+    await queue_facturatie_user_updated.consume(partial(handle_facturatie_user_updated, sf=sf_client))
+
+    # Contract 26 — Facturatie → CRM: user deactivated (soft delete only)
+    # Queue: facturatie.user.deactivated | Exchange: user.topic | durable: true
+    queue_facturatie_user_deactivated = await _declare_and_bind(channel, "facturatie.user.deactivated", durable=True)
+    await queue_facturatie_user_deactivated.consume(partial(handle_facturatie_user_deactivated, sf=sf_client))
+
     # Contract 3 — Frontend → CRM: create company
     # Queue: frontend.company.created | Exchange: user.topic | durable: true | US-40, US-20
     queue_company = await _declare_and_bind(channel, "frontend.company.created", durable=True)
@@ -89,12 +115,12 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     # await queue_person_lookup.consume(handle_person_lookup)
 
     # Contract 16 — Kassa → CRM: payment confirmed
-    # queue_payment = await _declare_and_bind(channel, "kassa.payment.confirmed", durable=True)
-    # await queue_payment.consume(handle_payment_confirmed)
+    queue_payment = await _declare_and_bind(channel, "kassa.payment.confirmed", durable=True)
+    await queue_payment.consume(partial(handle_payment_confirmed, sf=sf_client))
 
     # Contract 17a — Kassa → CRM: unpaid persons request
-    # queue_unpaid = await _declare_and_bind(channel, "kassa.unpaid.requested", durable=True)
-    # await queue_unpaid.consume(handle_unpaid_requested)
+    queue_unpaid = await _declare_and_bind(channel, "kassa.unpaid.requested", durable=True)
+    await queue_unpaid.consume(partial(handle_unpaid_requested, sf=sf_client))
 
     # Contract 11 — Planning → CRM: session update (Release 2)
     # queue_session = await _declare_and_bind(channel, "planning.session.updated", durable=True)
@@ -131,32 +157,340 @@ async def handle_warning(message: aio_pika.IncomingMessage) -> None:
         )
         await message.reject(requeue=False)
 
+        return
+
+    logger.error(
+        "Controlroom warning received: %s",
+        etree.tostring(xml, encoding="unicode"),
+    )
+    await message.ack()
+
+
+async def handle_payment_confirmed(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 16 — Kassa -> CRM: payment confirmed.
+
+    Queue: kassa.payment.confirmed | durable: true | US-08, US-21
+
+    Behaviour:
+    - Validate XML against schema.
+    - Update Contact.Paid_At__c in Salesforce.
+    - Invalid XML: rejected without requeue.
+    - Unknown/ambiguous Contact or registrationId mismatch: ack without retry.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("PaymentConfirmed — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        user_id = xml.findtext("userId")
+        email = xml.findtext("email") or ""
+        registration_id = xml.findtext("registrationId")
+        paid_at = xml.findtext("paidAt") or ""
+
+        contact = await update_payment_status(
+            sf,
+            user_id=user_id,
+            email=email,
+            registration_id=registration_id,
+            paid_at=paid_at,
+        )
+        if contact is None:
+            await message.ack()
+            return
+
+        logger.info("Processed payment confirmation for %s", contact.get("Email", email))
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("PaymentConfirmed — error processing message: %s", exc)
+        await message.reject(requeue=True)
+
+
+async def handle_unpaid_requested(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 17a — Kassa -> CRM: unpaid persons request.
+
+    Queue: kassa.unpaid.requested | durable: true | US-07
+
+    Behaviour:
+    - Validate XML against schema.
+    - Query Salesforce for unpaid Contacts.
+    - Publish crm.unpaid.responded with the same requestId.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("UnpaidRequest — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        request_id = xml.findtext("requestId") or ""
+        persons = await get_unpaid_contacts(sf)
+        await sender.publish_unpaid_responded(request_id, persons)
+        logger.info("Processed unpaid request %s with %d unpaid contacts", request_id, len(persons))
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("UnpaidRequest — error processing message: %s", exc)
+        await message.reject(requeue=True)
+
+
+def _get_contact_is_active(contact: dict) -> bool:
+    """Return the normalized active flag across supported Salesforce field names."""
+    for active_field in ("IsActive__c", "Active__c", "Is_Active__c"):
+        if active_field in contact:
+            return bool(contact[active_field])
+    return True
+
+
+def _build_user_data(contact: dict) -> dict:
+    """Build user_data payload dict from a Salesforce contact record."""
+    data = {
+        "id": contact["CRM_ID__c"],
+        "email": contact["Email"],
+        "firstName": contact.get("FirstName", ""),
+        "lastName": contact.get("LastName", ""),
+        "role": contact.get("Role__c", "VISITOR"),
+        "isActive": _get_contact_is_active(contact),
+        "gdprConsent": contact.get("GDPR_Consent__c", True),
+        "confirmedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if contact.get("Phone"):
+        data["phone"] = contact["Phone"]
+    if contact.get("Company_ID__c"):
+        data["companyId"] = contact["Company_ID__c"]
+    return data
 
 # ---------------------------------------------------------------------------
 # Contract 1 — Frontend → CRM: new registration
 # ---------------------------------------------------------------------------
 
-async def handle_registration(
-    message: aio_pika.IncomingMessage,
-    sf: object,
+
+
+async def handle_facturatie_user_created(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
 ) -> None:
-    """Contract 1 — Frontend → CRM: new registration.
+    """Contract 24 — Facturatie -> CRM: manually created user.
 
-    Flow:
-    1. Validate XML
-    2. Reject if gdprConsent is not true/1
-    3. Look up existing contact by email
-       - Same registrationId → retry: republish using Salesforce values and ack
-       - Different registrationId → conflict: log warning, ack
-    4. Create Contact in Salesforce
-    5. Publish crm.user.confirmed (C13) and crm.mail.requested (C6)
-    6. Ack
+    Queue: facturatie.user.created | durable: true
 
-    Error handling:
-    - Invalid XML          → reject (requeue=False)
-    - gdprConsent false    → reject (requeue=False)
-    - Salesforce error     → reject (requeue=True)
-    - Publish failure      → reject (requeue=True)
+    Behaviour:
+    - Validate XML against schema.
+    - Reject users without GDPR consent.
+    - Reuse an existing unique Contact after ensuring canonical identifiers.
+    - Create a new Contact when no Contact exists yet.
+    - Do not publish crm.mail.requested for this flow.
+    - Invalid XML: rejected without requeue.
+    - Ambiguous Contacts: ack without retry.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("FacturatieUserCreated — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        email = xml.findtext("email") or ""
+        gdpr_text = xml.findtext("gdprConsent")
+        if gdpr_text not in ("true", "1"):
+            logger.warning(
+                "FacturatieUserCreated refused — gdprConsent=%s for email %s",
+                gdpr_text,
+                email,
+            )
+            await message.reject(requeue=False)
+            return
+
+        registration_id = xml.findtext("registrationId")
+        facturatie_customer_id = xml.findtext("facturatieCustomerId")
+        match_status, existing_contact = await get_contact_match_by_email(sf, email)
+        if match_status == "unique" and existing_contact is not None:
+            contact = await ensure_contact_identifiers(
+                sf,
+                existing_contact,
+                registration_id=registration_id,
+                facturatie_customer_id=facturatie_customer_id,
+            )
+            await sender.publish_user_confirmed(_build_user_data(contact))
+            logger.info("Published crm.user.confirmed for existing Facturatie user %s", email)
+            await message.ack()
+            return
+
+        if match_status == "ambiguous":
+            logger.warning(
+                "FacturatieUserCreated ignored — ambiguous email %s in Salesforce",
+                email,
+            )
+            await message.ack()
+            return
+
+        contact_data = {
+            "FirstName": xml.findtext("firstName"),
+            "LastName": xml.findtext("lastName"),
+            "Email": email,
+            "Role__c": xml.findtext("role"),
+            "GDPR_Consent__c": True,
+        }
+        if registration_id:
+            contact_data["Registration_ID__c"] = registration_id
+
+        phone = xml.findtext("phone")
+        if phone:
+            contact_data["Phone"] = phone
+
+        company_id = xml.findtext("companyId")
+        if company_id:
+            contact_data["Company_ID__c"] = company_id
+
+        contact_data = await add_facturatie_customer_id_if_supported(
+            sf,
+            contact_data,
+            facturatie_customer_id,
+        )
+
+        contact = await create_contact(sf, contact_data)
+        await sender.publish_user_confirmed(_build_user_data(contact))
+        logger.info("Published crm.user.confirmed for new Facturatie user %s", email)
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("FacturatieUserCreated — error processing message: %s", exc)
+        await message.reject(requeue=True)
+
+
+async def handle_facturatie_user_updated(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 25 — Facturatie -> CRM: existing CRM-linked user update.
+
+    Queue: facturatie.user.updated | durable: true
+
+    Behaviour:
+    - Validate XML against schema.
+    - Reject updates without GDPR consent.
+    - Update the unique Contact by CRM UUID (id).
+    - Publish crm.user.updated after Salesforce update.
+    - Missing/ambiguous CRM UUID: ack without retry.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("FacturatieUserUpdated — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        crm_id = xml.findtext("id") or ""
+        email = xml.findtext("email") or ""
+        gdpr_text = xml.findtext("gdprConsent")
+        if gdpr_text not in ("true", "1"):
+            logger.warning(
+                "FacturatieUserUpdated refused — gdprConsent=%s for email %s",
+                gdpr_text,
+                email,
+            )
+            await message.reject(requeue=False)
+            return
+
+        payload = {
+            "id": crm_id,
+            "email": email,
+            "firstName": xml.findtext("firstName"),
+            "lastName": xml.findtext("lastName"),
+            "phone": xml.findtext("phone"),
+            "street": xml.findtext("street"),
+            "houseNumber": xml.findtext("houseNumber"),
+            "postalCode": xml.findtext("postalCode"),
+            "city": xml.findtext("city"),
+            "country": xml.findtext("country"),
+            "role": xml.findtext("role"),
+            "companyId": xml.findtext("companyId"),
+            "badgeCode": xml.findtext("badgeCode"),
+            "isActive": xml.findtext("isActive") in ("true", "1"),
+            "gdprConsent": True,
+        }
+
+        contact = await update_contact_by_crm_id(sf, crm_id, payload)
+        if contact is None:
+            await message.ack()
+            return
+
+        await sender.publish_user_updated(_build_updated_user_data(contact))
+        logger.info("Published crm.user.updated for Facturatie user %s", email)
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("FacturatieUserUpdated — error processing message: %s", exc)
+        await message.reject(requeue=True)
+
+
+async def handle_facturatie_user_deactivated(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 26 — Facturatie -> CRM: CRM-linked user deactivation.
+
+    Queue: facturatie.user.deactivated | durable: true
+
+    Behaviour:
+    - Validate XML against schema.
+    - Soft-delete the unique Contact by CRM UUID (id) only.
+    - Publish crm.user.deactivated after Salesforce update.
+    - Missing/ambiguous CRM UUID: ack without retry.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("FacturatieUserDeactivated — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        crm_id = xml.findtext("id") or ""
+        email = xml.findtext("email") or ""
+
+        contact = await deactivate_contact_by_crm_id(sf, crm_id)
+        if contact is None:
+            await message.ack()
+            return
+
+        deactivation_data = {
+            "id": contact["CRM_ID__c"],
+            "email": contact["Email"],
+            "deactivatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        await sender.publish_user_deactivated(deactivation_data)
+        logger.info("Published crm.user.deactivated for Facturatie user %s", email)
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("FacturatieUserDeactivated — error processing message: %s", exc)
+        await message.reject(requeue=True)
+
+
+async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
+    """Contract 1 — Frontend -> CRM: new registration.
+
+    Queue: frontend.registration.created | durable: true | US-02, US-04, US-05, US-19
+
+    Behaviour:
+    - Validate XML against schema.
+    - Check if email exists in Salesforce (R1 scope: log only. R2 adds C15 publish).
+    - If new, create Contact in Salesforce mapping fields.
+    - Publish crm.user.confirmed via sender.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+
     """
     # ── Step 1: validate XML ──────────────────────────────────────────────
     try:
@@ -326,15 +660,40 @@ _UPDATED_FIELD_MAP = {
     "sessionId": "Session_ID__c",
 }
 
-_OPTIONAL_CONTACT_FIELDS = [
-    ("Company_ID__c", "companyId"),
-    ("Badge_Code__c", "badgeCode"),
-    ("MailingStreet", "street"),
-    ("House_Number__c", "houseNumber"),
-    ("MailingPostalCode", "postalCode"),
-    ("MailingCity", "city"),
-    ("MailingCountry", "country"),
-]
+
+    Same structure as _build_user_data but with updatedAt instead of confirmedAt.
+    Contract 18 requires the full user profile - consumers replace their local
+    copy entirely, so all available fields must be included.
+    """
+    data = {
+        "id": contact["CRM_ID__c"],
+        "email": contact["Email"],
+        "firstName": contact.get("FirstName", ""),
+        "lastName": contact.get("LastName", ""),
+        "role": contact.get("Role__c", "VISITOR"),
+        "isActive": _get_contact_is_active(contact),
+        "gdprConsent": contact.get("GDPR_Consent__c", True),
+        "updatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if contact.get("Phone"):
+        data["phone"] = contact["Phone"]
+    if contact.get("Company_ID__c"):
+        data["companyId"] = contact["Company_ID__c"]
+    if contact.get("Badge_Code__c"):
+        data["badgeCode"] = contact["Badge_Code__c"]
+
+    # Address fields - map all available SF fields for full profile
+    address_mapping = {
+        "MailingStreet": "street",
+        "House_Number__c": "houseNumber",
+        "MailingPostalCode": "postalCode",
+        "MailingCity": "city",
+        "MailingCountry": "country",
+    }
+    for sf_field, xml_field in address_mapping.items():
+        value = contact.get(sf_field)
+        if value:
+            data[xml_field] = value
 
 
 async def handle_registration_updated(

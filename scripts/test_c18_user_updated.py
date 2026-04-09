@@ -18,11 +18,11 @@ from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
-load_dotenv()
-
+from src import sender
 from src.config import load_config
 from src.connection import get_rabbitmq_connection
-from src import sender
+
+load_dotenv()
 
 
 async def main() -> None:
@@ -64,7 +64,7 @@ async def main() -> None:
             "gdprConsent": True,
             "updatedAt": now,
         })
-        print(f"PASS — Message published to crm.user.updated")
+        print("PASS — Message published to crm.user.updated")
         print(f"  updatedAt: {now}\n")
     except Exception as e:
         print(f"FAIL — {e}\n")
@@ -92,8 +92,8 @@ async def main() -> None:
             "gdprConsent": True,
             "updatedAt": now,
         })
-        print(f"PASS — Message published to crm.user.updated (all fields)")
-        print(f"  Inclusief: phone, companyId, badgeCode, adres (5 velden)\n")
+        print("PASS — Message published to crm.user.updated (all fields)")
+        print("  Inclusief: phone, companyId, badgeCode, adres (5 velden)\n")
     except Exception as e:
         print(f"FAIL — {e}\n")
 
