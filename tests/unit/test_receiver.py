@@ -596,6 +596,7 @@ class TestHandleFacturatieUserCreated:
                 sf_mock,
                 existing_contact,
                 registration_id="REG-20260415-010",
+                facturatie_customer_id="FB-1024",
             )
             mock_create.assert_not_called()
             mock_publish.assert_called_once()
@@ -735,7 +736,7 @@ class TestHandleFacturatieUserCreated:
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=FACTURATIE_CONTACT_RETURN),
+            patch("src.receiver.ensure_contact_identifiers", return_value=FACTURATIE_CONTACT_RETURN) as mock_ensure,
             patch("src.receiver.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.receiver.get_contact_by_email") as mock_fallback_lookup,
@@ -748,6 +749,12 @@ class TestHandleFacturatieUserCreated:
             mock_create.assert_not_called()
             mock_publish.assert_called_once()
             mock_fallback_lookup.assert_not_called()
+            mock_ensure.assert_called_once_with(
+                sf_mock,
+                existing_contact,
+                registration_id="REG-20260415-010",
+                facturatie_customer_id="FB-1024",
+            )
             msg.ack.assert_called_once()
 
 
@@ -774,6 +781,8 @@ class TestHandleFacturatieUserUpdated:
             assert update_args[1] == "223e4567-e89b-12d3-a456-426614174024"
             assert update_args[2]["isActive"] is True
             assert update_args[2]["gdprConsent"] is True
+            assert update_args[2]["street"] == "Stationsstraat"
+            assert update_args[2]["companyId"] == "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901"
             mock_publish.assert_called_once()
             published_user = mock_publish.call_args.args[0]
             assert published_user["id"] == "223e4567-e89b-12d3-a456-426614174024"

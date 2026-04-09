@@ -245,6 +245,44 @@ async def test_update_contact_by_crm_id_updates_contact(sf):
 
 
 @pytest.mark.asyncio
+async def test_update_contact_by_crm_id_clears_optional_fields_when_missing(sf):
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000032"}]}
+    sf.Contact.get.return_value = {
+        "Id": "003000000000032",
+        "CRM_ID__c": "crm-1000",
+        "Email": "clear@example.com",
+        "MailingStreet": "Old street",
+        "Badge_Code__c": "OLD-BADGE",
+        "Company_ID__c": "11111111-2222-4333-8444-555555555555",
+    }
+
+    payload = {
+        "id": "crm-1000",
+        "email": "clear@example.com",
+        "firstName": "Clear",
+        "lastName": "Fields",
+        "phone": None,
+        "street": None,
+        "houseNumber": None,
+        "postalCode": None,
+        "city": None,
+        "country": None,
+        "role": "VISITOR",
+        "companyId": None,
+        "badgeCode": None,
+        "isActive": True,
+        "gdprConsent": True,
+    }
+
+    await update_contact_by_crm_id(sf, "crm-1000", payload)
+
+    assert sf.Contact.update.call_args.args[1]["MailingStreet"] is None
+    assert sf.Contact.update.call_args.args[1]["Company_ID__c"] is None
+    assert sf.Contact.update.call_args.args[1]["Badge_Code__c"] is None
+
+
+
+@pytest.mark.asyncio
 async def test_update_contact_by_crm_id_returns_none_when_missing(sf):
     sf.query.return_value = {"totalSize": 0, "records": []}
 
@@ -346,6 +384,30 @@ async def test_ensure_contact_identifiers_adds_missing_crm_id_and_registration_i
     )
     assert result["CRM_ID__c"] == "generated-crm-id"
     assert result["Registration_ID__c"] == "REG-NEW"
+
+
+@pytest.mark.asyncio
+async def test_ensure_contact_identifiers_persists_facturatie_customer_id(sf):
+    sf.Contact.describe.return_value = {
+        "fields": [{"name": "Facturatie_Customer_ID__c"}]
+    }
+    sf.Contact.get.return_value = {
+        "Id": "003000000000033",
+        "Email": "reuse@example.com",
+        "Facturatie_Customer_ID__c": "FB-1024",
+    }
+
+    result = await ensure_contact_identifiers(
+        sf,
+        {"Id": "003000000000033", "Email": "reuse@example.com"},
+        facturatie_customer_id="FB-1024",
+    )
+
+    sf.Contact.update.assert_called_once()
+    update_payload = sf.Contact.update.call_args.args[1]
+    assert update_payload["CRM_ID__c"] is not None
+    assert update_payload["Facturatie_Customer_ID__c"] == "FB-1024"
+    assert result["Facturatie_Customer_ID__c"] == "FB-1024"
 
 
 @pytest.mark.asyncio

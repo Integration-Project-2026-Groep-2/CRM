@@ -309,12 +309,14 @@ async def handle_facturatie_user_created(
             return
 
         registration_id = xml.findtext("registrationId")
+        facturatie_customer_id = xml.findtext("facturatieCustomerId")
         match_status, existing_contact = await get_contact_match_by_email(sf, email)
         if match_status == "unique" and existing_contact is not None:
             contact = await ensure_contact_identifiers(
                 sf,
                 existing_contact,
                 registration_id=registration_id,
+                facturatie_customer_id=facturatie_customer_id,
             )
             await sender.publish_user_confirmed(_build_user_data(contact))
             logger.info("Published crm.user.confirmed for existing Facturatie user %s", email)
@@ -350,7 +352,7 @@ async def handle_facturatie_user_created(
         contact_data = await add_facturatie_customer_id_if_supported(
             sf,
             contact_data,
-            xml.findtext("facturatieCustomerId"),
+            facturatie_customer_id,
         )
 
         contact = await create_contact(sf, contact_data)

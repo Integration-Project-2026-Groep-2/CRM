@@ -347,9 +347,8 @@ async def update_contact_by_crm_id(
         "gdprConsent": "GDPR_Consent__c",
     }
     for xml_field, sf_field in field_mapping.items():
-        value = data.get(xml_field)
-        if value is not None:
-            updates[sf_field] = value
+        if xml_field in data:
+            updates[sf_field] = data[xml_field]
 
     if "isActive" in data:
         active_field = await _resolve_contact_active_field(sf)
@@ -402,12 +401,14 @@ async def ensure_contact_identifiers(
     sf: Salesforce,
     contact: dict[str, Any],
     registration_id: str | None = None,
+    facturatie_customer_id: str | None = None,
 ) -> dict[str, Any]:
     """Ensure a Contact has the canonical identifiers needed by CRM contracts.
 
     - Always ensure CRM_ID__c exists.
     - Only set Registration_ID__c when it is currently empty and an inbound
       registration_id is provided.
+    - Persist Facturatie customer id when the org exposes a supported field.
     """
     updates: dict[str, Any] = {}
 
@@ -416,6 +417,13 @@ async def ensure_contact_identifiers(
 
     if registration_id and not contact.get("Registration_ID__c"):
         updates["Registration_ID__c"] = registration_id
+
+    if facturatie_customer_id:
+        updates = await add_facturatie_customer_id_if_supported(
+            sf,
+            updates,
+            facturatie_customer_id,
+        )
 
     if not updates:
         return contact

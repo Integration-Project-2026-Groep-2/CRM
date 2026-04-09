@@ -96,6 +96,6 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 
 ## Referenties
 
-- ClickUp: Teams > Team CRM > Documentatie CRM > XML Contracts (AsyncAPI v1.6.0)
+- ClickUp: Teams > Team CRM > Documentatie CRM > XML Contracts (AsyncAPI v1.7.0)
 - Formele AsyncAPI specificatie: `docs/crm-asyncapi-v1.yaml`
 - XSD schema: `src/schema/crm-schema-v1.xsd`

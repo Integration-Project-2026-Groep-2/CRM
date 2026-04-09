@@ -1037,13 +1037,13 @@ components:
               <firstName>Els</firstName>
               <lastName>Peeters</lastName>
               <phone>+32470111222</phone>
+              <role>COMPANY_CONTACT</role>
+              <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
               <street>Stationsstraat</street>
               <houseNumber>12B</houseNumber>
               <postalCode>9000</postalCode>
               <city>Gent</city>
               <country>BE</country>
-              <role>COMPANY_CONTACT</role>
-              <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
               <isActive>true</isActive>
               <gdprConsent>true</gdprConsent>
               <updatedAt>2026-04-15T10:15:00Z</updatedAt>
