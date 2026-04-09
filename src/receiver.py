@@ -660,8 +660,18 @@ _UPDATED_FIELD_MAP = {
     "sessionId": "Session_ID__c",
 }
 
+_OPTIONAL_CONTACT_FIELDS = [
+    ("Company_ID__c", "companyId"),
+    ("Badge_Code__c", "badgeCode"),
+    ("MailingStreet", "street"),
+    ("House_Number__c", "houseNumber"),
+    ("MailingPostalCode", "postalCode"),
+    ("MailingCity", "city"),
+    ("MailingCountry", "country"),
+]
 
-    Same structure as _build_user_data but with updatedAt instead of confirmedAt.
+def _build_updated_user_data(contact: dict) -> dict:
+    """Same structure as _build_user_data but with updatedAt instead of confirmedAt.
     Contract 18 requires the full user profile - consumers replace their local
     copy entirely, so all available fields must be included.
     """
@@ -681,8 +691,6 @@ _UPDATED_FIELD_MAP = {
         data["companyId"] = contact["Company_ID__c"]
     if contact.get("Badge_Code__c"):
         data["badgeCode"] = contact["Badge_Code__c"]
-
-    # Address fields - map all available SF fields for full profile
     address_mapping = {
         "MailingStreet": "street",
         "House_Number__c": "houseNumber",
@@ -694,6 +702,7 @@ _UPDATED_FIELD_MAP = {
         value = contact.get(sf_field)
         if value:
             data[xml_field] = value
+    return data
 
 
 async def handle_registration_updated(
