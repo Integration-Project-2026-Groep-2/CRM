@@ -9,7 +9,7 @@ import aio_pika
 from aio_pika import ExchangeType
 from aio_pika.abc import AbstractChannel, AbstractRobustConnection
 from lxml import etree
-
+from simple_salesforce import Salesforce
 from src import sender, xml_validator
 from src.config import Config
 from src.salesforce_client import (
@@ -66,7 +66,6 @@ async def _declare_and_bind(
 
 async def run_receiver(connection: AbstractRobustConnection, config: Config) -> None:
     """Consume messages from all inbound queues, validate XML, process in Salesforce."""
-    from src.salesforce_client import get_salesforce_client
 
     sf = await get_salesforce_client(config)
     channel = await connection.channel()
