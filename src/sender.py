@@ -5,6 +5,7 @@ All outbound publishing goes through these functions — no direct aio_pika
 publish calls elsewhere in the codebase.
 
 Implemented contracts:
+  Contract 15 — crm.user.conflict            (fanout exchange, durable)
   Contract 13 — crm.user.confirmed           (durable: true)
   Contract 18 — crm.user.updated             (durable: true)
     Contract 22 — crm.user.deactivated         (durable: true)
@@ -30,20 +31,25 @@ logger = logging.getLogger(__name__)
 
 _channel: AbstractChannel | None = None
 _exchange: AbstractExchange | None = None
+_conflict_exchange: AbstractExchange | None = None
 
 
 async def init(channel: AbstractChannel) -> None:
-    """Initialize the sender with a RabbitMQ channel and declare contact.topic exchange.
+    """Initialize the sender with a RabbitMQ channel and declare outbound exchanges.
 
     Must be called once at startup before any publish function is used.
-    All CRM outbound messages are published via the contact.topic exchange.
+    Most CRM outbound messages are published via the contact.topic exchange.
+    Contract 15 is the exception and uses a dedicated fanout exchange.
     """
-    global _channel, _exchange  # noqa: PLW0603
+    global _channel, _exchange, _conflict_exchange  # noqa: PLW0603
     _channel = channel
     _exchange = await channel.declare_exchange(
         "contact.topic", type=ExchangeType.TOPIC, durable=True,
     )
-    logger.info("Sender initialized (exchange: contact.topic).")
+    _conflict_exchange = await channel.declare_exchange(
+        "crm.user.conflict", type=ExchangeType.FANOUT, durable=True,
+    )
+    logger.info("Sender initialized (exchanges: contact.topic, crm.user.conflict).")
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +73,16 @@ async def _publish(queue_name: str, xml_bytes: bytes, persistent: bool = False) 
         routing_key=queue_name,
     )
     logger.debug("Message published to '%s' via contact.topic (persistent=%s).", queue_name, persistent)
+
+
+async def _publish_conflict(xml_bytes: bytes, persistent: bool = False) -> None:
+    """Publish a fanout conflict message to crm.user.conflict."""
+    delivery_mode = DeliveryMode.PERSISTENT if persistent else DeliveryMode.NOT_PERSISTENT
+    await _conflict_exchange.publish(
+        aio_pika.Message(body=xml_bytes, delivery_mode=delivery_mode),
+        routing_key="",
+    )
+    logger.debug("Message published to fanout exchange 'crm.user.conflict' (persistent=%s).", persistent)
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +126,47 @@ async def publish_user_confirmed(user_data: dict[str, Any]) -> None:
     xml_bytes = etree.tostring(root, encoding="utf-8", xml_declaration=True)
     xml_validator.validate(xml_bytes)
     await _publish("crm.user.confirmed", xml_bytes, persistent=True)
+
+
+# ---------------------------------------------------------------------------
+# Contract 15 — CRM → Controlroom + Frontend: user conflict (fanout)
+# Exchange: crm.user.conflict | durable: true | US-34, US-35
+# ---------------------------------------------------------------------------
+
+async def publish_user_conflict(conflict_data: dict[str, Any]) -> None:
+    """Contract 15 — Publish a duplicate-user conflict for manual resolution.
+
+    Required keys in conflict_data:
+        email, existingValue, incomingValue, detectedAt
+
+    Required keys in existingValue/incomingValue:
+        firstName, lastName
+    Optional keys:
+        company
+    """
+    root = etree.Element("UserConflict")
+
+    etree.SubElement(root, "email").text = conflict_data["email"]
+
+    existing_el = etree.SubElement(root, "existingValue")
+    etree.SubElement(existing_el, "firstName").text = conflict_data["existingValue"]["firstName"]
+    etree.SubElement(existing_el, "lastName").text = conflict_data["existingValue"]["lastName"]
+    existing_company = conflict_data["existingValue"].get("company")
+    if existing_company is not None:
+        etree.SubElement(existing_el, "company").text = existing_company
+
+    incoming_el = etree.SubElement(root, "incomingValue")
+    etree.SubElement(incoming_el, "firstName").text = conflict_data["incomingValue"]["firstName"]
+    etree.SubElement(incoming_el, "lastName").text = conflict_data["incomingValue"]["lastName"]
+    incoming_company = conflict_data["incomingValue"].get("company")
+    if incoming_company is not None:
+        etree.SubElement(incoming_el, "company").text = incoming_company
+
+    etree.SubElement(root, "detectedAt").text = conflict_data["detectedAt"]
+
+    xml_bytes = etree.tostring(root, encoding="utf-8", xml_declaration=True)
+    xml_validator.validate(xml_bytes)
+    await _publish_conflict(xml_bytes, persistent=True)
 
 
 # ---------------------------------------------------------------------------
