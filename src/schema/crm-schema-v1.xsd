@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  CRM Master Schema — Alle contracts (1–29)
+  CRM Master Schema — Alle contracts (1–32)
   Integration Project 2025/2026 | Groep 2
-  Versie 1.3 — April 2026
+  Versie 1.4 — April 2026
 
-  Bron: crm-asyncapi-v1.yaml (AsyncAPI 3.1.0, v1.7.0)
+  Bron: crm-asyncapi-v1.yaml (AsyncAPI 3.1.0, v1.8.0)
 
   Gebruik: runtime-validatie via lxml in Python.
 
@@ -13,7 +13,7 @@
 -->
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
            elementFormDefault="unqualified"
-           version="1.1">
+           version="1.4">
 
   <!-- ============================================================
        GEDEELDE SIMPLE TYPES
@@ -80,6 +80,13 @@
     </xs:restriction>
   </xs:simpleType>
 
+  <xs:simpleType name="PlanningUserRoleType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="SPEAKER"/>
+      <xs:enumeration value="VISITOR"/>
+    </xs:restriction>
+  </xs:simpleType>
+
   <xs:complexType name="MailingUserPayloadType">
     <xs:sequence>
       <xs:element name="id"          type="UUIDType"/>
@@ -88,6 +95,19 @@
       <xs:element name="lastName"    type="xs:string" minOccurs="0" nillable="true"/>
       <xs:element name="gdprConsent" type="xs:boolean"/>
       <xs:element name="companyId"   type="UUIDType"  minOccurs="0" nillable="true"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="PlanningUserPayloadType">
+    <xs:sequence>
+      <xs:element name="id"          type="UUIDType"/>
+      <xs:element name="email"       type="EmailType"/>
+      <xs:element name="firstName"   type="xs:string"/>
+      <xs:element name="lastName"    type="xs:string"/>
+      <xs:element name="role"        type="PlanningUserRoleType"/>
+      <xs:element name="gdprConsent" type="xs:boolean"/>
+      <xs:element name="phoneNumber" type="xs:string" minOccurs="0"/>
+      <xs:element name="company"     type="xs:string" minOccurs="0"/>
     </xs:sequence>
   </xs:complexType>
 
@@ -231,6 +251,32 @@
        Queue: mailing.user.deactivated | durable: true
   ============================================================ -->
   <xs:element name="MailingUserDeactivated">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="id"            type="UUIDType"/>
+        <xs:element name="email"         type="EmailType"/>
+        <xs:element name="deactivatedAt" type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 30 — Planning → CRM: user aanmaken
+       Planning ref 21 | Queue: planning.user.created | durable: true
+  ============================================================ -->
+  <xs:element name="PlanningUserCreated" type="PlanningUserPayloadType"/>
+
+  <!-- ============================================================
+       CONTRACT 31 — Planning → CRM: user bijwerken
+       Planning ref 22 | Queue: planning.user.updated | durable: true
+  ============================================================ -->
+  <xs:element name="PlanningUserUpdated" type="PlanningUserPayloadType"/>
+
+  <!-- ============================================================
+       CONTRACT 32 — Planning → CRM: user deactiveren
+       Planning ref 23 | Queue: planning.user.deactivated | durable: true
+  ============================================================ -->
+  <xs:element name="PlanningUserDeactivated">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="id"            type="UUIDType"/>
@@ -657,29 +703,28 @@
        CONTRACT 18 — CRM → consumers: user updated
        CONTRACT 25 — Facturatie → CRM: user updated
        Queue: crm.user.updated / facturatie.user.updated | durable: true
-       Noot: gedeelde root UserUpdated; gdprConsent is verplicht in beide
-        contracten. Gebruik gedeelde UserRoleType om Contract 18 stabiel te houden.
+       Noot: gedeelde root met order-onafhankelijke veldvalidatie.
   ============================================================ -->
   <xs:element name="UserUpdated">
     <xs:complexType>
-      <xs:sequence>
+      <xs:all>
         <xs:element name="id"          type="UUIDType"/>
         <xs:element name="email"       type="EmailType"/>
         <xs:element name="firstName"   type="xs:string"/>
         <xs:element name="lastName"    type="xs:string"/>
         <xs:element name="phone"       type="xs:string"       minOccurs="0" nillable="true"/>
-        <xs:element name="role"        type="UserRoleType"/>
-        <xs:element name="companyId"   type="UUIDType"        minOccurs="0" nillable="true"/>
-        <xs:element name="badgeCode"   type="xs:string"       minOccurs="0" nillable="true"/>
         <xs:element name="street"      type="xs:string"       minOccurs="0" nillable="true"/>
         <xs:element name="houseNumber" type="xs:string"       minOccurs="0" nillable="true"/>
         <xs:element name="postalCode"  type="xs:string"       minOccurs="0" nillable="true"/>
         <xs:element name="city"        type="xs:string"       minOccurs="0" nillable="true"/>
         <xs:element name="country"     type="CountryCodeType" minOccurs="0" nillable="true"/>
+        <xs:element name="role"        type="FacturatieUserRoleType"/>
+        <xs:element name="companyId"   type="UUIDType"        minOccurs="0" nillable="true"/>
+        <xs:element name="badgeCode"   type="xs:string"       minOccurs="0" nillable="true"/>
         <xs:element name="isActive"    type="xs:boolean"/>
         <xs:element name="gdprConsent" type="xs:boolean"/>
         <xs:element name="updatedAt"   type="ISO8601DateTimeType"/>
-      </xs:sequence>
+      </xs:all>
     </xs:complexType>
   </xs:element>
 
@@ -753,7 +798,6 @@
        CONTRACT 22 — CRM → consumers: user deactivated (GDPR)
        CONTRACT 26 — Facturatie → CRM: user deactivated
        Queue: crm.user.deactivated / facturatie.user.deactivated | durable: true
-      Soft delete only: nooit fysiek verwijderen.
   ============================================================ -->
   <xs:element name="UserDeactivated">
     <xs:complexType>
