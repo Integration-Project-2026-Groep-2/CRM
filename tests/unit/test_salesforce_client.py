@@ -6,6 +6,7 @@ from simple_salesforce import SalesforceError
 import src.salesforce_client as salesforce_client_module
 from src.salesforce_client import (
     add_facturatie_customer_id_if_supported,
+    backfill_mailing_contact_fields,
     create_account,
     create_contact,
     deactivate_contact,
@@ -17,7 +18,9 @@ from src.salesforce_client import (
     get_contact_by_email,
     get_contact_match_by_email,
     get_unpaid_contacts,
+    has_contact_mailing_id_field,
     update_contact_by_crm_id,
+    update_mailing_contact,
     update_payment_status,
     upsert_account_by_vat,
     upsert_contact_by_email,
@@ -28,6 +31,7 @@ from src.salesforce_client import (
 def sf(monkeypatch):
     salesforce_client_module._active_field_cache = None
     salesforce_client_module._facturatie_customer_field_cache = None
+    salesforce_client_module._mailing_id_field_supported_cache = None
 
     async def immediate_to_thread(func, /, *args, **kwargs):
         return func(*args, **kwargs)
@@ -363,6 +367,28 @@ async def test_get_contact_match_by_email_returns_ambiguous_without_fetching_con
 
 
 @pytest.mark.asyncio
+async def test_has_contact_mailing_id_field_returns_true_when_present(sf):
+    sf.Contact.describe.return_value = {
+        "fields": [{"name": "IsActive__c"}, {"name": "Mailing_ID__c"}]
+    }
+
+    result = await has_contact_mailing_id_field(sf)
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_has_contact_mailing_id_field_returns_false_when_absent(sf):
+    sf.Contact.describe.return_value = {
+        "fields": [{"name": "IsActive__c"}]
+    }
+
+    result = await has_contact_mailing_id_field(sf)
+
+    assert result is False
+
+
+@pytest.mark.asyncio
 async def test_ensure_contact_identifiers_adds_missing_crm_id_and_registration_id(sf, monkeypatch):
     monkeypatch.setattr(salesforce_client_module.uuid, "uuid4", lambda: "generated-crm-id")
     sf.Contact.get.return_value = {
@@ -423,6 +449,373 @@ async def test_ensure_contact_identifiers_preserves_existing_registration_id(sf)
         sf,
         existing_contact,
         registration_id="REG-NEW",
+    )
+
+    sf.Contact.update.assert_not_called()
+    assert result == existing_contact
+
+
+@pytest.mark.asyncio
+async def test_backfill_mailing_contact_fields_updates_only_missing_fields(sf):
+    existing_contact = {
+        "Id": "003000000000016",
+        "Email": "mia.mail@example.com",
+        "FirstName": None,
+        "LastName": "",
+        "Company_ID__c": None,
+        "Role__c": None,
+    }
+    sf.Contact.get.return_value = {
+        "Id": "003000000000016",
+        "Email": "mia.mail@example.com",
+        "FirstName": "Mia",
+        "LastName": "Mail",
+        "Company_ID__c": "company-id-123",
+        "Role__c": "COMPANY_CONTACT",
+    }
+
+    result = await backfill_mailing_contact_fields(
+        sf,
+        existing_contact,
+        first_name="Mia",
+        last_name="Mail",
+        company_id="company-id-123",
+        role="COMPANY_CONTACT",
+    )
+
+    sf.Contact.update.assert_called_once_with(
+        "003000000000016",
+        {
+            "FirstName": "Mia",
+            "LastName": "Mail",
+            "Company_ID__c": "company-id-123",
+            "Role__c": "COMPANY_CONTACT",
+        },
+    )
+    assert result["FirstName"] == "Mia"
+    assert result["Company_ID__c"] == "company-id-123"
+
+
+@pytest.mark.asyncio
+async def test_backfill_mailing_contact_fields_sets_missing_visitor_role(sf):
+    existing_contact = {
+        "Id": "003000000000017",
+        "Email": "mia.mail@example.com",
+        "FirstName": "Mia",
+        "LastName": "Mail",
+        "Role__c": None,
+    }
+    sf.Contact.get.return_value = {
+        "Id": "003000000000017",
+        "Email": "mia.mail@example.com",
+        "FirstName": "Mia",
+        "LastName": "Mail",
+        "Role__c": "VISITOR",
+    }
+
+    result = await backfill_mailing_contact_fields(
+        sf,
+        existing_contact,
+        role="VISITOR",
+    )
+
+    sf.Contact.update.assert_called_once_with(
+        "003000000000017",
+        {"Role__c": "VISITOR"},
+    )
+    assert result["Role__c"] == "VISITOR"
+
+
+@pytest.mark.asyncio
+async def test_backfill_mailing_contact_fields_preserves_existing_values(sf):
+    existing_contact = {
+        "Id": "003000000000019",
+        "Email": "mia.mail@example.com",
+        "FirstName": "Existing",
+        "LastName": "Name",
+        "Company_ID__c": "existing-company",
+        "Role__c": "ADMIN",
+    }
+
+    result = await backfill_mailing_contact_fields(
+        sf,
+        existing_contact,
+        first_name="Mia",
+        last_name="Mail",
+        company_id="company-id-123",
+        role="COMPANY_CONTACT",
+    )
+
+    sf.Contact.update.assert_not_called()
+    assert result == existing_contact
+
+
+@pytest.mark.asyncio
+async def test_backfill_mailing_contact_fields_does_not_add_company_to_specialized_role(sf):
+    existing_contact = {
+        "Id": "003000000000024",
+        "Email": "mia.mail@example.com",
+        "Company_ID__c": None,
+        "Role__c": "ADMIN",
+    }
+
+    result = await backfill_mailing_contact_fields(
+        sf,
+        existing_contact,
+        company_id="company-id-123",
+        role="COMPANY_CONTACT",
+    )
+
+    sf.Contact.update.assert_not_called()
+    assert result == existing_contact
+
+
+@pytest.mark.asyncio
+async def test_backfill_mailing_contact_fields_promotes_visitor_to_company_contact(sf):
+    existing_contact = {
+        "Id": "003000000000020",
+        "Email": "mia.mail@example.com",
+        "FirstName": "Mia",
+        "LastName": "Mail",
+        "Company_ID__c": None,
+        "Role__c": "VISITOR",
+    }
+    sf.Contact.get.return_value = {
+        "Id": "003000000000020",
+        "Email": "mia.mail@example.com",
+        "FirstName": "Mia",
+        "LastName": "Mail",
+        "Company_ID__c": "company-id-123",
+        "Role__c": "COMPANY_CONTACT",
+    }
+
+    result = await backfill_mailing_contact_fields(
+        sf,
+        existing_contact,
+        company_id="company-id-123",
+        role="COMPANY_CONTACT",
+    )
+
+    sf.Contact.update.assert_called_once_with(
+        "003000000000020",
+        {
+            "Company_ID__c": "company-id-123",
+            "Role__c": "COMPANY_CONTACT",
+        },
+    )
+    assert result["Company_ID__c"] == "company-id-123"
+    assert result["Role__c"] == "COMPANY_CONTACT"
+
+
+@pytest.mark.asyncio
+async def test_backfill_mailing_contact_fields_sets_gdpr_consent_true_when_missing(sf):
+    existing_contact = {
+        "Id": "003000000000021",
+        "Email": "mia.mail@example.com",
+        "GDPR_Consent__c": None,
+    }
+    sf.Contact.get.return_value = {
+        "Id": "003000000000021",
+        "Email": "mia.mail@example.com",
+        "GDPR_Consent__c": True,
+    }
+
+    result = await backfill_mailing_contact_fields(
+        sf,
+        existing_contact,
+        gdpr_consent=True,
+    )
+
+    sf.Contact.update.assert_called_once_with(
+        "003000000000021",
+        {"GDPR_Consent__c": True},
+    )
+    assert result["GDPR_Consent__c"] is True
+
+
+@pytest.mark.asyncio
+async def test_backfill_mailing_contact_fields_preserves_explicit_false_gdpr_consent(sf):
+    existing_contact = {
+        "Id": "003000000000022",
+        "Email": "mia.mail@example.com",
+        "GDPR_Consent__c": False,
+    }
+
+    result = await backfill_mailing_contact_fields(
+        sf,
+        existing_contact,
+        gdpr_consent=True,
+    )
+
+    sf.Contact.update.assert_not_called()
+    assert result == existing_contact
+
+
+@pytest.mark.asyncio
+async def test_backfill_mailing_contact_fields_keeps_existing_true_gdpr_consent(sf):
+    existing_contact = {
+        "Id": "003000000000023",
+        "Email": "mia.mail@example.com",
+        "GDPR_Consent__c": True,
+    }
+
+    result = await backfill_mailing_contact_fields(
+        sf,
+        existing_contact,
+        gdpr_consent=True,
+    )
+
+    sf.Contact.update.assert_not_called()
+    assert result == existing_contact
+
+
+@pytest.mark.asyncio
+async def test_update_mailing_contact_authoritatively_overwrites_owned_fields(sf):
+    existing_contact = {
+        "Id": "003000000000041",
+        "Email": "old@example.com",
+        "FirstName": "Old",
+        "LastName": "Name",
+        "Company_ID__c": "old-company-id",
+        "Role__c": "COMPANY_CONTACT",
+        "GDPR_Consent__c": False,
+    }
+    sf.Contact.get.return_value = {
+        "Id": "003000000000041",
+        "Email": "new@example.com",
+        "FirstName": None,
+        "LastName": "new@example.com",
+        "Company_ID__c": None,
+        "Role__c": "VISITOR",
+        "GDPR_Consent__c": True,
+    }
+
+    result = await update_mailing_contact(
+        sf,
+        existing_contact,
+        email="new@example.com",
+        first_name=None,
+        last_name="new@example.com",
+        company_id=None,
+    )
+
+    sf.Contact.update.assert_called_once_with(
+        "003000000000041",
+        {
+            "Email": "new@example.com",
+            "FirstName": None,
+            "LastName": "new@example.com",
+            "Company_ID__c": None,
+            "GDPR_Consent__c": True,
+            "Role__c": "VISITOR",
+        },
+    )
+    assert result["Email"] == "new@example.com"
+    assert result["Role__c"] == "VISITOR"
+    assert result["GDPR_Consent__c"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_mailing_contact_preserves_specialized_role(sf):
+    existing_contact = {
+        "Id": "003000000000042",
+        "Email": "mia.mail@example.com",
+        "FirstName": "Mia",
+        "LastName": "Mail",
+        "Company_ID__c": "old-company-id",
+        "Role__c": "ADMIN",
+        "GDPR_Consent__c": True,
+    }
+    sf.Contact.get.return_value = {
+        "Id": "003000000000042",
+        "Email": "mia.mail@example.com",
+        "FirstName": "Updated",
+        "LastName": "User",
+        "Company_ID__c": "old-company-id",
+        "Role__c": "ADMIN",
+        "GDPR_Consent__c": True,
+    }
+
+    result = await update_mailing_contact(
+        sf,
+        existing_contact,
+        email="mia.mail@example.com",
+        first_name="Updated",
+        last_name="User",
+        company_id="new-company-id",
+    )
+
+    sf.Contact.update.assert_called_once_with(
+        "003000000000042",
+        {
+            "FirstName": "Updated",
+            "LastName": "User",
+        },
+    )
+    assert result["Role__c"] == "ADMIN"
+    assert result["Company_ID__c"] == "old-company-id"
+
+
+@pytest.mark.asyncio
+async def test_update_mailing_contact_does_not_clear_company_link_for_specialized_role(sf):
+    existing_contact = {
+        "Id": "003000000000044",
+        "Email": "mia.mail@example.com",
+        "FirstName": "Mia",
+        "LastName": "Mail",
+        "Company_ID__c": "old-company-id",
+        "Role__c": "SPEAKER",
+        "GDPR_Consent__c": True,
+    }
+    sf.Contact.get.return_value = {
+        "Id": "003000000000044",
+        "Email": "mia.mail@example.com",
+        "FirstName": "Updated",
+        "LastName": "User",
+        "Company_ID__c": "old-company-id",
+        "Role__c": "SPEAKER",
+        "GDPR_Consent__c": True,
+    }
+
+    result = await update_mailing_contact(
+        sf,
+        existing_contact,
+        email="mia.mail@example.com",
+        first_name="Updated",
+        last_name="User",
+        company_id=None,
+    )
+
+    sf.Contact.update.assert_called_once_with(
+        "003000000000044",
+        {
+            "FirstName": "Updated",
+            "LastName": "User",
+        },
+    )
+    assert result["Role__c"] == "SPEAKER"
+    assert result["Company_ID__c"] == "old-company-id"
+
+
+@pytest.mark.asyncio
+async def test_update_mailing_contact_returns_existing_contact_when_no_changes(sf):
+    existing_contact = {
+        "Id": "003000000000043",
+        "Email": "mia.mail@example.com",
+        "FirstName": "Mia",
+        "LastName": "Mail",
+        "Company_ID__c": None,
+        "Role__c": "VISITOR",
+        "GDPR_Consent__c": True,
+    }
+
+    result = await update_mailing_contact(
+        sf,
+        existing_contact,
+        email="mia.mail@example.com",
+        first_name="Mia",
+        last_name="Mail",
+        company_id=None,
     )
 
     sf.Contact.update.assert_not_called()

@@ -1,6 +1,6 @@
 """
 Unit tests — sender.py
-Contracten 13, 14, 5b, 10b, 17b, 6
+Contracten 15, 13, 14, 5b, 10b, 17b, 6, 18, 22
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -19,8 +19,12 @@ def setup_sender():
     mock_channel = MagicMock()
     mock_exchange = MagicMock()
     mock_exchange.publish = AsyncMock()
+    mock_conflict_exchange = MagicMock()
+    mock_conflict_exchange.publish = AsyncMock()
     sender._channel = mock_channel
     sender._exchange = mock_exchange
+    sender._conflict_exchange = mock_conflict_exchange
+    mock_exchange.conflict_exchange = mock_conflict_exchange
     yield mock_exchange
 
 
@@ -37,6 +41,102 @@ def _get_routing_key(mock_exchange) -> str:
 def _get_delivery_mode(mock_exchange):
     message = mock_exchange.publish.call_args[0][0]
     return message.delivery_mode
+
+
+def _get_conflict_published_xml(mock_exchange) -> etree._Element:
+    call_args = mock_exchange.conflict_exchange.publish.call_args
+    message = call_args[0][0]
+    return etree.fromstring(message.body)
+
+
+def _get_conflict_routing_key(mock_exchange) -> str:
+    return mock_exchange.conflict_exchange.publish.call_args[1]["routing_key"]
+
+
+def _get_conflict_delivery_mode(mock_exchange):
+    message = mock_exchange.conflict_exchange.publish.call_args[0][0]
+    return message.delivery_mode
+
+
+# ---------------------------------------------------------------------------
+# Contract 15 — publish_user_conflict
+# ---------------------------------------------------------------------------
+
+class TestPublishUserConflict:
+
+    BASE_DATA = {
+        "email": "jan@example.com",
+        "existingValue": {
+            "firstName": "Jan",
+            "lastName": "Janssen",
+        },
+        "incomingValue": {
+            "firstName": "Johan",
+            "lastName": "Janssen",
+        },
+        "detectedAt": "2026-04-15T10:01:00Z",
+    }
+
+    @pytest.mark.asyncio
+    async def test_publishes_to_fanout_exchange(self, setup_sender):
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_user_conflict(self.BASE_DATA)
+        assert _get_conflict_routing_key(setup_sender) == ""
+
+    @pytest.mark.asyncio
+    async def test_message_is_persistent(self, setup_sender):
+        from aio_pika import DeliveryMode
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_user_conflict(self.BASE_DATA)
+        assert _get_conflict_delivery_mode(setup_sender) == DeliveryMode.PERSISTENT
+
+    @pytest.mark.asyncio
+    async def test_root_element_is_user_conflict(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_conflict(self.BASE_DATA)
+        assert _get_conflict_published_xml(setup_sender).tag == "UserConflict"
+
+    @pytest.mark.asyncio
+    async def test_required_fields_present(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_conflict(self.BASE_DATA)
+        xml = _get_conflict_published_xml(setup_sender)
+        assert xml.findtext("email") == "jan@example.com"
+        assert xml.findtext("existingValue/firstName") == "Jan"
+        assert xml.findtext("existingValue/lastName") == "Janssen"
+        assert xml.findtext("incomingValue/firstName") == "Johan"
+        assert xml.findtext("incomingValue/lastName") == "Janssen"
+        assert xml.findtext("detectedAt") == "2026-04-15T10:01:00Z"
+
+    @pytest.mark.asyncio
+    async def test_optional_company_present_when_provided(self, setup_sender):
+        data = {
+            **self.BASE_DATA,
+            "existingValue": {
+                **self.BASE_DATA["existingValue"],
+                "company": "Acme NV",
+            },
+            "incomingValue": {
+                **self.BASE_DATA["incomingValue"],
+                "company": "Beta BV",
+            },
+        }
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_conflict(data)
+        xml = _get_conflict_published_xml(setup_sender)
+        assert xml.findtext("existingValue/company") == "Acme NV"
+        assert xml.findtext("incomingValue/company") == "Beta BV"
+
+    @pytest.mark.asyncio
+    async def test_xsd_field_order(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_user_conflict(self.BASE_DATA)
+        tags = [child.tag for child in _get_conflict_published_xml(setup_sender)]
+        assert tags == ["email", "existingValue", "incomingValue", "detectedAt"]
 
 
 # ---------------------------------------------------------------------------
@@ -622,4 +722,3 @@ class TestPublishUserDeactivated:
         assert xml.findtext("id") == "550e8400-e29b-41d4-a716-446655440000"
         assert xml.findtext("email") == "jan@example.com"
         assert xml.findtext("deactivatedAt") == "2026-04-15T14:00:00Z"
-

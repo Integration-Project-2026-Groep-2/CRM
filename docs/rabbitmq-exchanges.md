@@ -60,24 +60,30 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 
 ### CRM Inbound — per exchange van het producerende team
 
-| Queue                           | Exchange         | Producent   | Contract |
-| ------------------------------- | ---------------- | ----------- | -------- |
-| `frontend.registration.created` | `user.topic`     | Frontend    | 1        |
-| `frontend.registration.updated` | `user.topic`     | Frontend    | 2        |
-| `frontend.company.created`      | `user.topic`     | Frontend    | 3        |
-| `facturatie.user.created`       | `user.topic`     | Facturatie  | 24       |
-| `facturatie.user.updated`       | `user.topic`     | Facturatie  | 25       |
-| `facturatie.user.deactivated`   | `user.topic`     | Facturatie  | 26       |
-| `kassa.person.lookup.requested` | `payment.topic`  | Kassa       | 10a      |
-| `kassa.payment.confirmed`       | `payment.topic`  | Kassa       | 16       |
-| `kassa.unpaid.requested`        | `payment.topic`  | Kassa       | 17a      |
-| `facturatie.company.requested`  | `invoice.topic`  | Facturatie  | 5a       |
-| `planning.session.updated`      | `planning.topic` | Planning    | 11       |
-| `controlroom.warning.issued`    | `planning.topic` | Controlroom | 9        |
-| `iot.badge.linked`              | `planning.topic` | IoT         | 12       |
-| `mailing.bounce.reported`       | `mail.topic`     | Mailing     | 20       |
+| Queue | Exchange | Producent | Contract |
+|---|---|---|---|
+| `frontend.registration.created` | `user.topic` | Frontend | 1 |
+| `frontend.registration.updated` | `user.topic` | Frontend | 2 |
+| `frontend.company.created` | `user.topic` | Frontend | 3 |
+| `facturatie.user.created` | `user.topic` | Facturatie | 24 |
+| `facturatie.user.updated` | `user.topic` | Facturatie | 25 |
+| `facturatie.user.deactivated` | `user.topic` | Facturatie | 26 |
+| `mailing.user.created` | `user.topic` | Mailing | 27 |
+| `mailing.user.updated` | `user.topic` | Mailing | 28 |
+| `mailing.user.deactivated` | `user.topic` | Mailing | 29 |
+| `kassa.person.lookup.requested` | `payment.topic` | Kassa | 10a |
+| `kassa.payment.confirmed` | `payment.topic` | Kassa | 16 |
+| `kassa.unpaid.requested` | `payment.topic` | Kassa | 17a |
+| `facturatie.company.requested` | `invoice.topic` | Facturatie | 5a |
+| `planning.session.updated` | `planning.topic` | Planning | 11 |
+| `controlroom.warning.issued` | `planning.topic` | Controlroom | 9 |
+| `iot.badge.linked` | `planning.topic` | IoT | 12 |
+| `mailing.bounce.reported` | `mail.topic` | Mailing | 20 |
 
 **Contract 24 runtime-gedrag:** Bij een uniek bestaand Contact hergebruikt CRM dat Contact en kent zo nodig eerst een CRM UUID toe. Deze flow publiceert geen `crm.mail.requested`.
+**Contract 25 runtime-gedrag:** `facturatie.user.updated` gebruikt dezelfde XML-root `UserUpdated` als het outbound CRM-event, maar blijft een apart inbound contract via `user.topic`. `gdprConsent` is verplicht en moet door XML-validatie aanwezig zijn.
+**Contract 26 runtime-gedrag:** `facturatie.user.deactivated` deactiveert Contacts enkel via soft delete op basis van CRM UUID (`id`). CRM verwijdert nooit fysiek.
+**Contracten 27-28 inbound-vereisten:** Mailing user sync gebruikt verplichte velden `id`, `email` en `gdprConsent`; `firstName`, `lastName` en `companyId` blijven optioneel volgens de Mailing XSD.
 
 **Contract 25 runtime-gedrag:** `facturatie.user.updated` gebruikt dezelfde XML-root `UserUpdated` als het outbound CRM-event, maar blijft een apart inbound contract via `user.topic`. `gdprConsent` is verplicht en moet door XML-validatie aanwezig zijn.
 

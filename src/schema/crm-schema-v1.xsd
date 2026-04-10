@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  CRM Master Schema — Alle contracts (1–26)
+  CRM Master Schema — Alle contracts (1–29)
   Integration Project 2025/2026 | Groep 2
   Versie 1.3 — April 2026
 
@@ -79,6 +79,17 @@
       <xs:enumeration value="ADMIN"/>
     </xs:restriction>
   </xs:simpleType>
+
+  <xs:complexType name="MailingUserPayloadType">
+    <xs:sequence>
+      <xs:element name="id"          type="UUIDType"/>
+      <xs:element name="email"       type="EmailType"/>
+      <xs:element name="firstName"   type="xs:string" minOccurs="0" nillable="true"/>
+      <xs:element name="lastName"    type="xs:string" minOccurs="0" nillable="true"/>
+      <xs:element name="gdprConsent" type="xs:boolean"/>
+      <xs:element name="companyId"   type="UUIDType"  minOccurs="0" nillable="true"/>
+    </xs:sequence>
+  </xs:complexType>
 
   <!-- ============================================================
        CANONIEKE COMPLEX TYPES
@@ -198,6 +209,33 @@
         <xs:element name="gdprConsent"          type="xs:boolean"/>
         <xs:element name="companyId"            type="UUIDType"  minOccurs="0" nillable="true"/>
         <xs:element name="createdAt"            type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 27 — Mailing → CRM: user aanmaken
+       Queue: mailing.user.created | durable: true
+  ============================================================ -->
+  <xs:element name="MailingUserCreated" type="MailingUserPayloadType"/>
+
+  <!-- ============================================================
+       CONTRACT 28 — Mailing → CRM: user bijwerken
+       Queue: mailing.user.updated | durable: true
+       Volledig object vereist volgens producer-XSD.
+  ============================================================ -->
+  <xs:element name="MailingUserUpdated" type="MailingUserPayloadType"/>
+
+  <!-- ============================================================
+       CONTRACT 29 — Mailing → CRM: user deactiveren
+       Queue: mailing.user.deactivated | durable: true
+  ============================================================ -->
+  <xs:element name="MailingUserDeactivated">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="id"            type="UUIDType"/>
+        <xs:element name="email"         type="EmailType"/>
+        <xs:element name="deactivatedAt" type="ISO8601DateTimeType"/>
       </xs:sequence>
     </xs:complexType>
   </xs:element>
