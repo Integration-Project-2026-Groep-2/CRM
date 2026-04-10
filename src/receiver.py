@@ -14,11 +14,9 @@ from lxml import etree
 from src import sender, xml_validator
 from src.config import Config
 from src.salesforce_client import (
-    add_facturatie_customer_id_if_supported,
     backfill_mailing_contact_fields,
     create_contact,
     deactivate_contact,
-    deactivate_contact_by_crm_id,
     ensure_contact_identifiers,
     get_contact_by_email,
     get_contact_match_by_email,
@@ -26,7 +24,6 @@ from src.salesforce_client import (
     get_salesforce_client,
     get_unpaid_contacts,
     has_contact_mailing_id_field,
-    update_contact_by_crm_id,
     update_mailing_contact,
     update_payment_status,
     upsert_contact_by_email,
@@ -43,8 +40,6 @@ _INBOUND_EXCHANGE: dict[str, str] = {
     "frontend.registration.updated": "user.topic",
     "frontend.company.created": "user.topic",
     "facturatie.user.created": "user.topic",
-    "facturatie.user.updated": "user.topic",
-    "facturatie.user.deactivated": "user.topic",
     "mailing.user.created": "user.topic",
     "mailing.user.updated": "user.topic",
     "facturatie.company.requested": "invoice.topic",
@@ -100,16 +95,6 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     # Queue: facturatie.user.created | Exchange: user.topic | durable: true
     queue_facturatie_user_created = await _declare_and_bind(channel, "facturatie.user.created", durable=True)
     await queue_facturatie_user_created.consume(partial(handle_facturatie_user_created, sf=sf_client))
-
-    # Contract 25 — Facturatie → CRM: user updated
-    # Queue: facturatie.user.updated | Exchange: user.topic | durable: true
-    queue_facturatie_user_updated = await _declare_and_bind(channel, "facturatie.user.updated", durable=True)
-    await queue_facturatie_user_updated.consume(partial(handle_facturatie_user_updated, sf=sf_client))
-
-    # Contract 26 — Facturatie → CRM: user deactivated (soft delete only)
-    # Queue: facturatie.user.deactivated | Exchange: user.topic | durable: true
-    queue_facturatie_user_deactivated = await _declare_and_bind(channel, "facturatie.user.deactivated", durable=True)
-    await queue_facturatie_user_deactivated.consume(partial(handle_facturatie_user_deactivated, sf=sf_client))
 
     # Contract 27 — Mailing → CRM: new Mailing user sync
     # Queue: mailing.user.created | Exchange: user.topic | durable: true
@@ -754,14 +739,12 @@ async def handle_facturatie_user_created(
             return
 
         registration_id = xml.findtext("registrationId")
-        facturatie_customer_id = xml.findtext("facturatieCustomerId")
         match_status, existing_contact = await get_contact_match_by_email(sf, email)
         if match_status == "unique" and existing_contact is not None:
             contact = await ensure_contact_identifiers(
                 sf,
                 existing_contact,
                 registration_id=registration_id,
-                facturatie_customer_id=facturatie_customer_id,
             )
             await sender.publish_user_confirmed(_build_user_data(contact))
             logger.info("Published crm.user.confirmed for existing Facturatie user %s", email)
@@ -794,129 +777,12 @@ async def handle_facturatie_user_created(
         if company_id:
             contact_data["Company_ID__c"] = company_id
 
-        contact_data = await add_facturatie_customer_id_if_supported(
-            sf,
-            contact_data,
-            facturatie_customer_id,
-        )
-
         contact = await create_contact(sf, contact_data)
         await sender.publish_user_confirmed(_build_user_data(contact))
         logger.info("Published crm.user.confirmed for new Facturatie user %s", email)
         await message.ack()
     except Exception as exc:  # noqa: BLE001
         logger.error("FacturatieUserCreated — error processing message: %s", exc)
-        await message.reject(requeue=True)
-
-
-async def handle_facturatie_user_updated(
-    message: aio_pika.IncomingMessage, sf: "Salesforce"
-) -> None:
-    """Contract 25 — Facturatie -> CRM: existing CRM-linked user update.
-
-    Queue: facturatie.user.updated | durable: true
-
-    Behaviour:
-    - Validate XML against schema.
-    - Reject updates without GDPR consent.
-    - Update the unique Contact by CRM UUID (id).
-    - Publish crm.user.updated after Salesforce update.
-    - Missing/ambiguous CRM UUID: ack without retry.
-    - Invalid XML: rejected without requeue.
-    - Other errors: requeued.
-    """
-    try:
-        xml = xml_validator.validate(message.body)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("FacturatieUserUpdated — invalid XML, rejecting message: %s", exc)
-        await message.reject(requeue=False)
-        return
-
-    try:
-        crm_id = xml.findtext("id") or ""
-        email = xml.findtext("email") or ""
-        gdpr_text = xml.findtext("gdprConsent")
-        if gdpr_text not in ("true", "1"):
-            logger.warning(
-                "FacturatieUserUpdated refused — gdprConsent=%s for email %s",
-                gdpr_text,
-                email,
-            )
-            await message.reject(requeue=False)
-            return
-
-        payload = {
-            "id": crm_id,
-            "email": email,
-            "firstName": xml.findtext("firstName"),
-            "lastName": xml.findtext("lastName"),
-            "phone": xml.findtext("phone"),
-            "street": xml.findtext("street"),
-            "houseNumber": xml.findtext("houseNumber"),
-            "postalCode": xml.findtext("postalCode"),
-            "city": xml.findtext("city"),
-            "country": xml.findtext("country"),
-            "role": xml.findtext("role"),
-            "companyId": xml.findtext("companyId"),
-            "badgeCode": xml.findtext("badgeCode"),
-            "isActive": xml.findtext("isActive") in ("true", "1"),
-            "gdprConsent": True,
-        }
-
-        contact = await update_contact_by_crm_id(sf, crm_id, payload)
-        if contact is None:
-            await message.ack()
-            return
-
-        await sender.publish_user_updated(_build_updated_user_data(contact))
-        logger.info("Published crm.user.updated for Facturatie user %s", email)
-        await message.ack()
-    except Exception as exc:  # noqa: BLE001
-        logger.error("FacturatieUserUpdated — error processing message: %s", exc)
-        await message.reject(requeue=True)
-
-
-async def handle_facturatie_user_deactivated(
-    message: aio_pika.IncomingMessage, sf: "Salesforce"
-) -> None:
-    """Contract 26 — Facturatie -> CRM: CRM-linked user deactivation.
-
-    Queue: facturatie.user.deactivated | durable: true
-
-    Behaviour:
-    - Validate XML against schema.
-    - Soft-delete the unique Contact by CRM UUID (id) only.
-    - Publish crm.user.deactivated after Salesforce update.
-    - Missing/ambiguous CRM UUID: ack without retry.
-    - Invalid XML: rejected without requeue.
-    - Other errors: requeued.
-    """
-    try:
-        xml = xml_validator.validate(message.body)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("FacturatieUserDeactivated — invalid XML, rejecting message: %s", exc)
-        await message.reject(requeue=False)
-        return
-
-    try:
-        crm_id = xml.findtext("id") or ""
-        email = xml.findtext("email") or ""
-
-        contact = await deactivate_contact_by_crm_id(sf, crm_id)
-        if contact is None:
-            await message.ack()
-            return
-
-        deactivation_data = {
-            "id": contact["CRM_ID__c"],
-            "email": contact["Email"],
-            "deactivatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
-        await sender.publish_user_deactivated(deactivation_data)
-        logger.info("Published crm.user.deactivated for Facturatie user %s", email)
-        await message.ack()
-    except Exception as exc:  # noqa: BLE001
-        logger.error("FacturatieUserDeactivated — error processing message: %s", exc)
         await message.reject(requeue=True)
 
 

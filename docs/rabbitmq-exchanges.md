@@ -1,6 +1,6 @@
 # RabbitMQ Exchanges — Integratieproject 2026
 
-_Bron: ClickUp > Teams > Team CRM > Documentatie CRM > XML Contracts (AsyncAPI v1.7.0)_
+_Bron: ClickUp > Teams > Team CRM > Documentatie CRM > XML Contracts (AsyncAPI v1.8.0)_
 
 ---
 
@@ -10,21 +10,21 @@ Het Infra-team beheert 6 **topic exchanges** op de centrale RabbitMQ broker. Daa
 
 ## Topic Exchanges
 
-| Exchange         | Eigenaar   | Consumers                           |
-| ---------------- | ---------- | ----------------------------------- |
-| `user.topic`     | Users      | Frontend, Kassa, CRM, Planning, ... |
-| `planning.topic` | Planning   | —                                   |
-| `payment.topic`  | Kassa      | —                                   |
-| `invoice.topic`  | Facturatie | —                                   |
-| `contact.topic`  | CRM        | —                                   |
-| `mail.topic`     | Mailing    | —                                   |
+| Exchange | Eigenaar | Consumers |
+|---|---|---|
+| `user.topic` | Users | Frontend, Kassa, CRM, Planning, ... |
+| `planning.topic` | Planning | — |
+| `payment.topic` | Kassa | — |
+| `invoice.topic` | Facturatie | — |
+| `contact.topic` | CRM | — |
+| `mail.topic` | Mailing | — |
 
 ## Speciale Exchanges
 
-| Exchange            | Type   | Durable | Eigenaar | Opmerking                                                                |
-| ------------------- | ------ | ------- | -------- | ------------------------------------------------------------------------ |
-| `heartbeat.direct`  | direct | true    | CRM      | Routing key: `routing.heartbeat`. Elke 1 seconde heartbeat (Contract 7). |
-| `crm.user.conflict` | fanout | true    | CRM      | Contract 15. Dubbele inschrijving detectie (R2).                         |
+| Exchange | Type | Durable | Eigenaar | Opmerking |
+|---|---|---|---|---|
+| `heartbeat.direct` | direct | true | CRM | Routing key: `routing.heartbeat`. Elke 1 seconde heartbeat (Contract 7). |
+| `crm.user.conflict` | fanout | true | CRM | Contract 15. Dubbele inschrijving detectie (R2). |
 
 ### Fanout binding: `crm.user.conflict`
 
@@ -43,20 +43,20 @@ await queue.bind(exchange)
 
 Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name`.
 
-| Queue                         | Richting          | Contract | Release |
-| ----------------------------- | ----------------- | -------- | ------- |
-| `crm.user.confirmed`          | CRM → consumers   | 13       | R1      |
-| `crm.user.updated`            | CRM → consumers   | 18       | R2      |
-| `crm.user.deactivated`        | CRM → consumers   | 22       | R3      |
-| `crm.company.confirmed`       | CRM → consumers   | 14       | R1      |
-| `crm.company.responded`       | CRM → Facturatie  | 5b       | R1      |
-| `crm.company.updated`         | CRM → consumers   | 19       | R2      |
-| `crm.company.deactivated`     | CRM → consumers   | 23       | R3      |
-| `crm.person.lookup.responded` | CRM → Kassa       | 10b      | R1      |
-| `crm.unpaid.responded`        | CRM → Kassa       | 17b      | R1      |
-| `crm.mail.requested`          | CRM → Mailing     | 6        | R1      |
-| `crm.invoice.requested`       | CRM → Facturatie  | 21       | R3      |
-| `crm.status.checked`          | CRM → Controlroom | 8        | R1      |
+| Queue | Richting | Contract | Release |
+|---|---|---|---|
+| `crm.user.confirmed` | CRM → consumers | 13 | R1 |
+| `crm.user.updated` | CRM → consumers | 18 | R2 |
+| `crm.user.deactivated` | CRM → consumers | 22 | R3 |
+| `crm.company.confirmed` | CRM → consumers | 14 | R1 |
+| `crm.company.responded` | CRM → Facturatie | 5b | R1 |
+| `crm.company.updated` | CRM → consumers | 19 | R2 |
+| `crm.company.deactivated` | CRM → consumers | 23 | R3 |
+| `crm.person.lookup.responded` | CRM → Kassa | 10b | R1 |
+| `crm.unpaid.responded` | CRM → Kassa | 17b | R1 |
+| `crm.mail.requested` | CRM → Mailing | 6 | R1 |
+| `crm.invoice.requested` | CRM → Facturatie | 21 | R3 |
+| `crm.status.checked` | CRM → Controlroom | 8 | R1 |
 
 ### CRM Inbound — per exchange van het producerende team
 
@@ -71,6 +71,9 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 | `mailing.user.created` | `user.topic` | Mailing | 27 |
 | `mailing.user.updated` | `user.topic` | Mailing | 28 |
 | `mailing.user.deactivated` | `user.topic` | Mailing | 29 |
+| `planning.user.created` | `user.topic` | Planning | 30 (Planning ref 21) |
+| `planning.user.updated` | `user.topic` | Planning | 31 (Planning ref 22) |
+| `planning.user.deactivated` | `user.topic` | Planning | 32 (Planning ref 23) |
 | `kassa.person.lookup.requested` | `payment.topic` | Kassa | 10a |
 | `kassa.payment.confirmed` | `payment.topic` | Kassa | 16 |
 | `kassa.unpaid.requested` | `payment.topic` | Kassa | 17a |
@@ -81,27 +84,22 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 | `mailing.bounce.reported` | `mail.topic` | Mailing | 20 |
 
 **Contract 24 runtime-gedrag:** Bij een uniek bestaand Contact hergebruikt CRM dat Contact en kent zo nodig eerst een CRM UUID toe. Deze flow publiceert geen `crm.mail.requested`.
-**Contract 25 runtime-gedrag:** `facturatie.user.updated` gebruikt dezelfde XML-root `UserUpdated` als het outbound CRM-event, maar blijft een apart inbound contract via `user.topic`. `gdprConsent` is verplicht en moet door XML-validatie aanwezig zijn.
-**Contract 26 runtime-gedrag:** `facturatie.user.deactivated` deactiveert Contacts enkel via soft delete op basis van CRM UUID (`id`). CRM verwijdert nooit fysiek.
 **Contracten 27-28 inbound-vereisten:** Mailing user sync gebruikt verplichte velden `id`, `email` en `gdprConsent`; `firstName`, `lastName` en `companyId` blijven optioneel volgens de Mailing XSD.
-
-**Contract 25 runtime-gedrag:** `facturatie.user.updated` gebruikt dezelfde XML-root `UserUpdated` als het outbound CRM-event, maar blijft een apart inbound contract via `user.topic`. `gdprConsent` is verplicht en moet door XML-validatie aanwezig zijn.
-
-**Contract 26 runtime-gedrag:** `facturatie.user.deactivated` deactiveert Contacts enkel via soft delete op basis van CRM UUID (`id`). CRM verwijdert nooit fysiek.
+**Contracten 30-31 inbound-vereisten:** Planning user sync gebruikt verplichte velden `id`, `email`, `firstName`, `lastName`, `role` en `gdprConsent`; `phoneNumber` en `company` blijven optioneel volgens de Planning XSD.
 
 > Dezelfde exchange delen betekent **niet** dat berichten automatisch compatibel zijn. CRM moet elke routing key expliciet binden en de payload moet overeenkomen met het contract dat de receiver valideert.
 
 ### Speciale exchanges (apart van topic routing)
 
-| Item          | Exchange                                                      | Contract |
-| ------------- | ------------------------------------------------------------- | -------- |
-| Heartbeat     | `heartbeat.direct` (direct, routing key: `routing.heartbeat`) | 7        |
-| User conflict | `crm.user.conflict` (fanout)                                  | 15       |
+| Item | Exchange | Contract |
+|---|---|---|
+| Heartbeat | `heartbeat.direct` (direct, routing key: `routing.heartbeat`) | 7 |
+| User conflict | `crm.user.conflict` (fanout) | 15 |
 
 ---
 
 ## Referenties
 
-- ClickUp: Teams > Team CRM > Documentatie CRM > XML Contracts (AsyncAPI v1.7.0)
+- ClickUp: Teams > Team CRM > Documentatie CRM > XML Contracts (AsyncAPI v1.8.0)
 - Formele AsyncAPI specificatie: `docs/crm-asyncapi-v1.yaml`
 - XSD schema: `src/schema/crm-schema-v1.xsd`

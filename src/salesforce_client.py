@@ -27,7 +27,6 @@ from src.config import Config
 logger = logging.getLogger(__name__)
 
 _PAYMENT_TIMESTAMP_FIELD = "Paid_At__c"
-_facturatie_customer_field_cache: str | None = None
 
 
 def _escape_soql(value: str) -> str:
@@ -197,10 +196,6 @@ async def _resolve_contact_active_field_optional(sf: Salesforce) -> str | None:
         return _active_field_cache
 
     describe = await asyncio.to_thread(sf.Contact.describe)
-    if asyncio.iscoroutine(describe):
-        describe = await describe
-    if not isinstance(describe, dict):
-        return None
     available_fields = {field["name"] for field in describe.get("fields", [])}
 
     for candidate in ("IsActive__c", "Active__c", "Is_Active__c"):
@@ -209,48 +204,6 @@ async def _resolve_contact_active_field_optional(sf: Salesforce) -> str | None:
             return candidate
 
     return None
-
-
-async def _resolve_facturatie_customer_field_optional(sf: Salesforce) -> str | None:
-    """Resolve optional Contact field used for Facturatie customer identifier."""
-    global _facturatie_customer_field_cache  # noqa: PLW0603
-    if _facturatie_customer_field_cache is not None:
-        return _facturatie_customer_field_cache
-
-    describe = await asyncio.to_thread(sf.Contact.describe)
-    if asyncio.iscoroutine(describe):
-        describe = await describe
-    if not isinstance(describe, dict):
-        return None
-    available_fields = {field["name"] for field in describe.get("fields", [])}
-
-    for candidate in ("Facturatie_Customer_ID__c", "FacturatieCustomerId__c"):
-        if candidate in available_fields:
-            _facturatie_customer_field_cache = candidate
-            return candidate
-
-    return None
-
-
-async def add_facturatie_customer_id_if_supported(
-    sf: Salesforce,
-    data: dict[str, Any],
-    facturatie_customer_id: str | None,
-) -> dict[str, Any]:
-    """Set Facturatie customer id on payload when org exposes a matching field."""
-    if not facturatie_customer_id:
-        return data
-
-    facturatie_field = await _resolve_facturatie_customer_field_optional(sf)
-    if facturatie_field is None:
-        logger.info(
-            "Facturatie customer id not persisted: no supported Contact field found in org"
-        )
-        return data
-
-    payload = {**data}
-    payload[facturatie_field] = facturatie_customer_id
-    return payload
 
 
 async def _resolve_contact_active_field(sf: Salesforce) -> str:
@@ -337,52 +290,6 @@ async def get_contact_by_crm_id(
         raise
 
 
-async def update_contact_by_crm_id(
-    sf: Salesforce,
-    crm_id: str,
-    data: dict[str, Any],
-) -> dict[str, Any] | None:
-    """Update a Contact identified by CRM_ID__c.
-
-    Contract 25 uses the CRM UUID as canonical identifier, so the receiver
-    should update the matching Contact by CRM_ID__c instead of relying on email.
-    Returns the refreshed Contact record or None when no unique match exists.
-    """
-    contact = await get_contact_by_crm_id(sf, crm_id)
-    if contact is None:
-        logger.warning("No unique Contact found for CRM_ID__c %s", crm_id)
-        return None
-
-    updates: dict[str, Any] = {"CRM_ID__c": crm_id}
-    field_mapping = {
-        "email": "Email",
-        "firstName": "FirstName",
-        "lastName": "LastName",
-        "phone": "Phone",
-        "street": "MailingStreet",
-        "houseNumber": "House_Number__c",
-        "postalCode": "MailingPostalCode",
-        "city": "MailingCity",
-        "country": "MailingCountry",
-        "role": "Role__c",
-        "companyId": "Company_ID__c",
-        "badgeCode": "Badge_Code__c",
-        "gdprConsent": "GDPR_Consent__c",
-    }
-    for xml_field, sf_field in field_mapping.items():
-        if xml_field in data:
-            updates[sf_field] = data[xml_field]
-
-    if "isActive" in data:
-        active_field = await _resolve_contact_active_field(sf)
-        updates[active_field] = bool(data["isActive"])
-
-    contact_id = contact["Id"]
-    await asyncio.to_thread(sf.Contact.update, contact_id, updates)
-    logger.info("Updated Contact by CRM_ID__c: %s", crm_id)
-    return await asyncio.to_thread(sf.Contact.get, contact_id)
-
-
 async def find_unique_contact_by_email(
     sf: Salesforce, email: str
 ) -> dict[str, Any] | None:
@@ -447,7 +354,6 @@ async def ensure_contact_identifiers(
     sf: Salesforce,
     contact: dict[str, Any],
     registration_id: str | None = None,
-    facturatie_customer_id: str | None = None,
     mailing_id: str | None = None,
 ) -> dict[str, Any]:
     """Ensure a Contact has the canonical identifiers needed by CRM contracts.
@@ -455,7 +361,6 @@ async def ensure_contact_identifiers(
     - Always ensure CRM_ID__c exists.
     - Only set Registration_ID__c when it is currently empty and an inbound
       registration_id is provided.
-    - Persist Facturatie customer id when the org exposes a supported field.
     - Only set Mailing_ID__c when it is currently empty and an inbound
       mailing_id is provided.
     """
@@ -466,13 +371,6 @@ async def ensure_contact_identifiers(
 
     if registration_id and not contact.get("Registration_ID__c"):
         updates["Registration_ID__c"] = registration_id
-
-    if facturatie_customer_id:
-        updates = await add_facturatie_customer_id_if_supported(
-            sf,
-            updates,
-            facturatie_customer_id,
-        )
 
     if mailing_id and not contact.get("Mailing_ID__c"):
         updates["Mailing_ID__c"] = mailing_id
@@ -754,34 +652,6 @@ async def deactivate_contact(
         return updated_record
     except SalesforceError as e:
         logger.error("Failed to deactivate contact %s: %s", email, str(e))
-        raise
-
-
-async def deactivate_contact_by_crm_id(
-    sf: Salesforce, crm_id: str
-) -> dict[str, Any] | None:
-    """Soft-delete a Contact by CRM UUID (Contract 26, GDPR)."""
-    contact = await get_contact_by_crm_id(sf, crm_id)
-    if contact is None:
-        logger.warning("Cannot deactivate — Contact not found for CRM_ID__c: %s", crm_id)
-        return None
-
-    contact_id = contact["Id"]
-
-    try:
-        active_field = await _resolve_contact_active_field(sf)
-
-        await asyncio.to_thread(
-            sf.Contact.update, contact_id, {active_field: False}
-        )
-        logger.info("Deactivated Contact %s (CRM_ID__c: %s)", contact_id, crm_id)
-
-        updated_record = await asyncio.to_thread(sf.Contact.get, contact_id)
-        if active_field != "IsActive__c" and "IsActive__c" not in updated_record:
-            updated_record["IsActive__c"] = updated_record.get(active_field, False)
-        return updated_record
-    except SalesforceError as e:
-        logger.error("Failed to deactivate contact %s: %s", crm_id, str(e))
         raise
 
 

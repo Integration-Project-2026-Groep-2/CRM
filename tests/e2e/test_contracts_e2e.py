@@ -35,7 +35,7 @@ import pytest
 from aio_pika import ExchangeType
 from dotenv import load_dotenv
 from lxml import etree
-from simple_salesforce import Salesforce, SalesforceAuthenticationFailed
+from simple_salesforce import Salesforce
 
 load_dotenv()
 
@@ -50,29 +50,6 @@ TIMEOUT = 15  # seconds — CRM needs time for Salesforce round-trip
 STACK_STARTUP_TIMEOUT = 90  # seconds — includes local image build/startup
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _LOCAL_RABBITMQ_HOSTS = {"localhost", "127.0.0.1", "::1"}
-
-
-@pytest.fixture(scope="session", autouse=True)
-async def ensure_e2e_environment():
-    """Skip the e2e suite when the live CRM stack is unavailable.
-
-    The tests are intended for a running RabbitMQ + CRM environment. In local
-    developer setups without Docker or without the service already running,
-    we skip instead of failing the entire suite.
-    """
-    if E2E_AUTO_START_LOCAL_STACK:
-        return
-
-    try:
-        conn = await aio_pika.connect_robust(RABBITMQ_URL)
-        await conn.close()
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"Skipping e2e suite: CRM/RabbitMQ stack unavailable ({exc})")
-
-    try:
-        await _wait_for_receiver_queue("frontend.registration.created", timeout=5)
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"Skipping e2e suite: CRM receiver not running ({exc})")
 
 
 # ---------------------------------------------------------------------------
@@ -215,16 +192,13 @@ async def sf_client():
     if not username or not password or not security_token:
         pytest.skip("Salesforce credentials missing in environment for e2e test")
 
-    try:
-        return await asyncio.to_thread(
-            Salesforce,
-            username=username,
-            password=password,
-            security_token=security_token,
-            domain=domain,
-        )
-    except SalesforceAuthenticationFailed as exc:
-        pytest.skip(f"Skipping Salesforce-dependent e2e test: {exc}")
+    return await asyncio.to_thread(
+        Salesforce,
+        username=username,
+        password=password,
+        security_token=security_token,
+        domain=domain,
+    )
 
 
 def _unique_email() -> str:
