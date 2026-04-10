@@ -1,7 +1,7 @@
 asyncapi: 3.1.0
 info:
   title: Integratieproject 2026 — CRM (Salesforce) RabbitMQ Contracts
-  version: 1.7.0
+  version: 1.8.0
   description: >
     XML-contracten voor alle integraties waarbij het CRM-team (Salesforce)
     betrokken is.
@@ -183,6 +183,56 @@ channels:
     messages:
       mailingUserDeactivated:
         $ref: "#/components/messages/MailingUserDeactivated"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: true
+
+  # ============================================================
+  # PLANNING → CRM (user sync)
+  # ============================================================
+
+  planningUserCreated:
+    address: planning.user.created
+    description: >-
+      Contract 30 — Planning → CRM: Planning-user synchroniseren naar
+      Salesforce (Planning ref 21). Payload volgt de Planning XSD met
+      verplichte velden id, email, firstName, lastName, role en gdprConsent.
+      phoneNumber en company blijven optioneel zoals door Planning
+      aangeleverd.
+    messages:
+      planningUserCreated:
+        $ref: "#/components/messages/PlanningUserCreated"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: true
+
+  planningUserUpdated:
+    address: planning.user.updated
+    description: >-
+      Contract 31 — Planning → CRM: bestaande Planning-user bijwerken in
+      Salesforce (Planning ref 22). Planning verstuurt een volledig object met
+      dezelfde veldset als het create-contract.
+    messages:
+      planningUserUpdated:
+        $ref: "#/components/messages/PlanningUserUpdated"
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          durable: true
+
+  planningUserDeactivated:
+    address: planning.user.deactivated
+    description: >-
+      Contract 32 — Planning → CRM: bestaande Planning-user soft-deactiveren
+      in Salesforce (Planning ref 23).
+    messages:
+      planningUserDeactivated:
+        $ref: "#/components/messages/PlanningUserDeactivated"
     bindings:
       amqp:
         is: queue
@@ -731,6 +781,46 @@ operations:
       - name: mailing
       - name: contract-29
 
+  receivePlanningUserCreated:
+    action: receive
+    channel:
+      $ref: "#/channels/planningUserCreated"
+    messages:
+      - $ref: "#/channels/planningUserCreated/messages/planningUserCreated"
+    summary: >-
+      Ontvang Planning user sync create, valideer de payload en synchroniseer
+      de Planning-user naar Salesforce op basis van de door Planning
+      aangeleverde veldset.
+    tags:
+      - name: planning
+      - name: contract-30
+
+  receivePlanningUserUpdated:
+    action: receive
+    channel:
+      $ref: "#/channels/planningUserUpdated"
+    messages:
+      - $ref: "#/channels/planningUserUpdated/messages/planningUserUpdated"
+    summary: >-
+      Ontvang volledig Planning update-object en werk de Planning-linked user
+      in Salesforce bij.
+    tags:
+      - name: planning
+      - name: contract-31
+
+  receivePlanningUserDeactivated:
+    action: receive
+    channel:
+      $ref: "#/channels/planningUserDeactivated"
+    messages:
+      - $ref: "#/channels/planningUserDeactivated/messages/planningUserDeactivated"
+    summary: >-
+      Ontvang Planning deactivatieverzoek en voer enkel soft delete uit in
+      Salesforce.
+    tags:
+      - name: planning
+      - name: contract-32
+
   receiveCompanyDataRequest:
     action: receive
     channel:
@@ -1239,6 +1329,84 @@ components:
               <email>els.peeters@example.com</email>
               <deactivatedAt>2026-04-15T16:00:00Z</deactivatedAt>
             </MailingUserDeactivated>
+
+    PlanningUserCreated:
+      name: PlanningUserCreated
+      title: Planning user aangemaakt
+      summary: >-
+        Planning vraagt CRM om een lokale Planning-user naar Salesforce te
+        synchroniseren. CRM gebruikt lokale contractnummering 30, met Planning
+        referentie 21.
+      contentType: application/xml
+      tags:
+        - name: planning
+        - name: contract-30
+      payload:
+        $ref: "#/components/schemas/PlanningUserCreated"
+      examples:
+        - name: planning_create
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <PlanningUserCreated>
+              <id>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</id>
+              <email>sofie.declercq@example.com</email>
+              <firstName>Sofie</firstName>
+              <lastName>Declercq</lastName>
+              <role>SPEAKER</role>
+              <gdprConsent>true</gdprConsent>
+              <phoneNumber>+32470123456</phoneNumber>
+              <company>Desideriushogeschool</company>
+            </PlanningUserCreated>
+
+    PlanningUserUpdated:
+      name: PlanningUserUpdated
+      title: Planning user bijgewerkt
+      summary: >-
+        Planning stuurt een volledig update-object voor een user die ook in CRM
+        gekend moet blijven. CRM gebruikt lokale contractnummering 31, met
+        Planning referentie 22.
+      contentType: application/xml
+      tags:
+        - name: planning
+        - name: contract-31
+      payload:
+        $ref: "#/components/schemas/PlanningUserUpdated"
+      examples:
+        - name: planning_update
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <PlanningUserUpdated>
+              <id>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</id>
+              <email>sofie.declercq@example.com</email>
+              <firstName>Sofie</firstName>
+              <lastName>De Clercq</lastName>
+              <role>VISITOR</role>
+              <gdprConsent>true</gdprConsent>
+              <phoneNumber>+32470999888</phoneNumber>
+              <company>Desideriushogeschool</company>
+            </PlanningUserUpdated>
+
+    PlanningUserDeactivated:
+      name: PlanningUserDeactivated
+      title: Planning user gedeactiveerd
+      summary: >-
+        Planning vraagt CRM om een bestaande user soft te deactiveren. CRM
+        gebruikt lokale contractnummering 32, met Planning referentie 23.
+      contentType: application/xml
+      tags:
+        - name: planning
+        - name: contract-32
+      payload:
+        $ref: "#/components/schemas/PlanningUserDeactivated"
+      examples:
+        - name: planning_deactivatie
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <PlanningUserDeactivated>
+              <id>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</id>
+              <email>sofie.declercq@example.com</email>
+              <deactivatedAt>2026-04-15T16:00:00Z</deactivatedAt>
+            </PlanningUserDeactivated>
 
     CompanyCreated:
       name: CompanyCreated
@@ -2234,6 +2402,107 @@ components:
       description: >-
         Mailing vraagt CRM om een bestaande user te deactiveren. CRM voert
         enkel soft delete uit en publiceert daarna crm.user.deactivated.
+      properties:
+        id:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        email:
+          type: string
+          format: email
+        deactivatedAt:
+          type: string
+          format: date-time
+
+    PlanningUserCreated:
+      type: object
+      required:
+        - id
+        - email
+        - firstName
+        - lastName
+        - role
+        - gdprConsent
+      description: >-
+        Planning synchroniseert een user uit de eigen datastore naar CRM.
+        Lokale CRM-contractnummering gebruikt 30; Planning documenteert dit
+        contract zelf als referentie 21.
+      properties:
+        id:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        email:
+          type: string
+          format: email
+        firstName:
+          type: string
+        lastName:
+          type: string
+        role:
+          type: string
+          enum:
+            - SPEAKER
+            - VISITOR
+        gdprConsent:
+          type: boolean
+          description: Verplicht — Planning levert enkel users met expliciete toestemming.
+        phoneNumber:
+          type: string
+          description: Optioneel — Planning-specifieke telefoonveldnaam.
+        company:
+          type: string
+          description: Optioneel — bedrijfsnaam uit Planning, geen CRM companyId.
+
+    PlanningUserUpdated:
+      type: object
+      required:
+        - id
+        - email
+        - firstName
+        - lastName
+        - role
+        - gdprConsent
+      description: >-
+        Planning stuurt steeds het volledige gekende user-object voor updates.
+        Lokale CRM-contractnummering gebruikt 31; Planning documenteert dit
+        contract zelf als referentie 22.
+      properties:
+        id:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        email:
+          type: string
+          format: email
+        firstName:
+          type: string
+        lastName:
+          type: string
+        role:
+          type: string
+          enum:
+            - SPEAKER
+            - VISITOR
+        gdprConsent:
+          type: boolean
+        phoneNumber:
+          type: string
+          description: Optioneel — Planning-specifieke telefoonveldnaam.
+        company:
+          type: string
+          description: Optioneel — bedrijfsnaam uit Planning, geen CRM companyId.
+
+    PlanningUserDeactivated:
+      type: object
+      required:
+        - id
+        - email
+        - deactivatedAt
+      description: >-
+        Planning vraagt CRM om een bestaande user soft te deactiveren. Lokale
+        CRM-contractnummering gebruikt 32; Planning documenteert dit contract
+        zelf als referentie 23.
       properties:
         id:
           type: string

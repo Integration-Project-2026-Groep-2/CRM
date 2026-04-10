@@ -12,7 +12,7 @@ Exchanges zijn **per domein**, niet per team. Een team publiceert naar de exchan
 
 | Exchange | Type | Durable | Domein | Producers |
 |---|---|---|---|---|
-| `user.topic` | topic | true | User lifecycle | Frontend, Mailing, Facturatie |
+| `user.topic` | topic | true | User lifecycle | Frontend, Mailing, Facturatie, Planning |
 | `contact.topic` | topic | true | CRM master data | CRM |
 | `planning.topic` | topic | true | Sessies + monitoring | Planning, Controlroom, IoT |
 | `payment.topic` | topic | true | Betalingen | Kassa |
@@ -93,6 +93,9 @@ _Bron: ClickUp > Team Planning > Analyse: Team Planning > XML contracts_
 | `planning.session.full` | `planning.topic` | Planning → Frontend, Mailing |
 | `planning.session.error` | `planning.topic` | Planning → Controlroom |
 | `planning.participant.registered` | `planning.topic` | Planning → Controlroom |
+| `planning.user.created` | `user.topic` | Planning → CRM |
+| `planning.user.updated` | `user.topic` | Planning → CRM |
+| `planning.user.deactivated` | `user.topic` | Planning → CRM |
 | `planning.heartbeat` | `heartbeat.direct` | Planning → Controlroom |
 
 ### Kassa
@@ -156,7 +159,7 @@ _Geen eigen docs._
 
 ## Referenties
 
-- ClickUp > Team CRM > Documentatie CRM > XML Contracts (AsyncAPI v1.7.0)
+- ClickUp > Team CRM > Documentatie CRM > XML Contracts (AsyncAPI v1.8.0)
 - ClickUp > Team Facturatie/Mailing > Doc Mailing (SendGrid) > XML/XSD Contracts
 - ClickUp > Team Facturatie/Mailing > Doc Facturatie (FOSSBilling) > XML/XSD Contracts
 - ClickUp > Team Planning > Analyse: Team Planning > XML contracts
