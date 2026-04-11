@@ -17,6 +17,7 @@ from src.salesforce_client import (
     backfill_mailing_contact_fields,
     create_contact,
     deactivate_contact,
+    deactivate_contact_record,
     ensure_contact_identifiers,
     get_contact_by_email,
     get_contact_match_by_email,
@@ -42,6 +43,7 @@ _INBOUND_EXCHANGE: dict[str, str] = {
     "facturatie.user.created": "user.topic",
     "mailing.user.created": "user.topic",
     "mailing.user.updated": "user.topic",
+    "mailing.user.deactivated": "user.topic",
     "facturatie.company.requested": "invoice.topic",
     "kassa.person.lookup.requested": "payment.topic",
     "kassa.payment.confirmed": "payment.topic",
@@ -105,6 +107,11 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     # Queue: mailing.user.updated | Exchange: user.topic | durable: true
     queue_mailing_user_updated = await _declare_and_bind(channel, "mailing.user.updated", durable=True)
     await queue_mailing_user_updated.consume(partial(handle_mailing_user_updated, sf=sf_client))
+
+    # Contract 29 — Mailing → CRM: deactivate existing Mailing user sync
+    # Queue: mailing.user.deactivated | Exchange: user.topic | durable: true
+    queue_mailing_user_deactivated = await _declare_and_bind(channel, "mailing.user.deactivated", durable=True)
+    await queue_mailing_user_deactivated.consume(partial(handle_mailing_user_deactivated, sf=sf_client))
 
     # Contract 3 — Frontend → CRM: create company
     # queue_company = await _declare_and_bind(channel, "frontend.company.created", durable=True)
@@ -271,6 +278,15 @@ def _build_user_data(contact: dict) -> dict:
     if contact.get("Company_ID__c"):
         data["companyId"] = contact["Company_ID__c"]
     return data
+
+
+def _build_user_deactivation_data(contact: dict, deactivated_at: str) -> dict[str, str]:
+    """Build the outbound Contract 22 payload from a Salesforce Contact."""
+    return {
+        "id": contact["CRM_ID__c"],
+        "email": contact["Email"],
+        "deactivatedAt": deactivated_at,
+    }
 
 
 def _build_full_name(first_name: str | None, last_name: str | None) -> str:
@@ -702,6 +718,91 @@ async def handle_mailing_user_updated(
         await message.reject(requeue=True)
 
 
+async def handle_mailing_user_deactivated(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 29 — Mailing -> CRM: deactivate an existing Mailing-linked user.
+
+    Queue: mailing.user.deactivated | durable: true
+
+    Behaviour:
+    - Validate XML against schema.
+    - Require Salesforce support for Mailing_ID__c.
+    - Resolve the Contact strictly by Mailing_ID__c.
+    - Requeue unknown Mailing identities so out-of-order create/deactivate can recover.
+    - Ack ambiguous Mailing identities without retry.
+    - Trust Mailing_ID__c over a stale payload email, but log the mismatch.
+    - Perform a soft delete only and publish crm.user.deactivated.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("MailingUserDeactivated — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        email = xml.findtext("email") or ""
+        mailing_id = xml.findtext("id") or ""
+        deactivated_at = xml.findtext("deactivatedAt") or ""
+
+        if not await has_contact_mailing_id_field(sf):
+            logger.error(
+                "MailingUserDeactivated rejected — Salesforce Contact field Mailing_ID__c is missing",
+            )
+            await message.reject(requeue=False)
+            return
+
+        mailing_match_status, existing_contact = await get_contact_match_by_mailing_id(sf, mailing_id)
+        if mailing_match_status == "none":
+            logger.warning(
+                "MailingUserDeactivated deferred — no Contact found for Mailing_ID__c %s; retrying for possible out-of-order create/deactivate",
+                mailing_id,
+            )
+            await message.reject(requeue=True)
+            return
+
+        if mailing_match_status == "ambiguous":
+            logger.warning(
+                "MailingUserDeactivated ignored — ambiguous Mailing_ID__c %s in Salesforce",
+                mailing_id,
+            )
+            await message.ack()
+            return
+
+        contact = await ensure_contact_identifiers(
+            sf,
+            existing_contact,
+            mailing_id=mailing_id,
+        )
+
+        existing_email = _normalize_email_for_compare(contact.get("Email"))
+        incoming_email = _normalize_email_for_compare(email)
+        if existing_email is not None and incoming_email is not None and existing_email != incoming_email:
+            logger.warning(
+                "MailingUserDeactivated email mismatch — Mailing_ID__c %s resolved to %s but payload contained %s; proceeding with soft delete",
+                mailing_id,
+                contact.get("Email"),
+                email,
+            )
+
+        contact = await deactivate_contact_record(
+            sf,
+            contact,
+            log_value=f"Mailing_ID__c {mailing_id}",
+        )
+        await sender.publish_user_deactivated(
+            _build_user_deactivation_data(contact, deactivated_at)
+        )
+        logger.info("Published crm.user.deactivated for Mailing_ID__c %s", mailing_id)
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("MailingUserDeactivated — error processing message: %s", exc)
+        await message.reject(requeue=True)
+
+
 async def handle_facturatie_user_created(
     message: aio_pika.IncomingMessage, sf: "Salesforce"
 ) -> None:
@@ -1019,11 +1120,10 @@ async def _handle_cancellation(
         await message.ack()
         return
 
-    deactivation_data = {
-        "id": contact["CRM_ID__c"],
-        "email": contact["Email"],
-        "deactivatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
+    deactivation_data = _build_user_deactivation_data(
+        contact,
+        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
     await sender.publish_user_deactivated(deactivation_data)
     logger.info("Published crm.user.deactivated for %s", email)
     await message.ack()

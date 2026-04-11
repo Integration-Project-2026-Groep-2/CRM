@@ -634,7 +634,29 @@ async def deactivate_contact(
         logger.warning("Cannot deactivate — Contact not found for email: %s", email)
         return None
 
+    return await deactivate_contact_record(sf, contact, log_value=email)
+
+
+async def deactivate_contact_record(
+    sf: Salesforce, contact: dict[str, Any], *, log_value: str | None = None
+) -> dict[str, Any]:
+    """Soft-delete an already resolved Contact by setting its active flag to False.
+
+    NEVER physically delete a Contact — GDPR requires soft delete only.
+
+    Args:
+        sf: Authenticated Salesforce client.
+        contact: The already resolved Salesforce Contact record.
+        log_value: Optional identifier to include in logs.
+
+    Returns:
+        Updated Contact record as dict.
+
+    Raises:
+        SalesforceError: If update fails.
+    """
     contact_id = contact["Id"]
+    log_target = log_value or contact.get("Email") or contact_id
 
     try:
         active_field = await _resolve_contact_active_field(sf)
@@ -642,7 +664,7 @@ async def deactivate_contact(
         await asyncio.to_thread(
             sf.Contact.update, contact_id, {active_field: False}
         )
-        logger.info("Deactivated Contact %s (email: %s)", contact_id, email)
+        logger.info("Deactivated Contact %s (%s)", contact_id, log_target)
 
         # Re-fetch to get the complete updated record
         updated_record = await asyncio.to_thread(sf.Contact.get, contact_id)
@@ -651,7 +673,7 @@ async def deactivate_contact(
             updated_record["IsActive__c"] = updated_record.get(active_field, False)
         return updated_record
     except SalesforceError as e:
-        logger.error("Failed to deactivate contact %s: %s", email, str(e))
+        logger.error("Failed to deactivate contact %s: %s", log_target, str(e))
         raise
 
 
