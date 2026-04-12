@@ -17,8 +17,7 @@ from src.salesforce_client import (
     backfill_mailing_contact_fields,
     create_contact,
     deactivate_contact,
-
-  ,
+    deactivate_contact_record,
     ensure_contact_identifiers,
     get_contact_by_email,
     get_contact_match_by_email,
