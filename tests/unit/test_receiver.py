@@ -179,6 +179,13 @@ VALID_MAILING_USER_UPDATED_MINIMAL_XML = b"""<?xml version='1.0' encoding='utf-8
     <gdprConsent>true</gdprConsent>
 </MailingUserUpdated>"""
 
+VALID_MAILING_USER_DEACTIVATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<MailingUserDeactivated>
+    <id>323e4567-e89b-42d3-a456-426614174027</id>
+    <email>mia.mail@example.com</email>
+    <deactivatedAt>2026-04-15T16:00:00Z</deactivatedAt>
+</MailingUserDeactivated>"""
+
 MAILING_CONTACT_RETURN = {
     "Id": "003000000000027",
     "CRM_ID__c": "323e4567-e89b-42d3-a456-426614174127",
@@ -1835,6 +1842,245 @@ class TestHandleMailingUserUpdated:
 
 
 # ==========================================================================
+# Contract 29 + 22: mailing.user.deactivated
+# ==========================================================================
+
+
+class TestHandleMailingUserDeactivated:
+    @pytest.fixture
+    def sf_mock(self):
+        return AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_existing_mailing_user_deactivates_contact_and_publishes_user_deactivated(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_DEACTIVATED_XML)
+        existing_contact = {
+            **MAILING_CONTACT_RETURN,
+            "Email": "mia.mail@example.com",
+        }
+        normalized_contact = {
+            **existing_contact,
+        }
+        deactivated_contact = {
+            **normalized_contact,
+            "IsActive__c": False,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+        ):
+            from src.receiver import handle_mailing_user_deactivated
+
+            msg = _make_message(VALID_MAILING_USER_DEACTIVATED_XML)
+            await handle_mailing_user_deactivated(msg, sf_mock)
+
+            mock_ensure.assert_called_once_with(
+                sf_mock,
+                existing_contact,
+                mailing_id="323e4567-e89b-42d3-a456-426614174027",
+            )
+            mock_deactivate.assert_called_once_with(
+                sf_mock,
+                normalized_contact,
+                log_value="Mailing_ID__c 323e4567-e89b-42d3-a456-426614174027",
+            )
+            mock_publish.assert_called_once()
+            payload = mock_publish.call_args.args[0]
+            assert payload["id"] == MAILING_CONTACT_RETURN["CRM_ID__c"]
+            assert payload["email"] == "mia.mail@example.com"
+            assert payload["deactivatedAt"] == "2026-04-15T16:00:00Z"
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_missing_mailing_id_field_rejects_without_requeue(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_DEACTIVATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=False),
+            caplog.at_level(logging.ERROR),
+        ):
+            from src.receiver import handle_mailing_user_deactivated
+
+            msg = _make_message(VALID_MAILING_USER_DEACTIVATED_XML)
+            await handle_mailing_user_deactivated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+            assert "Mailing_ID__c is missing" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_unknown_mailing_id_is_requeued_without_publish(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_DEACTIVATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_mailing_user_deactivated
+
+            msg = _make_message(VALID_MAILING_USER_DEACTIVATED_XML)
+            await handle_mailing_user_deactivated(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            msg.reject.assert_called_once_with(requeue=True)
+            assert "no Contact found for Mailing_ID__c" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_mailing_id_is_acked_without_publish(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_DEACTIVATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("ambiguous", None)),
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_mailing_user_deactivated
+
+            msg = _make_message(VALID_MAILING_USER_DEACTIVATED_XML)
+            await handle_mailing_user_deactivated(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            msg.ack.assert_called_once()
+            assert "ambiguous Mailing_ID__c" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_email_mismatch_logs_warning_but_deactivates(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_DEACTIVATED_XML)
+        existing_contact = {
+            **MAILING_CONTACT_RETURN,
+            "Email": "other@example.com",
+        }
+        normalized_contact = {
+            **existing_contact,
+        }
+        deactivated_contact = {
+            **normalized_contact,
+            "IsActive__c": False,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact),
+            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact),
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_mailing_user_deactivated
+
+            msg = _make_message(VALID_MAILING_USER_DEACTIVATED_XML)
+            await handle_mailing_user_deactivated(msg, sf_mock)
+
+            payload = mock_publish.call_args.args[0]
+            assert payload["email"] == "other@example.com"
+            msg.ack.assert_called_once()
+            assert "email mismatch" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_missing_crm_id_is_backfilled_before_deactivation(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_DEACTIVATED_XML)
+        legacy_contact = {
+            **MAILING_CONTACT_RETURN,
+            "CRM_ID__c": None,
+        }
+        normalized_contact = {
+            **legacy_contact,
+            "CRM_ID__c": "423e4567-e89b-42d3-a456-426614174130",
+        }
+        deactivated_contact = {
+            **normalized_contact,
+            "IsActive__c": False,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", legacy_contact)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+        ):
+            from src.receiver import handle_mailing_user_deactivated
+
+            msg = _make_message(VALID_MAILING_USER_DEACTIVATED_XML)
+            await handle_mailing_user_deactivated(msg, sf_mock)
+
+            mock_ensure.assert_called_once_with(
+                sf_mock,
+                legacy_contact,
+                mailing_id="323e4567-e89b-42d3-a456-426614174027",
+            )
+            mock_deactivate.assert_called_once_with(
+                sf_mock,
+                normalized_contact,
+                log_value="Mailing_ID__c 323e4567-e89b-42d3-a456-426614174027",
+            )
+            payload = mock_publish.call_args.args[0]
+            assert payload["id"] == "423e4567-e89b-42d3-a456-426614174130"
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_invalid_xml_rejected_without_requeue(self, sf_mock):
+        with patch("src.xml_validator.validate", side_effect=ValueError("Bad XML")):
+            from src.receiver import handle_mailing_user_deactivated
+
+            msg = _make_message(INVALID_XML)
+            await handle_mailing_user_deactivated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+
+    @pytest.mark.asyncio
+    async def test_salesforce_failure_requeues(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_DEACTIVATED_XML)
+        existing_contact = {
+            **MAILING_CONTACT_RETURN,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.deactivate_contact_record", side_effect=Exception("SF Down")),
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+        ):
+            from src.receiver import handle_mailing_user_deactivated
+
+            msg = _make_message(VALID_MAILING_USER_DEACTIVATED_XML)
+            await handle_mailing_user_deactivated(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            msg.reject.assert_called_once_with(requeue=True)
+
+    @pytest.mark.asyncio
+    async def test_publish_failure_requeues(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_MAILING_USER_DEACTIVATED_XML)
+        existing_contact = {
+            **MAILING_CONTACT_RETURN,
+        }
+        deactivated_contact = {
+            **existing_contact,
+            "IsActive__c": False,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact),
+            patch("src.sender.publish_user_deactivated", side_effect=Exception("publish failed")),
+        ):
+            from src.receiver import handle_mailing_user_deactivated
+
+            msg = _make_message(VALID_MAILING_USER_DEACTIVATED_XML)
+            await handle_mailing_user_deactivated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=True)
+
+
+# ==========================================================================
 # Contract 2 + 18 + 22: frontend.registration.updated
 # ==========================================================================
 
@@ -2409,6 +2655,7 @@ class TestRunReceiver:
         facturatie_created_queue = AsyncMock()
         mailing_created_queue = AsyncMock()
         mailing_updated_queue = AsyncMock()
+        mailing_deactivated_queue = AsyncMock()
         payment_queue = AsyncMock()
         unpaid_queue = AsyncMock()
         sf_client = MagicMock()
@@ -2427,6 +2674,7 @@ class TestRunReceiver:
                     facturatie_created_queue,
                     mailing_created_queue,
                     mailing_updated_queue,
+                    mailing_deactivated_queue,
                     payment_queue,
                     unpaid_queue,
                 ],
@@ -2456,6 +2704,7 @@ class TestRunReceiver:
         facturatie_created_queue = AsyncMock()
         mailing_created_queue = AsyncMock()
         mailing_updated_queue = AsyncMock()
+        mailing_deactivated_queue = AsyncMock()
         payment_queue = AsyncMock()
         unpaid_queue = AsyncMock()
         sf_client = MagicMock()
@@ -2474,6 +2723,7 @@ class TestRunReceiver:
                     facturatie_created_queue,
                     mailing_created_queue,
                     mailing_updated_queue,
+                    mailing_deactivated_queue,
                     payment_queue,
                     unpaid_queue,
                 ],
@@ -2503,6 +2753,7 @@ class TestRunReceiver:
         facturatie_created_queue = AsyncMock()
         mailing_created_queue = AsyncMock()
         mailing_updated_queue = AsyncMock()
+        mailing_deactivated_queue = AsyncMock()
         payment_queue = AsyncMock()
         unpaid_queue = AsyncMock()
         sf_client = MagicMock()
@@ -2521,6 +2772,7 @@ class TestRunReceiver:
                     facturatie_created_queue,
                     mailing_created_queue,
                     mailing_updated_queue,
+                    mailing_deactivated_queue,
                     payment_queue,
                     unpaid_queue,
                 ],
@@ -2550,6 +2802,7 @@ class TestRunReceiver:
         facturatie_created_queue = AsyncMock()
         mailing_created_queue = AsyncMock()
         mailing_updated_queue = AsyncMock()
+        mailing_deactivated_queue = AsyncMock()
         payment_queue = AsyncMock()
         unpaid_queue = AsyncMock()
         sf_client = MagicMock()
@@ -2568,6 +2821,7 @@ class TestRunReceiver:
                     facturatie_created_queue,
                     mailing_created_queue,
                     mailing_updated_queue,
+                    mailing_deactivated_queue,
                     payment_queue,
                     unpaid_queue,
                 ],
@@ -2597,6 +2851,7 @@ class TestRunReceiver:
         facturatie_created_queue = AsyncMock()
         mailing_created_queue = AsyncMock()
         mailing_updated_queue = AsyncMock()
+        mailing_deactivated_queue = AsyncMock()
         payment_queue = AsyncMock()
         unpaid_queue = AsyncMock()
         sf_client = MagicMock()
@@ -2615,6 +2870,7 @@ class TestRunReceiver:
                     facturatie_created_queue,
                     mailing_created_queue,
                     mailing_updated_queue,
+                    mailing_deactivated_queue,
                     payment_queue,
                     unpaid_queue,
                 ],
@@ -2634,4 +2890,53 @@ class TestRunReceiver:
 
             mailing_callback = mailing_updated_queue.consume.call_args.args[0]
             assert mailing_callback.func is handle_mailing_user_updated
+            assert mailing_callback.keywords["sf"] is sf_client
+
+    @pytest.mark.asyncio
+    async def test_run_receiver_registers_contract_29_queue(self):
+        warning_queue = AsyncMock()
+        registration_queue = AsyncMock()
+        updated_queue = AsyncMock()
+        facturatie_created_queue = AsyncMock()
+        mailing_created_queue = AsyncMock()
+        mailing_updated_queue = AsyncMock()
+        mailing_deactivated_queue = AsyncMock()
+        payment_queue = AsyncMock()
+        unpaid_queue = AsyncMock()
+        sf_client = MagicMock()
+
+        async def _stop_receiver():
+            raise RuntimeError("stop receiver loop")
+
+        with (
+            patch("src.receiver.get_salesforce_client", return_value=sf_client),
+            patch(
+                "src.receiver._declare_and_bind",
+                side_effect=[
+                    warning_queue,
+                    registration_queue,
+                    updated_queue,
+                    facturatie_created_queue,
+                    mailing_created_queue,
+                    mailing_updated_queue,
+                    mailing_deactivated_queue,
+                    payment_queue,
+                    unpaid_queue,
+                ],
+            ) as mock_declare,
+            patch("src.receiver.asyncio.Future", return_value=_stop_receiver()),
+        ):
+            from src.receiver import handle_mailing_user_deactivated, run_receiver
+
+            with pytest.raises(RuntimeError, match="stop receiver loop"):
+                await run_receiver(AsyncMock(), MagicMock())
+
+            queue_call = next(
+                call for call in mock_declare.call_args_list
+                if call.args[1] == "mailing.user.deactivated"
+            )
+            assert queue_call.kwargs["durable"] is True
+
+            mailing_callback = mailing_deactivated_queue.consume.call_args.args[0]
+            assert mailing_callback.func is handle_mailing_user_deactivated
             assert mailing_callback.keywords["sf"] is sf_client
