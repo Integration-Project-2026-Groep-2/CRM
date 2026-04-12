@@ -101,13 +101,13 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     
     # Contract 25 — Facturatie → CRM: user updated
     # Queue: facturatie.user.updated | Exchange: user.topic | durable: true
-    queue_facturatie_user_updated = await _declare_and_bind(channel, "facturatie.user.updated", durable=True)
-    await queue_facturatie_user_updated.consume(partial(handle_facturatie_user_updated, sf=sf_client))
+    #queue_facturatie_user_updated = await _declare_and_bind(channel, "facturatie.user.updated", durable=True)
+    #await queue_facturatie_user_updated.consume(partial(handle_facturatie_user_updated, sf=sf_client))
 
     # Contract 26 — Facturatie → CRM: user deactivated (soft delete only)
     # Queue: facturatie.user.deactivated | Exchange: user.topic | durable: true
-    queue_facturatie_user_deactivated = await _declare_and_bind(channel, "facturatie.user.deactivated", durable=True)
-    await queue_facturatie_user_deactivated.consume(partial(handle_facturatie_user_deactivated, sf=sf_client))
+    #queue_facturatie_user_deactivated = await _declare_and_bind(channel, "facturatie.user.deactivated", durable=True)
+    #await queue_facturatie_user_deactivated.consume(partial(handle_facturatie_user_deactivated, sf=sf_client))
     
     # Contract 27 — Mailing → CRM: new Mailing user sync
     # Queue: mailing.user.created | Exchange: user.topic | durable: true
