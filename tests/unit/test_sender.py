@@ -310,6 +310,11 @@ class TestPublishCompanyDeactivated:
         assert _get_published_xml(setup_sender).tag == "CompanyDeactivated"
 
     @pytest.mark.asyncio
+    async def test_xml_validates_against_xsd(self, setup_sender):
+        await sender.publish_company_deactivated(self.BASE_DATA)
+        assert _get_routing_key(setup_sender) == "crm.company.deactivated"
+
+    @pytest.mark.asyncio
     async def test_required_fields_present(self, setup_sender):
         with patch("src.xml_validator.validate") as v:
             v.side_effect = lambda b: etree.fromstring(b)

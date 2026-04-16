@@ -66,6 +66,7 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 | `frontend.registration.updated` | `user.topic` | Frontend | 2 |
 | `frontend.company.created` | `user.topic` | Frontend | 3 |
 | `facturatie.user.created` | `user.topic` | Facturatie | 24 |
+| `facturatie.company.deactivated` | `company.topic` | Facturatie | 23 |
 | `facturatie.user.updated` | `user.topic` | Facturatie | 25 |
 | `facturatie.user.deactivated` | `user.topic` | Facturatie | 26 |
 | `mailing.user.created` | `user.topic` | Mailing | 27 |
