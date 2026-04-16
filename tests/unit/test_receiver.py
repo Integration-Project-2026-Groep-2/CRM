@@ -2647,296 +2647,143 @@ class TestHandleUnpaidRequested:
 
 
 class TestRunReceiver:
-    @pytest.mark.asyncio
-    async def test_run_receiver_registers_contract_24_queue(self):
-        warning_queue = AsyncMock()
-        registration_queue = AsyncMock()
-        updated_queue = AsyncMock()
-        facturatie_created_queue = AsyncMock()
-        mailing_created_queue = AsyncMock()
-        mailing_updated_queue = AsyncMock()
-        mailing_deactivated_queue = AsyncMock()
-        payment_queue = AsyncMock()
-        unpaid_queue = AsyncMock()
+    async def _run_receiver(self):
+        queues = {}
         sf_client = MagicMock()
 
-        async def _stop_receiver():
-            raise RuntimeError("stop receiver loop")
+        async def _declare_queue(_channel, queue_name, durable):  # noqa: ARG001
+            queue = queues.get(queue_name)
+            if queue is None:
+                queue = AsyncMock(name=f"{queue_name}_queue")
+                queues[queue_name] = queue
+            return queue
+
+        mock_declare = AsyncMock(side_effect=_declare_queue)
 
         with (
             patch("src.receiver.get_salesforce_client", return_value=sf_client),
-            patch(
-                "src.receiver._declare_and_bind",
-                side_effect=[
-                    warning_queue,
-                    registration_queue,
-                    updated_queue,
-                    facturatie_created_queue,
-                    mailing_created_queue,
-                    mailing_updated_queue,
-                    mailing_deactivated_queue,
-                    payment_queue,
-                    unpaid_queue,
-                ],
-            ) as mock_declare,
-            patch("src.receiver.asyncio.Future", return_value=_stop_receiver()),
+            patch("src.receiver._declare_and_bind", mock_declare),
+            patch("src.receiver.asyncio.Future", side_effect=RuntimeError("stop receiver loop")),
         ):
-            from src.receiver import handle_facturatie_user_created, run_receiver
+            from src.receiver import run_receiver
 
             with pytest.raises(RuntimeError, match="stop receiver loop"):
                 await run_receiver(AsyncMock(), MagicMock())
 
-            queue_call = next(
-                call for call in mock_declare.call_args_list
-                if call.args[1] == "facturatie.user.created"
-            )
-            assert queue_call.kwargs["durable"] is True
+        return queues, mock_declare, sf_client
 
-            facturatie_callback = facturatie_created_queue.consume.call_args.args[0]
-            assert facturatie_callback.func is handle_facturatie_user_created
-            assert facturatie_callback.keywords["sf"] is sf_client
+    @staticmethod
+    def _assert_declared_queue(mock_declare, queue_name: str, durable: bool):
+        queue_call = next(
+            call for call in mock_declare.call_args_list
+            if call.args[1] == queue_name
+        )
+        assert queue_call.kwargs["durable"] is durable
+
+    @staticmethod
+    def _assert_direct_callback(queue, handler):
+        callback = queue.consume.call_args.args[0]
+        assert callback is handler
+
+    @staticmethod
+    def _assert_partial_callback(queue, handler, sf_client):
+        callback = queue.consume.call_args.args[0]
+        assert callback.func is handler
+        assert callback.keywords["sf"] is sf_client
+
+    @pytest.mark.asyncio
+    async def test_run_receiver_registers_contract_9_queue(self):
+        from src.receiver import handle_warning
+
+        queues, mock_declare, _sf_client = await self._run_receiver()
+
+        self._assert_declared_queue(mock_declare, "controlroom.warning.issued", durable=False)
+        self._assert_direct_callback(queues["controlroom.warning.issued"], handle_warning)
+
+    @pytest.mark.asyncio
+    async def test_run_receiver_registers_contract_1_queue(self):
+        from src.receiver import handle_registration
+
+        queues, mock_declare, sf_client = await self._run_receiver()
+
+        self._assert_declared_queue(mock_declare, "frontend.registration.created", durable=True)
+        self._assert_partial_callback(
+            queues["frontend.registration.created"], handle_registration, sf_client
+        )
+
+    @pytest.mark.asyncio
+    async def test_run_receiver_registers_contract_2_queue(self):
+        from src.receiver import handle_registration_updated
+
+        queues, mock_declare, sf_client = await self._run_receiver()
+
+        self._assert_declared_queue(mock_declare, "frontend.registration.updated", durable=True)
+        self._assert_partial_callback(
+            queues["frontend.registration.updated"], handle_registration_updated, sf_client
+        )
+
+    @pytest.mark.asyncio
+    async def test_run_receiver_registers_contract_24_queue(self):
+        from src.receiver import handle_facturatie_user_created
+
+        queues, mock_declare, sf_client = await self._run_receiver()
+
+        self._assert_declared_queue(mock_declare, "facturatie.user.created", durable=True)
+        self._assert_partial_callback(
+            queues["facturatie.user.created"], handle_facturatie_user_created, sf_client
+        )
 
     @pytest.mark.asyncio
     async def test_run_receiver_registers_contract_16_queue(self):
-        warning_queue = AsyncMock()
-        registration_queue = AsyncMock()
-        updated_queue = AsyncMock()
-        facturatie_created_queue = AsyncMock()
-        mailing_created_queue = AsyncMock()
-        mailing_updated_queue = AsyncMock()
-        mailing_deactivated_queue = AsyncMock()
-        payment_queue = AsyncMock()
-        unpaid_queue = AsyncMock()
-        sf_client = MagicMock()
+        from src.receiver import handle_payment_confirmed
 
-        async def _stop_receiver():
-            raise RuntimeError("stop receiver loop")
+        queues, mock_declare, sf_client = await self._run_receiver()
 
-        with (
-            patch("src.receiver.get_salesforce_client", return_value=sf_client),
-            patch(
-                "src.receiver._declare_and_bind",
-                side_effect=[
-                    warning_queue,
-                    registration_queue,
-                    updated_queue,
-                    facturatie_created_queue,
-                    mailing_created_queue,
-                    mailing_updated_queue,
-                    mailing_deactivated_queue,
-                    payment_queue,
-                    unpaid_queue,
-                ],
-            ) as mock_declare,
-            patch("src.receiver.asyncio.Future", return_value=_stop_receiver()),
-        ):
-            from src.receiver import handle_payment_confirmed, run_receiver
-
-            with pytest.raises(RuntimeError, match="stop receiver loop"):
-                await run_receiver(AsyncMock(), MagicMock())
-
-            queue_call = next(
-                call for call in mock_declare.call_args_list
-                if call.args[1] == "kassa.payment.confirmed"
-            )
-            assert queue_call.kwargs["durable"] is True
-
-            payment_callback = payment_queue.consume.call_args.args[0]
-            assert payment_callback.func is handle_payment_confirmed
-            assert payment_callback.keywords["sf"] is sf_client
+        self._assert_declared_queue(mock_declare, "kassa.payment.confirmed", durable=True)
+        self._assert_partial_callback(
+            queues["kassa.payment.confirmed"], handle_payment_confirmed, sf_client
+        )
 
     @pytest.mark.asyncio
     async def test_run_receiver_registers_contract_17_queue(self):
-        warning_queue = AsyncMock()
-        registration_queue = AsyncMock()
-        updated_queue = AsyncMock()
-        facturatie_created_queue = AsyncMock()
-        mailing_created_queue = AsyncMock()
-        mailing_updated_queue = AsyncMock()
-        mailing_deactivated_queue = AsyncMock()
-        payment_queue = AsyncMock()
-        unpaid_queue = AsyncMock()
-        sf_client = MagicMock()
+        from src.receiver import handle_unpaid_requested
 
-        async def _stop_receiver():
-            raise RuntimeError("stop receiver loop")
+        queues, mock_declare, sf_client = await self._run_receiver()
 
-        with (
-            patch("src.receiver.get_salesforce_client", return_value=sf_client),
-            patch(
-                "src.receiver._declare_and_bind",
-                side_effect=[
-                    warning_queue,
-                    registration_queue,
-                    updated_queue,
-                    facturatie_created_queue,
-                    mailing_created_queue,
-                    mailing_updated_queue,
-                    mailing_deactivated_queue,
-                    payment_queue,
-                    unpaid_queue,
-                ],
-            ) as mock_declare,
-            patch("src.receiver.asyncio.Future", return_value=_stop_receiver()),
-        ):
-            from src.receiver import handle_unpaid_requested, run_receiver
-
-            with pytest.raises(RuntimeError, match="stop receiver loop"):
-                await run_receiver(AsyncMock(), MagicMock())
-
-            queue_call = next(
-                call for call in mock_declare.call_args_list
-                if call.args[1] == "kassa.unpaid.requested"
-            )
-            assert queue_call.kwargs["durable"] is True
-
-            unpaid_callback = unpaid_queue.consume.call_args.args[0]
-            assert unpaid_callback.func is handle_unpaid_requested
-            assert unpaid_callback.keywords["sf"] is sf_client
+        self._assert_declared_queue(mock_declare, "kassa.unpaid.requested", durable=True)
+        self._assert_partial_callback(
+            queues["kassa.unpaid.requested"], handle_unpaid_requested, sf_client
+        )
 
     @pytest.mark.asyncio
     async def test_run_receiver_registers_contract_27_queue(self):
-        warning_queue = AsyncMock()
-        registration_queue = AsyncMock()
-        updated_queue = AsyncMock()
-        facturatie_created_queue = AsyncMock()
-        mailing_created_queue = AsyncMock()
-        mailing_updated_queue = AsyncMock()
-        mailing_deactivated_queue = AsyncMock()
-        payment_queue = AsyncMock()
-        unpaid_queue = AsyncMock()
-        sf_client = MagicMock()
+        from src.receiver import handle_mailing_user_created
 
-        async def _stop_receiver():
-            raise RuntimeError("stop receiver loop")
+        queues, mock_declare, sf_client = await self._run_receiver()
 
-        with (
-            patch("src.receiver.get_salesforce_client", return_value=sf_client),
-            patch(
-                "src.receiver._declare_and_bind",
-                side_effect=[
-                    warning_queue,
-                    registration_queue,
-                    updated_queue,
-                    facturatie_created_queue,
-                    mailing_created_queue,
-                    mailing_updated_queue,
-                    mailing_deactivated_queue,
-                    payment_queue,
-                    unpaid_queue,
-                ],
-            ) as mock_declare,
-            patch("src.receiver.asyncio.Future", return_value=_stop_receiver()),
-        ):
-            from src.receiver import handle_mailing_user_created, run_receiver
-
-            with pytest.raises(RuntimeError, match="stop receiver loop"):
-                await run_receiver(AsyncMock(), MagicMock())
-
-            queue_call = next(
-                call for call in mock_declare.call_args_list
-                if call.args[1] == "mailing.user.created"
-            )
-            assert queue_call.kwargs["durable"] is True
-
-            mailing_callback = mailing_created_queue.consume.call_args.args[0]
-            assert mailing_callback.func is handle_mailing_user_created
-            assert mailing_callback.keywords["sf"] is sf_client
+        self._assert_declared_queue(mock_declare, "mailing.user.created", durable=True)
+        self._assert_partial_callback(
+            queues["mailing.user.created"], handle_mailing_user_created, sf_client
+        )
 
     @pytest.mark.asyncio
     async def test_run_receiver_registers_contract_28_queue(self):
-        warning_queue = AsyncMock()
-        registration_queue = AsyncMock()
-        updated_queue = AsyncMock()
-        facturatie_created_queue = AsyncMock()
-        mailing_created_queue = AsyncMock()
-        mailing_updated_queue = AsyncMock()
-        mailing_deactivated_queue = AsyncMock()
-        payment_queue = AsyncMock()
-        unpaid_queue = AsyncMock()
-        sf_client = MagicMock()
+        from src.receiver import handle_mailing_user_updated
 
-        async def _stop_receiver():
-            raise RuntimeError("stop receiver loop")
+        queues, mock_declare, sf_client = await self._run_receiver()
 
-        with (
-            patch("src.receiver.get_salesforce_client", return_value=sf_client),
-            patch(
-                "src.receiver._declare_and_bind",
-                side_effect=[
-                    warning_queue,
-                    registration_queue,
-                    updated_queue,
-                    facturatie_created_queue,
-                    mailing_created_queue,
-                    mailing_updated_queue,
-                    mailing_deactivated_queue,
-                    payment_queue,
-                    unpaid_queue,
-                ],
-            ) as mock_declare,
-            patch("src.receiver.asyncio.Future", return_value=_stop_receiver()),
-        ):
-            from src.receiver import handle_mailing_user_updated, run_receiver
-
-            with pytest.raises(RuntimeError, match="stop receiver loop"):
-                await run_receiver(AsyncMock(), MagicMock())
-
-            queue_call = next(
-                call for call in mock_declare.call_args_list
-                if call.args[1] == "mailing.user.updated"
-            )
-            assert queue_call.kwargs["durable"] is True
-
-            mailing_callback = mailing_updated_queue.consume.call_args.args[0]
-            assert mailing_callback.func is handle_mailing_user_updated
-            assert mailing_callback.keywords["sf"] is sf_client
+        self._assert_declared_queue(mock_declare, "mailing.user.updated", durable=True)
+        self._assert_partial_callback(
+            queues["mailing.user.updated"], handle_mailing_user_updated, sf_client
+        )
 
     @pytest.mark.asyncio
     async def test_run_receiver_registers_contract_29_queue(self):
-        warning_queue = AsyncMock()
-        registration_queue = AsyncMock()
-        updated_queue = AsyncMock()
-        facturatie_created_queue = AsyncMock()
-        mailing_created_queue = AsyncMock()
-        mailing_updated_queue = AsyncMock()
-        mailing_deactivated_queue = AsyncMock()
-        payment_queue = AsyncMock()
-        unpaid_queue = AsyncMock()
-        sf_client = MagicMock()
+        from src.receiver import handle_mailing_user_deactivated
 
-        async def _stop_receiver():
-            raise RuntimeError("stop receiver loop")
+        queues, mock_declare, sf_client = await self._run_receiver()
 
-        with (
-            patch("src.receiver.get_salesforce_client", return_value=sf_client),
-            patch(
-                "src.receiver._declare_and_bind",
-                side_effect=[
-                    warning_queue,
-                    registration_queue,
-                    updated_queue,
-                    facturatie_created_queue,
-                    mailing_created_queue,
-                    mailing_updated_queue,
-                    mailing_deactivated_queue,
-                    payment_queue,
-                    unpaid_queue,
-                ],
-            ) as mock_declare,
-            patch("src.receiver.asyncio.Future", return_value=_stop_receiver()),
-        ):
-            from src.receiver import handle_mailing_user_deactivated, run_receiver
-
-            with pytest.raises(RuntimeError, match="stop receiver loop"):
-                await run_receiver(AsyncMock(), MagicMock())
-
-            queue_call = next(
-                call for call in mock_declare.call_args_list
-                if call.args[1] == "mailing.user.deactivated"
-            )
-            assert queue_call.kwargs["durable"] is True
-
-            mailing_callback = mailing_deactivated_queue.consume.call_args.args[0]
-            assert mailing_callback.func is handle_mailing_user_deactivated
-            assert mailing_callback.keywords["sf"] is sf_client
+        self._assert_declared_queue(mock_declare, "mailing.user.deactivated", durable=True)
+        self._assert_partial_callback(
+            queues["mailing.user.deactivated"], handle_mailing_user_deactivated, sf_client
+        )
