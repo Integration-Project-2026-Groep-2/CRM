@@ -15,6 +15,7 @@ from src import sender, xml_validator
 from src.config import Config
 from src.salesforce_client import (
     backfill_mailing_contact_fields,
+    backfill_planning_contact_fields,
     create_contact,
     deactivate_contact,
     deactivate_contact_record,
@@ -22,9 +23,11 @@ from src.salesforce_client import (
     get_contact_by_email,
     get_contact_match_by_email,
     get_contact_match_by_mailing_id,
+    get_contact_match_by_planning_id,
     get_salesforce_client,
     get_unpaid_contacts,
     has_contact_mailing_id_field,
+    has_contact_planning_id_field,
     update_mailing_contact,
     update_payment_status,
     upsert_contact_by_email,
@@ -44,6 +47,7 @@ _INBOUND_EXCHANGE: dict[str, str] = {
     "mailing.user.created": "user.topic",
     "mailing.user.updated": "user.topic",
     "mailing.user.deactivated": "user.topic",
+    "planning.user.created": "user.topic",
     "facturatie.company.requested": "invoice.topic",
     "kassa.person.lookup.requested": "payment.topic",
     "kassa.payment.confirmed": "payment.topic",
@@ -112,6 +116,11 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     # Queue: mailing.user.deactivated | Exchange: user.topic | durable: true
     queue_mailing_user_deactivated = await _declare_and_bind(channel, "mailing.user.deactivated", durable=True)
     await queue_mailing_user_deactivated.consume(partial(handle_mailing_user_deactivated, sf=sf_client))
+
+    # Contract 30 — Planning → CRM: new Planning user sync
+    # Queue: planning.user.created | Exchange: user.topic | durable: true
+    queue_planning_user_created = await _declare_and_bind(channel, "planning.user.created", durable=True)
+    await queue_planning_user_created.consume(partial(handle_planning_user_created, sf=sf_client))
 
     # Contract 3 — Frontend → CRM: create company
     # queue_company = await _declare_and_bind(channel, "frontend.company.created", durable=True)
@@ -438,6 +447,240 @@ def _get_mailing_backfill_kwargs(contact: dict, xml: etree._Element) -> dict[str
     kwargs["role"] = _derive_mailing_user_role(company_id)
     kwargs["gdpr_consent"] = True
     return kwargs
+
+
+def _build_planning_contact_data(xml: etree._Element) -> dict:
+    """Map Contract 30 XML fields to Salesforce Contact fields."""
+    contact_data = {
+        "Planning_ID__c": xml.findtext("id"),
+        "Email": xml.findtext("email"),
+        "FirstName": xml.findtext("firstName"),
+        "LastName": xml.findtext("lastName"),
+        "Role__c": xml.findtext("role"),
+        "GDPR_Consent__c": True,
+    }
+
+    phone_number = _normalize_optional_text(xml.findtext("phoneNumber"))
+    if phone_number is not None:
+        contact_data["Phone"] = phone_number
+
+    return contact_data
+
+
+def _planning_user_has_conflicting_data(contact: dict, xml: etree._Element) -> bool:
+    """Detect conflicting immutable profile data for Planning create-link logic."""
+    if _has_conflicting_optional_value(contact.get("FirstName"), xml.findtext("firstName")):
+        return True
+    if _has_conflicting_optional_value(contact.get("LastName"), xml.findtext("lastName")):
+        return True
+    if _has_conflicting_optional_value(contact.get("Role__c"), xml.findtext("role")):
+        return True
+    return _has_conflicting_optional_value(contact.get("Phone"), xml.findtext("phoneNumber"))
+
+
+def _build_planning_user_conflict_data(email: str, contact: dict, xml: etree._Element) -> dict:
+    """Build a Contract 15 payload from an existing Contact and incoming Planning payload."""
+    return {
+        "email": email,
+        "existingValue": _build_conflict_value(
+            contact.get("FirstName"),
+            contact.get("LastName"),
+            contact.get("Company_ID__c"),
+        ),
+        "incomingValue": _build_conflict_value(
+            xml.findtext("firstName"),
+            xml.findtext("lastName"),
+            xml.findtext("company"),
+        ),
+        "detectedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+async def handle_planning_user_created(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 30 — Planning -> CRM: create or attach a Planning user identity.
+
+    Queue: planning.user.created | durable: true
+
+    Behaviour:
+    - Validate XML against schema.
+    - Reject users without GDPR consent.
+    - Resolve users primarily by Planning_ID__c (stable producer identifier).
+    - Only use email as a secondary bootstrap key for safe first-time linking.
+    - Persist Planning_ID__c on Contact for future idempotent matching.
+    - Publish crm.user.confirmed or crm.user.conflict as needed.
+    - Invalid XML: rejected without requeue.
+    - Ambiguous Contacts: ack without retry.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("PlanningUserCreated — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        email = xml.findtext("email") or ""
+        planning_id = xml.findtext("id") or ""
+        gdpr_text = xml.findtext("gdprConsent")
+        if gdpr_text not in ("true", "1"):
+            logger.warning(
+                "PlanningUserCreated refused — gdprConsent=%s for email %s",
+                gdpr_text,
+                email,
+            )
+            await message.reject(requeue=False)
+            return
+
+        if not await has_contact_planning_id_field(sf):
+            logger.error(
+                "PlanningUserCreated rejected — Salesforce Contact field Planning_ID__c is missing",
+            )
+            await message.reject(requeue=False)
+            return
+
+        planning_match_status, existing_by_planning_id = await get_contact_match_by_planning_id(sf, planning_id)
+        if planning_match_status == "ambiguous":
+            logger.warning(
+                "PlanningUserCreated ignored — ambiguous Planning_ID__c %s in Salesforce",
+                planning_id,
+            )
+            await message.ack()
+            return
+
+        if planning_match_status == "unique":
+            existing_contact = existing_by_planning_id
+
+            existing_email = _normalize_email_for_compare(existing_contact.get("Email"))
+            incoming_email = _normalize_email_for_compare(email)
+            if existing_email is not None and existing_email != incoming_email:
+                logger.warning(
+                    "PlanningUserCreated conflict — Planning ID %s already linked to email %s",
+                    planning_id,
+                    existing_contact.get("Email"),
+                )
+                await sender.publish_user_conflict(
+                    _build_planning_user_conflict_data(email, existing_contact, xml)
+                )
+                await message.ack()
+                return
+
+            if existing_contact.get("GDPR_Consent__c") is False:
+                logger.warning(
+                    "PlanningUserCreated conflict — email %s already has explicit GDPR opt-out",
+                    email,
+                )
+                await sender.publish_user_conflict(
+                    _build_planning_user_conflict_data(email, existing_contact, xml)
+                )
+                await message.ack()
+                return
+
+            if _planning_user_has_conflicting_data(existing_contact, xml):
+                logger.warning(
+                    "PlanningUserCreated conflict — Planning ID %s exists with conflicting profile data",
+                    planning_id,
+                )
+                await sender.publish_user_conflict(
+                    _build_planning_user_conflict_data(email, existing_contact, xml)
+                )
+                await message.ack()
+                return
+
+            contact = await ensure_contact_identifiers(
+                sf,
+                existing_contact,
+                planning_id=planning_id,
+            )
+            contact = await backfill_planning_contact_fields(
+                sf,
+                contact,
+                first_name=xml.findtext("firstName") or "",
+                last_name=xml.findtext("lastName") or "",
+                role=xml.findtext("role") or "VISITOR",
+                phone_number=_normalize_optional_text(xml.findtext("phoneNumber")),
+                gdpr_consent=True,
+            )
+            await sender.publish_user_confirmed(_build_user_data(contact))
+            logger.info("Published crm.user.confirmed for existing Planning user %s", email)
+            await message.ack()
+            return
+
+        # No Planning_ID__c match yet: only a one-time safe bootstrap via unique email.
+        email_match_status, existing_by_email = await get_contact_match_by_email(sf, email)
+        if email_match_status == "ambiguous":
+            logger.warning(
+                "PlanningUserCreated ignored — ambiguous email %s in Salesforce",
+                email,
+            )
+            await message.ack()
+            return
+
+        if email_match_status == "none":
+            contact = await create_contact(sf, _build_planning_contact_data(xml))
+            await sender.publish_user_confirmed(_build_user_data(contact))
+            logger.info("Published crm.user.confirmed for new Planning user %s", email)
+            await message.ack()
+            return
+
+        existing_contact = existing_by_email
+        existing_planning_id = _normalize_optional_text(existing_contact.get("Planning_ID__c"))
+        if existing_planning_id is not None and existing_planning_id != planning_id:
+            logger.warning(
+                "PlanningUserCreated conflict — email %s already linked to Planning ID %s",
+                email,
+                existing_planning_id,
+            )
+            await sender.publish_user_conflict(
+                _build_planning_user_conflict_data(email, existing_contact, xml)
+            )
+            await message.ack()
+            return
+
+        if existing_contact.get("GDPR_Consent__c") is False:
+            logger.warning(
+                "PlanningUserCreated conflict — email %s already has explicit GDPR opt-out",
+                email,
+            )
+            await sender.publish_user_conflict(
+                _build_planning_user_conflict_data(email, existing_contact, xml)
+            )
+            await message.ack()
+            return
+
+        if _planning_user_has_conflicting_data(existing_contact, xml):
+            logger.warning(
+                "PlanningUserCreated conflict — email %s already exists with differing data",
+                email,
+            )
+            await sender.publish_user_conflict(
+                _build_planning_user_conflict_data(email, existing_contact, xml)
+            )
+            await message.ack()
+            return
+
+        contact = await ensure_contact_identifiers(
+            sf,
+            existing_contact,
+            planning_id=planning_id,
+        )
+        contact = await backfill_planning_contact_fields(
+            sf,
+            contact,
+            first_name=xml.findtext("firstName") or "",
+            last_name=xml.findtext("lastName") or "",
+            role=xml.findtext("role") or "VISITOR",
+            phone_number=_normalize_optional_text(xml.findtext("phoneNumber")),
+            gdpr_consent=True,
+        )
+        await sender.publish_user_confirmed(_build_user_data(contact))
+        logger.info("Published crm.user.confirmed for linked Planning user %s", email)
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("PlanningUserCreated — error processing message: %s", exc)
+        await message.reject(requeue=True)
 
 
 async def handle_mailing_user_created(

@@ -5,6 +5,7 @@ CUSTOM FIELDS REFERENCE (must be created in Salesforce Setup):
 - Contact.GDPR_Consent__c (Checkbox) — For Contract 1
 - Contact.Registration_ID__c (Text) — Deduplication key for Contract 1
 - Contact.Mailing_ID__c (Text, Unique) — Native Mailing UUID for Contracts 27-29
+- Contact.Planning_ID__c (Text, Unique) — Native Planning UUID for Contracts 30-32
 - Contact.Role__c (Picklist: VISITOR | COMPANY_CONTACT) — For Contract 1, 13, 18
 - Contact.Paid_At__c (DateTime) — Payment timestamp for Contract 16 / Contract 17
 
@@ -165,6 +166,7 @@ async def upsert_contact_by_email(
 
 _active_field_cache: str | None = None
 _mailing_id_field_supported_cache: bool | None = None
+_planning_id_field_supported_cache: bool | None = None
 
 
 def _normalize_optional_field_value(value: Any) -> str | None:
@@ -231,6 +233,18 @@ async def has_contact_mailing_id_field(sf: Salesforce) -> bool:
     available_fields = {field["name"] for field in describe.get("fields", [])}
     _mailing_id_field_supported_cache = "Mailing_ID__c" in available_fields
     return _mailing_id_field_supported_cache
+
+
+async def has_contact_planning_id_field(sf: Salesforce) -> bool:
+    """Return whether the Salesforce org exposes Contact.Planning_ID__c."""
+    global _planning_id_field_supported_cache  # noqa: PLW0603
+    if _planning_id_field_supported_cache is not None:
+        return _planning_id_field_supported_cache
+
+    describe = await asyncio.to_thread(sf.Contact.describe)
+    available_fields = {field["name"] for field in describe.get("fields", [])}
+    _planning_id_field_supported_cache = "Planning_ID__c" in available_fields
+    return _planning_id_field_supported_cache
 
 
 async def get_contact_by_email(
@@ -350,11 +364,35 @@ async def get_contact_match_by_mailing_id(
         raise
 
 
+async def get_contact_match_by_planning_id(
+    sf: Salesforce, planning_id: str
+) -> tuple[Literal["none", "unique", "ambiguous"], dict[str, Any] | None]:
+    """Classify a Planning native-ID lookup as no match, unique match, or ambiguous match."""
+    try:
+        escaped_planning_id = _escape_soql(planning_id)
+        query = f"SELECT Id FROM Contact WHERE Planning_ID__c = '{escaped_planning_id}'"
+        result = await asyncio.to_thread(sf.query, query)
+
+        if result["totalSize"] == 0:
+            return "none", None
+        if result["totalSize"] > 1:
+            return "ambiguous", None
+
+        contact_id = result["records"][0]["Id"]
+        contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        logger.info("Found unique Contact by Planning_ID__c: %s", planning_id)
+        return "unique", contact_record
+    except SalesforceError as e:
+        logger.error("Failed to get contact match by Planning_ID__c %s: %s", planning_id, str(e))
+        raise
+
+
 async def ensure_contact_identifiers(
     sf: Salesforce,
     contact: dict[str, Any],
     registration_id: str | None = None,
     mailing_id: str | None = None,
+    planning_id: str | None = None,
 ) -> dict[str, Any]:
     """Ensure a Contact has the canonical identifiers needed by CRM contracts.
 
@@ -363,6 +401,8 @@ async def ensure_contact_identifiers(
       registration_id is provided.
     - Only set Mailing_ID__c when it is currently empty and an inbound
       mailing_id is provided.
+        - Only set Planning_ID__c when it is currently empty and an inbound
+            planning_id is provided.
     """
     updates: dict[str, Any] = {}
 
@@ -374,6 +414,9 @@ async def ensure_contact_identifiers(
 
     if mailing_id and not contact.get("Mailing_ID__c"):
         updates["Mailing_ID__c"] = mailing_id
+
+    if planning_id and not contact.get("Planning_ID__c"):
+        updates["Planning_ID__c"] = planning_id
 
     if not updates:
         return contact
@@ -439,6 +482,52 @@ async def backfill_mailing_contact_fields(
     await asyncio.to_thread(sf.Contact.update, contact_id, updates)
     logger.info(
         "Backfilled Mailing Contact %s fields: %s",
+        contact_id,
+        ", ".join(sorted(updates.keys())),
+    )
+    return await asyncio.to_thread(sf.Contact.get, contact_id)
+
+
+async def backfill_planning_contact_fields(
+    sf: Salesforce,
+    contact: dict[str, Any],
+    *,
+    first_name: str,
+    last_name: str,
+    role: str,
+    phone_number: str | None = None,
+    gdpr_consent: bool | None = None,
+) -> dict[str, Any]:
+    """Backfill Planning-owned fields on a compatible existing Contact.
+
+    Contract 30 links by native Planning ID, then enriches a matching Contact
+    without overwriting non-empty CRM values.
+    """
+    updates: dict[str, Any] = {}
+
+    if _normalize_optional_field_value(contact.get("FirstName")) is None:
+        updates["FirstName"] = first_name
+
+    if _normalize_optional_field_value(contact.get("LastName")) is None:
+        updates["LastName"] = last_name
+
+    if _normalize_optional_field_value(contact.get("Role__c")) is None:
+        updates["Role__c"] = role
+
+    normalized_phone = _normalize_optional_field_value(phone_number)
+    if normalized_phone is not None and _normalize_optional_field_value(contact.get("Phone")) is None:
+        updates["Phone"] = normalized_phone
+
+    if gdpr_consent is True and contact.get("GDPR_Consent__c") is None:
+        updates["GDPR_Consent__c"] = True
+
+    if not updates:
+        return contact
+
+    contact_id = contact["Id"]
+    await asyncio.to_thread(sf.Contact.update, contact_id, updates)
+    logger.info(
+        "Backfilled Planning Contact %s fields: %s",
         contact_id,
         ", ".join(sorted(updates.keys())),
     )

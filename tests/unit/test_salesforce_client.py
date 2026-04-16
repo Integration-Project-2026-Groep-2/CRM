@@ -6,6 +6,7 @@ from simple_salesforce import SalesforceError
 import src.salesforce_client as salesforce_client_module
 from src.salesforce_client import (
     backfill_mailing_contact_fields,
+    backfill_planning_contact_fields,
     create_account,
     create_contact,
     deactivate_contact,
@@ -15,8 +16,10 @@ from src.salesforce_client import (
     get_contact_by_crm_id,
     get_contact_by_email,
     get_contact_match_by_email,
+    get_contact_match_by_planning_id,
     get_unpaid_contacts,
     has_contact_mailing_id_field,
+    has_contact_planning_id_field,
     update_mailing_contact,
     update_payment_status,
     upsert_account_by_vat,
@@ -28,6 +31,7 @@ from src.salesforce_client import (
 def sf(monkeypatch):
     salesforce_client_module._active_field_cache = None
     salesforce_client_module._mailing_id_field_supported_cache = None
+    salesforce_client_module._planning_id_field_supported_cache = None
 
     async def immediate_to_thread(func, /, *args, **kwargs):
         return func(*args, **kwargs)
@@ -284,6 +288,51 @@ async def test_has_contact_mailing_id_field_returns_false_when_absent(sf):
 
 
 @pytest.mark.asyncio
+async def test_has_contact_planning_id_field_returns_true_when_present(sf):
+    sf.Contact.describe.return_value = {
+        "fields": [{"name": "IsActive__c"}, {"name": "Planning_ID__c"}]
+    }
+
+    result = await has_contact_planning_id_field(sf)
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_has_contact_planning_id_field_returns_false_when_absent(sf):
+    sf.Contact.describe.return_value = {
+        "fields": [{"name": "IsActive__c"}]
+    }
+
+    result = await has_contact_planning_id_field(sf)
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_get_contact_match_by_planning_id_returns_unique_contact(sf):
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000021"}]}
+    sf.Contact.get.return_value = {"Id": "003000000000021", "Planning_ID__c": "planning-id-1"}
+
+    match_status, contact = await get_contact_match_by_planning_id(sf, "planning-id-1")
+
+    assert match_status == "unique"
+    assert contact == {"Id": "003000000000021", "Planning_ID__c": "planning-id-1"}
+    sf.Contact.get.assert_called_once_with("003000000000021")
+
+
+@pytest.mark.asyncio
+async def test_get_contact_match_by_planning_id_returns_none_for_no_match(sf):
+    sf.query.return_value = {"totalSize": 0, "records": []}
+
+    match_status, contact = await get_contact_match_by_planning_id(sf, "missing-planning-id")
+
+    assert match_status == "none"
+    assert contact is None
+    sf.Contact.get.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_ensure_contact_identifiers_adds_missing_crm_id_and_registration_id(sf, monkeypatch):
     monkeypatch.setattr(salesforce_client_module.uuid, "uuid4", lambda: "generated-crm-id")
     sf.Contact.get.return_value = {
@@ -324,6 +373,75 @@ async def test_ensure_contact_identifiers_preserves_existing_registration_id(sf)
 
     sf.Contact.update.assert_not_called()
     assert result == existing_contact
+
+
+@pytest.mark.asyncio
+async def test_ensure_contact_identifiers_adds_missing_planning_id(sf):
+    sf.Contact.get.return_value = {
+        "Id": "003000000000022",
+        "Email": "planning@example.com",
+        "CRM_ID__c": "existing-crm-id",
+        "Planning_ID__c": "planning-id-30",
+    }
+
+    result = await ensure_contact_identifiers(
+        sf,
+        {
+            "Id": "003000000000022",
+            "Email": "planning@example.com",
+            "CRM_ID__c": "existing-crm-id",
+            "Planning_ID__c": None,
+        },
+        planning_id="planning-id-30",
+    )
+
+    sf.Contact.update.assert_called_once_with(
+        "003000000000022",
+        {"Planning_ID__c": "planning-id-30"},
+    )
+    assert result["Planning_ID__c"] == "planning-id-30"
+
+
+@pytest.mark.asyncio
+async def test_backfill_planning_contact_fields_updates_only_missing_fields(sf):
+    existing_contact = {
+        "Id": "003000000000023",
+        "Email": "planning@example.com",
+        "FirstName": None,
+        "LastName": None,
+        "Role__c": None,
+        "Phone": None,
+    }
+    sf.Contact.get.return_value = {
+        "Id": "003000000000023",
+        "Email": "planning@example.com",
+        "FirstName": "Sofie",
+        "LastName": "Declercq",
+        "Role__c": "SPEAKER",
+        "Phone": "+32470123456",
+    }
+
+    result = await backfill_planning_contact_fields(
+        sf,
+        existing_contact,
+        first_name="Sofie",
+        last_name="Declercq",
+        role="SPEAKER",
+        phone_number="+32470123456",
+        gdpr_consent=True,
+    )
+
+    sf.Contact.update.assert_called_once_with(
+        "003000000000023",
+        {
+            "FirstName": "Sofie",
+            "LastName": "Declercq",
+            "Role__c": "SPEAKER",
+            "Phone": "+32470123456",
+            "GDPR_Consent__c": True,
+        },
+    )
+    assert result["Role__c"] == "SPEAKER"
 
 
 @pytest.mark.asyncio
