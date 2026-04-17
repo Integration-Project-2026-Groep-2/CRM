@@ -21,8 +21,8 @@ from src.salesforce_client import (
     has_contact_mailing_id_field,
     has_contact_planning_id_field,
     update_mailing_contact,
-    update_planning_contact,
     update_payment_status,
+    update_planning_contact,
     upsert_account_by_vat,
     upsert_contact_by_email,
 )
