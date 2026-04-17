@@ -29,6 +29,7 @@ from src.salesforce_client import (
     has_contact_mailing_id_field,
     has_contact_planning_id_field,
     update_mailing_contact,
+    update_planning_contact,
     update_payment_status,
     upsert_contact_by_email,
 )
@@ -48,6 +49,7 @@ _INBOUND_EXCHANGE: dict[str, str] = {
     "mailing.user.updated": "user.topic",
     "mailing.user.deactivated": "user.topic",
     "planning.user.created": "user.topic",
+    "planning.user.updated": "user.topic",
     "facturatie.company.requested": "invoice.topic",
     "kassa.person.lookup.requested": "payment.topic",
     "kassa.payment.confirmed": "payment.topic",
@@ -121,6 +123,11 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     # Queue: planning.user.created | Exchange: user.topic | durable: true
     queue_planning_user_created = await _declare_and_bind(channel, "planning.user.created", durable=True)
     await queue_planning_user_created.consume(partial(handle_planning_user_created, sf=sf_client))
+
+    # Contract 31 — Planning → CRM: update existing Planning user sync
+    # Queue: planning.user.updated | Exchange: user.topic | durable: true
+    queue_planning_user_updated = await _declare_and_bind(channel, "planning.user.updated", durable=True)
+    await queue_planning_user_updated.consume(partial(handle_planning_user_updated, sf=sf_client))
 
     # Contract 3 — Frontend → CRM: create company
     # queue_company = await _declare_and_bind(channel, "frontend.company.created", durable=True)
@@ -680,6 +687,114 @@ async def handle_planning_user_created(
         await message.ack()
     except Exception as exc:  # noqa: BLE001
         logger.error("PlanningUserCreated — error processing message: %s", exc)
+        await message.reject(requeue=True)
+
+
+async def handle_planning_user_updated(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 31 — Planning -> CRM: update an existing Planning-linked user.
+
+    Queue: planning.user.updated | durable: true
+
+    Behaviour:
+    - Validate XML against schema.
+    - Reject users without GDPR consent.
+    - Resolve the Contact strictly by Planning_ID__c.
+    - Requeue unknown Planning identities so out-of-order create/update can recover.
+    - Ack ambiguous Planning identities without retry.
+    - Publish crm.user.conflict on email collisions.
+    - Update Planning-owned fields authoritatively in Salesforce.
+    - Publish crm.user.updated after a successful update.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("PlanningUserUpdated — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        email = xml.findtext("email") or ""
+        planning_id = xml.findtext("id") or ""
+        gdpr_text = xml.findtext("gdprConsent")
+        if gdpr_text not in ("true", "1"):
+            logger.warning(
+                "PlanningUserUpdated refused — gdprConsent=%s for email %s",
+                gdpr_text,
+                email,
+            )
+            await message.reject(requeue=False)
+            return
+
+        if not await has_contact_planning_id_field(sf):
+            logger.error(
+                "PlanningUserUpdated rejected — Salesforce Contact field Planning_ID__c is missing",
+            )
+            await message.reject(requeue=False)
+            return
+
+        planning_match_status, existing_contact = await get_contact_match_by_planning_id(sf, planning_id)
+        if planning_match_status == "none":
+            logger.warning(
+                "PlanningUserUpdated deferred — no Contact found for Planning_ID__c %s; retrying for possible out-of-order create/update",
+                planning_id,
+            )
+            await message.reject(requeue=True)
+            return
+
+        if planning_match_status == "ambiguous":
+            logger.warning(
+                "PlanningUserUpdated ignored — ambiguous Planning_ID__c %s in Salesforce",
+                planning_id,
+            )
+            await message.ack()
+            return
+
+        email_match_status, existing_by_email = await get_contact_match_by_email(sf, email)
+        if email_match_status == "ambiguous":
+            logger.warning(
+                "PlanningUserUpdated conflict — email %s is ambiguous in Salesforce",
+                email,
+            )
+            await sender.publish_user_conflict(
+                _build_planning_user_conflict_data(email, existing_contact, xml)
+            )
+            await message.ack()
+            return
+
+        if email_match_status == "unique" and existing_by_email["Id"] != existing_contact["Id"]:
+            logger.warning(
+                "PlanningUserUpdated conflict — email %s already linked to another Contact",
+                email,
+            )
+            await sender.publish_user_conflict(
+                _build_planning_user_conflict_data(email, existing_by_email, xml)
+            )
+            await message.ack()
+            return
+
+        contact = await ensure_contact_identifiers(
+            sf,
+            existing_contact,
+            planning_id=planning_id,
+        )
+        contact = await update_planning_contact(
+            sf,
+            contact,
+            email=email,
+            first_name=xml.findtext("firstName") or "",
+            last_name=xml.findtext("lastName") or "",
+            role=xml.findtext("role") or "VISITOR",
+            phone_number=_normalize_optional_text(xml.findtext("phoneNumber")),
+        )
+        await sender.publish_user_updated(_build_updated_user_data(contact))
+        logger.info("Published crm.user.updated for Planning user %s", email)
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("PlanningUserUpdated — error processing message: %s", exc)
         await message.reject(requeue=True)
 
 

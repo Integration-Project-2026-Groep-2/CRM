@@ -591,6 +591,55 @@ async def update_mailing_contact(
     return await asyncio.to_thread(sf.Contact.get, contact_id)
 
 
+async def update_planning_contact(
+    sf: Salesforce,
+    contact: dict[str, Any],
+    *,
+    email: str,
+    first_name: str,
+    last_name: str,
+    role: str,
+    phone_number: str | None,
+) -> dict[str, Any]:
+    """Authoritatively update Planning-owned fields on an existing Contact.
+
+    Contract 31 sends the full Planning-side user object. CRM therefore
+    overwrites Planning-owned fields to match the payload while preserving
+    unrelated CRM-owned fields.
+    """
+    updates: dict[str, Any] = {}
+
+    if contact.get("Email") != email:
+        updates["Email"] = email
+
+    if _normalize_optional_field_value(contact.get("FirstName")) != _normalize_optional_field_value(first_name):
+        updates["FirstName"] = first_name
+
+    if _normalize_optional_field_value(contact.get("LastName")) != _normalize_optional_field_value(last_name):
+        updates["LastName"] = last_name
+
+    if _normalize_optional_field_value(contact.get("Role__c")) != _normalize_optional_field_value(role):
+        updates["Role__c"] = role
+
+    if _normalize_optional_field_value(contact.get("Phone")) != _normalize_optional_field_value(phone_number):
+        updates["Phone"] = phone_number
+
+    if contact.get("GDPR_Consent__c") is not True:
+        updates["GDPR_Consent__c"] = True
+
+    if not updates:
+        return contact
+
+    contact_id = contact["Id"]
+    await asyncio.to_thread(sf.Contact.update, contact_id, updates)
+    logger.info(
+        "Updated Planning Contact %s fields: %s",
+        contact_id,
+        ", ".join(sorted(updates.keys())),
+    )
+    return await asyncio.to_thread(sf.Contact.get, contact_id)
+
+
 async def get_unpaid_contacts(sf: Salesforce) -> list[dict[str, Any]]:
     """Return active Contacts without a payment timestamp for Contract 17.
 

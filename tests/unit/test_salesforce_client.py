@@ -21,6 +21,7 @@ from src.salesforce_client import (
     has_contact_mailing_id_field,
     has_contact_planning_id_field,
     update_mailing_contact,
+    update_planning_contact,
     update_payment_status,
     upsert_account_by_vat,
     upsert_contact_by_email,
@@ -784,6 +785,116 @@ async def test_update_mailing_contact_does_not_clear_company_link_for_specialize
     )
     assert result["Role__c"] == "SPEAKER"
     assert result["Company_ID__c"] == "old-company-id"
+
+
+@pytest.mark.asyncio
+async def test_update_planning_contact_authoritatively_overwrites_owned_fields(sf):
+    existing_contact = {
+        "Id": "003000000000051",
+        "Email": "old@example.com",
+        "FirstName": "Old",
+        "LastName": "Name",
+        "Role__c": "VISITOR",
+        "Phone": "+32000000000",
+        "GDPR_Consent__c": False,
+    }
+    sf.Contact.get.return_value = {
+        "Id": "003000000000051",
+        "Email": "new@example.com",
+        "FirstName": "Sofie",
+        "LastName": "Updated",
+        "Role__c": "SPEAKER",
+        "Phone": "+32470999999",
+        "GDPR_Consent__c": True,
+    }
+
+    result = await update_planning_contact(
+        sf,
+        existing_contact,
+        email="new@example.com",
+        first_name="Sofie",
+        last_name="Updated",
+        role="SPEAKER",
+        phone_number="+32470999999",
+    )
+
+    sf.Contact.update.assert_called_once_with(
+        "003000000000051",
+        {
+            "Email": "new@example.com",
+            "FirstName": "Sofie",
+            "LastName": "Updated",
+            "Role__c": "SPEAKER",
+            "Phone": "+32470999999",
+            "GDPR_Consent__c": True,
+        },
+    )
+    assert result["Email"] == "new@example.com"
+    assert result["Role__c"] == "SPEAKER"
+
+
+@pytest.mark.asyncio
+async def test_update_planning_contact_clears_phone_when_payload_omits_it(sf):
+    existing_contact = {
+        "Id": "003000000000052",
+        "Email": "sofie@example.com",
+        "FirstName": "Sofie",
+        "LastName": "Declercq",
+        "Role__c": "SPEAKER",
+        "Phone": "+32470123456",
+        "GDPR_Consent__c": True,
+    }
+    sf.Contact.get.return_value = {
+        "Id": "003000000000052",
+        "Email": "sofie@example.com",
+        "FirstName": "Sofie",
+        "LastName": "Declercq",
+        "Role__c": "SPEAKER",
+        "Phone": None,
+        "GDPR_Consent__c": True,
+    }
+
+    result = await update_planning_contact(
+        sf,
+        existing_contact,
+        email="sofie@example.com",
+        first_name="Sofie",
+        last_name="Declercq",
+        role="SPEAKER",
+        phone_number=None,
+    )
+
+    sf.Contact.update.assert_called_once_with(
+        "003000000000052",
+        {"Phone": None},
+    )
+    assert result["Phone"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_planning_contact_skips_update_when_no_changes(sf):
+    existing_contact = {
+        "Id": "003000000000053",
+        "Email": "sofie@example.com",
+        "FirstName": "Sofie",
+        "LastName": "Declercq",
+        "Role__c": "SPEAKER",
+        "Phone": "+32470123456",
+        "GDPR_Consent__c": True,
+    }
+
+    result = await update_planning_contact(
+        sf,
+        existing_contact,
+        email="sofie@example.com",
+        first_name="Sofie",
+        last_name="Declercq",
+        role="SPEAKER",
+        phone_number="+32470123456",
+    )
+
+    sf.Contact.update.assert_not_called()
+    assert result == existing_contact
 
 
 @pytest.mark.asyncio
