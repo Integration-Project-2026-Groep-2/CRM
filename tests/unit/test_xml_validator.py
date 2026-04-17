@@ -24,8 +24,6 @@ class TestLoadSchema:
     )
     def test_loads_valid_schema(self, schema_path: Path) -> None:
         """load_schema returns an XMLSchema instance for a valid .xsd file."""
-        from lxml import etree
-
         schema = load_schema(schema_path)
 
         assert isinstance(schema, etree.XMLSchema)
