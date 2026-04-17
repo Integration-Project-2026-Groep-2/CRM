@@ -7,6 +7,7 @@ Contract 27 + 15: mailing.user.created → crm.user.confirmed / crm.user.conflic
 Contract 28: mailing.user.updated → crm.user.updated / crm.user.conflict
 Contract 30 + 13 + 15: planning.user.created → crm.user.confirmed / crm.user.conflict
 Contract 31 + 18 + 15: planning.user.updated → crm.user.updated / crm.user.conflict
+Contract 32 + 22: planning.user.deactivated → crm.user.deactivated
 """
 
 import logging
@@ -211,6 +212,13 @@ VALID_PLANNING_USER_UPDATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <phoneNumber>+32470999999</phoneNumber>
     <company>Desideriushogeschool</company>
 </PlanningUserUpdated>"""
+
+VALID_PLANNING_USER_DEACTIVATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<PlanningUserDeactivated>
+    <id>423e4567-e89b-42d3-a456-426614174030</id>
+    <email>sofie.declercq@example.com</email>
+    <deactivatedAt>2026-04-15T16:00:00Z</deactivatedAt>
+</PlanningUserDeactivated>"""
 
 MAILING_CONTACT_RETURN = {
     "Id": "003000000000027",
@@ -2347,6 +2355,244 @@ class TestHandlePlanningUserUpdated:
 
 
 # ==========================================================================
+# Contract 32 + 22: planning.user.deactivated
+# ==========================================================================
+
+
+class TestHandlePlanningUserDeactivated:
+    @pytest.fixture
+    def sf_mock(self):
+        return AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_existing_planning_user_deactivates_contact_and_publishes_user_deactivated(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
+        existing_contact = {
+            **PLANNING_CONTACT_RETURN,
+        }
+        normalized_contact = {
+            **existing_contact,
+        }
+        deactivated_contact = {
+            **normalized_contact,
+            "IsActive__c": False,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+        ):
+            from src.receiver import handle_planning_user_deactivated
+
+            msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
+            await handle_planning_user_deactivated(msg, sf_mock)
+
+            mock_ensure.assert_called_once_with(
+                sf_mock,
+                existing_contact,
+                planning_id="423e4567-e89b-42d3-a456-426614174030",
+            )
+            mock_deactivate.assert_called_once_with(
+                sf_mock,
+                normalized_contact,
+                log_value="Planning_ID__c 423e4567-e89b-42d3-a456-426614174030",
+            )
+            mock_publish.assert_called_once()
+            payload = mock_publish.call_args.args[0]
+            assert payload["id"] == PLANNING_CONTACT_RETURN["CRM_ID__c"]
+            assert payload["email"] == "sofie.declercq@example.com"
+            assert payload["deactivatedAt"] == "2026-04-15T16:00:00Z"
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_missing_planning_id_field_rejects_without_requeue(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=False),
+            caplog.at_level(logging.ERROR),
+        ):
+            from src.receiver import handle_planning_user_deactivated
+
+            msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
+            await handle_planning_user_deactivated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+            assert "Planning_ID__c is missing" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_unknown_planning_id_is_requeued_without_publish(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("none", None)),
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_planning_user_deactivated
+
+            msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
+            await handle_planning_user_deactivated(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            msg.reject.assert_called_once_with(requeue=True)
+            assert "no Contact found for Planning_ID__c" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_planning_id_is_acked_without_publish(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("ambiguous", None)),
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_planning_user_deactivated
+
+            msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
+            await handle_planning_user_deactivated(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            msg.ack.assert_called_once()
+            assert "ambiguous Planning_ID__c" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_email_mismatch_logs_warning_but_deactivates(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
+        existing_contact = {
+            **PLANNING_CONTACT_RETURN,
+            "Email": "other@example.com",
+        }
+        normalized_contact = {
+            **existing_contact,
+        }
+        deactivated_contact = {
+            **normalized_contact,
+            "IsActive__c": False,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact),
+            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact),
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_planning_user_deactivated
+
+            msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
+            await handle_planning_user_deactivated(msg, sf_mock)
+
+            payload = mock_publish.call_args.args[0]
+            assert payload["email"] == "other@example.com"
+            msg.ack.assert_called_once()
+            assert "email mismatch" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_missing_crm_id_is_backfilled_before_deactivation(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
+        legacy_contact = {
+            **PLANNING_CONTACT_RETURN,
+            "CRM_ID__c": None,
+        }
+        normalized_contact = {
+            **legacy_contact,
+            "CRM_ID__c": "523e4567-e89b-42d3-a456-426614174132",
+        }
+        deactivated_contact = {
+            **normalized_contact,
+            "IsActive__c": False,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", legacy_contact)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+        ):
+            from src.receiver import handle_planning_user_deactivated
+
+            msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
+            await handle_planning_user_deactivated(msg, sf_mock)
+
+            mock_ensure.assert_called_once_with(
+                sf_mock,
+                legacy_contact,
+                planning_id="423e4567-e89b-42d3-a456-426614174030",
+            )
+            mock_deactivate.assert_called_once_with(
+                sf_mock,
+                normalized_contact,
+                log_value="Planning_ID__c 423e4567-e89b-42d3-a456-426614174030",
+            )
+            payload = mock_publish.call_args.args[0]
+            assert payload["id"] == "523e4567-e89b-42d3-a456-426614174132"
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_invalid_xml_rejected_without_requeue(self, sf_mock):
+        with patch("src.xml_validator.validate", side_effect=ValueError("Bad XML")):
+            from src.receiver import handle_planning_user_deactivated
+
+            msg = _make_message(INVALID_XML)
+            await handle_planning_user_deactivated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+
+    @pytest.mark.asyncio
+    async def test_salesforce_failure_requeues(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
+        existing_contact = {
+            **PLANNING_CONTACT_RETURN,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.deactivate_contact_record", side_effect=Exception("SF Down")),
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+        ):
+            from src.receiver import handle_planning_user_deactivated
+
+            msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
+            await handle_planning_user_deactivated(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            msg.reject.assert_called_once_with(requeue=True)
+
+    @pytest.mark.asyncio
+    async def test_publish_failure_requeues(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
+        existing_contact = {
+            **PLANNING_CONTACT_RETURN,
+        }
+        deactivated_contact = {
+            **existing_contact,
+            "IsActive__c": False,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact),
+            patch("src.sender.publish_user_deactivated", side_effect=Exception("publish failed")),
+        ):
+            from src.receiver import handle_planning_user_deactivated
+
+            msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
+            await handle_planning_user_deactivated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=True)
+
+
+# ==========================================================================
 # Contract 29 + 22: mailing.user.deactivated
 # ==========================================================================
 
@@ -3302,4 +3548,15 @@ class TestRunReceiver:
         self._assert_declared_queue(mock_declare, "planning.user.created", durable=True)
         self._assert_partial_callback(
             queues["planning.user.created"], handle_planning_user_created, sf_client
+        )
+
+    @pytest.mark.asyncio
+    async def test_run_receiver_registers_contract_32_queue(self):
+        from src.receiver import handle_planning_user_deactivated
+
+        queues, mock_declare, sf_client = await self._run_receiver()
+
+        self._assert_declared_queue(mock_declare, "planning.user.deactivated", durable=True)
+        self._assert_partial_callback(
+            queues["planning.user.deactivated"], handle_planning_user_deactivated, sf_client
         )
