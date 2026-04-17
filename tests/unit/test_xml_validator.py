@@ -3,8 +3,9 @@
 from pathlib import Path
 
 import pytest
+from lxml import etree
 
-from src.xml_validator import load_schema
+from src.xml_validator import load_schema, validate
 
 
 class TestLoadSchema:
@@ -23,8 +24,30 @@ class TestLoadSchema:
     )
     def test_loads_valid_schema(self, schema_path: Path) -> None:
         """load_schema returns an XMLSchema instance for a valid .xsd file."""
-        from lxml import etree
-
         schema = load_schema(schema_path)
 
         assert isinstance(schema, etree.XMLSchema)
+
+
+class TestValidate:
+    def test_accepts_valid_planning_user_deactivated_payload(self) -> None:
+        xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<PlanningUserDeactivated>
+    <id>423e4567-e89b-42d3-a456-426614174030</id>
+    <email>sofie.declercq@example.com</email>
+    <deactivatedAt>2026-04-15T16:00:00Z</deactivatedAt>
+</PlanningUserDeactivated>"""
+
+        doc = validate(xml)
+
+        assert doc.tag == "PlanningUserDeactivated"
+
+    def test_rejects_planning_user_deactivated_without_deactivated_at(self) -> None:
+        invalid_xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<PlanningUserDeactivated>
+    <id>423e4567-e89b-42d3-a456-426614174030</id>
+    <email>sofie.declercq@example.com</email>
+</PlanningUserDeactivated>"""
+
+        with pytest.raises(ValueError, match="XML validation failed"):
+            validate(invalid_xml)
