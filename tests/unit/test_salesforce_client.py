@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -7,24 +8,32 @@ import src.salesforce_client as salesforce_client_module
 from src.salesforce_client import (
     backfill_mailing_contact_fields,
     backfill_planning_contact_fields,
+    count_active_session_registrations,
     create_account,
     create_contact,
     deactivate_contact,
+    deactivate_session_registration,
     ensure_contact_identifiers,
+    ensure_session_registration_active,
     find_unique_contact_by_email,
     get_account_by_vat,
+    get_active_session_participants,
     get_contact_by_crm_id,
     get_contact_by_email,
     get_contact_match_by_email,
     get_contact_match_by_planning_id,
+    get_session_registration_by_registration_id,
+    get_unique_active_session_registration_for_contact,
     get_unpaid_contacts,
     has_contact_mailing_id_field,
     has_contact_planning_id_field,
+    has_session_registration_object,
     update_mailing_contact,
     update_payment_status,
     update_planning_contact,
     upsert_account_by_vat,
     upsert_contact_by_email,
+    upsert_session_registration,
 )
 
 
@@ -33,6 +42,7 @@ def sf(monkeypatch):
     salesforce_client_module._active_field_cache = None
     salesforce_client_module._mailing_id_field_supported_cache = None
     salesforce_client_module._planning_id_field_supported_cache = None
+    salesforce_client_module._session_registration_object_supported_cache = None
 
     async def immediate_to_thread(func, /, *args, **kwargs):
         return func(*args, **kwargs)
@@ -46,8 +56,10 @@ def sf(monkeypatch):
     sf = MagicMock()
     sf.Contact = MagicMock()
     sf.Account = MagicMock()
+    sf.Session_Registration__c = MagicMock()
     sf.query = MagicMock()
     sf.query_all = MagicMock()
+    sf.describe = MagicMock(return_value={"sobjects": [{"name": "Session_Registration__c"}]})
     sf.Contact.describe.return_value = {
         "fields": [{"name": "IsActive__c"}]
     }
@@ -308,6 +320,221 @@ async def test_has_contact_planning_id_field_returns_false_when_absent(sf):
     result = await has_contact_planning_id_field(sf)
 
     assert result is False
+
+
+@pytest.mark.asyncio
+async def test_has_session_registration_object_returns_true_when_present(sf):
+    sf.describe.return_value = {
+        "sobjects": [{"name": "Session_Registration__c"}]
+    }
+
+    result = await has_session_registration_object(sf)
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_has_session_registration_object_returns_false_when_absent(sf):
+    sf.describe.return_value = {
+        "sobjects": [{"name": "Contact"}]
+    }
+
+    result = await has_session_registration_object(sf)
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_get_session_registration_by_registration_id_returns_registration(sf):
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "a01000000000001"}]}
+    sf.Session_Registration__c.get.return_value = {
+        "Id": "a01000000000001",
+        "Registration_ID__c": "REG-12345",
+        "Session_ID__c": "SESS-001",
+        "Contact__c": "003000000000001",
+        "Is_Active__c": True,
+    }
+
+    result = await get_session_registration_by_registration_id(sf, "REG-12345")
+
+    assert result["Registration_ID__c"] == "REG-12345"
+    sf.Session_Registration__c.get.assert_called_once_with("a01000000000001")
+
+
+@pytest.mark.asyncio
+async def test_upsert_session_registration_retrieves_row_after_upsert(sf):
+    sf.Session_Registration__c.upsert.return_value = {"id": "a01000000000001"}
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "a01000000000001"}]}
+    sf.Session_Registration__c.get.return_value = {
+        "Id": "a01000000000001",
+        "Registration_ID__c": "REG-12345",
+        "Session_ID__c": "SESS-001",
+        "Contact__c": "003000000000001",
+        "Is_Active__c": True,
+    }
+
+    result = await upsert_session_registration(
+        sf,
+        registration_id="REG-12345",
+        session_id="SESS-001",
+        contact_id="003000000000001",
+    )
+
+    sf.Session_Registration__c.upsert.assert_called_once_with(
+        "Registration_ID__c/REG-12345",
+        {
+            "Registration_ID__c": "REG-12345",
+            "Session_ID__c": "SESS-001",
+            "Contact__c": "003000000000001",
+            "Is_Active__c": True,
+        },
+    )
+    assert result["Session_ID__c"] == "SESS-001"
+
+
+@pytest.mark.asyncio
+async def test_ensure_session_registration_active_reactivates_contact_session_match(sf):
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "a01000000000002"}]}
+    sf.Session_Registration__c.get.side_effect = [
+        {
+            "Id": "a01000000000002",
+            "Session_ID__c": "SESS-001",
+            "Contact__c": "003000000000001",
+            "Is_Active__c": False,
+        },
+        {
+            "Id": "a01000000000002",
+            "Session_ID__c": "SESS-001",
+            "Contact__c": "003000000000001",
+            "Is_Active__c": True,
+        },
+    ]
+
+    result = await ensure_session_registration_active(
+        sf,
+        contact_id="003000000000001",
+        session_id="SESS-001",
+        registration_id=None,
+    )
+
+    sf.Session_Registration__c.update.assert_called_once_with(
+        "a01000000000002",
+        {"Is_Active__c": True},
+    )
+    assert result["Is_Active__c"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_active_session_participants_returns_sorted_contacts(sf):
+    sf.query_all.return_value = {
+        "records": [
+            {
+                "Id": "a01-2",
+                "Contact__c": "003000000000002",
+                "Contact__r": {
+                    "Id": "003000000000002",
+                    "Email": "bert@example.com",
+                    "FirstName": "Bert",
+                    "LastName": "Beta",
+                    "IsActive__c": True,
+                },
+            },
+            {
+                "Id": "a01-1",
+                "Contact__c": "003000000000001",
+                "Contact__r": {
+                    "Id": "003000000000001",
+                    "Email": "anna@example.com",
+                    "FirstName": "Anna",
+                    "LastName": "Alpha",
+                    "IsActive__c": True,
+                },
+            },
+        ]
+    }
+
+    result = await get_active_session_participants(sf, "SESS-001")
+
+    assert [contact["Email"] for contact in result] == [
+        "anna@example.com",
+        "bert@example.com",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_deactivate_session_registration_uses_registration_id_first(sf):
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "a01000000000001"}]}
+    sf.Session_Registration__c.get.side_effect = [
+        {
+            "Id": "a01000000000001",
+            "Registration_ID__c": "REG-12345",
+            "Is_Active__c": True,
+        },
+        {
+            "Id": "a01000000000001",
+            "Registration_ID__c": "REG-12345",
+            "Is_Active__c": False,
+        },
+    ]
+
+    result = await deactivate_session_registration(sf, registration_id="REG-12345")
+
+    sf.Session_Registration__c.update.assert_called_once_with(
+        "a01000000000001",
+        {"Is_Active__c": False},
+    )
+    assert result["Is_Active__c"] is False
+
+
+@pytest.mark.asyncio
+async def test_deactivate_session_registration_falls_back_to_contact_and_session(sf):
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "a01000000000002"}]}
+    sf.Session_Registration__c.get.side_effect = [
+        {
+            "Id": "a01000000000002",
+            "Session_ID__c": "SESS-001",
+            "Contact__c": "003000000000001",
+            "Is_Active__c": True,
+        },
+        {
+            "Id": "a01000000000002",
+            "Session_ID__c": "SESS-001",
+            "Contact__c": "003000000000001",
+            "Is_Active__c": False,
+        },
+    ]
+
+    result = await deactivate_session_registration(
+        sf,
+        registration_id=None,
+        contact_id="003000000000001",
+        session_id="SESS-001",
+    )
+
+    sf.Session_Registration__c.update.assert_called_once_with(
+        "a01000000000002",
+        {"Is_Active__c": False},
+    )
+    assert result["Is_Active__c"] is False
+
+
+@pytest.mark.asyncio
+async def test_count_active_session_registrations_returns_total_size(sf):
+    sf.query.return_value = {"totalSize": 2, "records": [{"Id": "a01-1"}, {"Id": "a01-2"}]}
+
+    result = await count_active_session_registrations(sf, "003000000000001")
+
+    assert result == 2
+
+
+@pytest.mark.asyncio
+async def test_get_unique_active_session_registration_for_contact_returns_none_when_ambiguous(sf):
+    sf.query.return_value = {"totalSize": 2, "records": [{"Id": "a01-1"}, {"Id": "a01-2"}]}
+
+    result = await get_unique_active_session_registration_for_contact(sf, "003000000000001")
+
+    assert result is None
+    sf.Session_Registration__c.get.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1111,21 +1338,25 @@ async def test_get_unpaid_contacts_returns_sorted_mapped_persons(sf):
     sf.query_all.return_value = {
         "records": [
             {
-                "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440102",
-                "FirstName": "Zara",
-                "LastName": "Alpha",
-                "Email": "zara@example.com",
-                "AccountId": "001-company",
-                "Account": {"Name": "Acme NV"},
-                "IsActive__c": True,
+                "Contact__r": {
+                    "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440102",
+                    "FirstName": "Zara",
+                    "LastName": "Alpha",
+                    "Email": "zara@example.com",
+                    "AccountId": "001-company",
+                    "Account": {"Name": "Acme NV"},
+                    "IsActive__c": True,
+                },
             },
             {
-                "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440101",
-                "FirstName": "Anna",
-                "LastName": "Alpha",
-                "Email": "anna@example.com",
-                "AccountId": None,
-                "IsActive__c": True,
+                "Contact__r": {
+                    "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440101",
+                    "FirstName": "Anna",
+                    "LastName": "Alpha",
+                    "Email": "anna@example.com",
+                    "AccountId": None,
+                    "IsActive__c": True,
+                },
             },
         ]
     }
@@ -1149,8 +1380,9 @@ async def test_get_unpaid_contacts_returns_sorted_mapped_persons(sf):
             "companyName": "Acme NV",
         },
     ]
+    assert "FROM Session_Registration__c" in sf.query_all.call_args.args[0]
     assert "Paid_At__c = NULL" in sf.query_all.call_args.args[0]
-    assert "Account.Name" in sf.query_all.call_args.args[0]
+    assert "Contact__r.Account.Name" in sf.query_all.call_args.args[0]
 
 
 @pytest.mark.asyncio
@@ -1158,18 +1390,22 @@ async def test_get_unpaid_contacts_skips_inactive_records(sf):
     sf.query_all.return_value = {
         "records": [
             {
-                "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440103",
-                "FirstName": "Inactive",
-                "LastName": "User",
-                "Email": "inactive@example.com",
-                "IsActive__c": False,
+                "Contact__r": {
+                    "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440103",
+                    "FirstName": "Inactive",
+                    "LastName": "User",
+                    "Email": "inactive@example.com",
+                    "IsActive__c": False,
+                },
             },
             {
-                "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440104",
-                "FirstName": "Active",
-                "LastName": "User",
-                "Email": "active@example.com",
-                "IsActive__c": None,
+                "Contact__r": {
+                    "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440104",
+                    "FirstName": "Active",
+                    "LastName": "User",
+                    "Email": "active@example.com",
+                    "IsActive__c": None,
+                },
             },
         ]
     }
@@ -1191,8 +1427,8 @@ async def test_get_unpaid_contacts_skips_inactive_records(sf):
 async def test_get_unpaid_contacts_skips_records_missing_required_fields(sf, caplog):
     sf.query_all.return_value = {
         "records": [
-            {"CRM_ID__c": None, "Email": "missing-id@example.com", "IsActive__c": True},
-            {"CRM_ID__c": "crm-missing-email", "Email": None, "IsActive__c": True},
+            {"Contact__r": {"CRM_ID__c": None, "Email": "missing-id@example.com", "IsActive__c": True}},
+            {"Contact__r": {"CRM_ID__c": "crm-missing-email", "Email": None, "IsActive__c": True}},
         ]
     }
 
@@ -1217,11 +1453,13 @@ async def test_get_unpaid_contacts_does_not_require_active_field_migration(sf):
     sf.query_all.return_value = {
         "records": [
             {
-                "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440105",
-                "FirstName": "Legacy",
-                "LastName": "Contact",
-                "Email": "legacy@example.com",
-                "AccountId": None,
+                "Contact__r": {
+                    "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440105",
+                    "FirstName": "Legacy",
+                    "LastName": "Contact",
+                    "Email": "legacy@example.com",
+                    "AccountId": None,
+                },
             }
         ]
     }
@@ -1238,9 +1476,9 @@ async def test_get_unpaid_contacts_does_not_require_active_field_migration(sf):
         }
     ]
     query = sf.query_all.call_args.args[0]
-    assert "IsActive__c" not in query
-    assert "Active__c" not in query
-    assert "Is_Active__c" not in query
+    assert "Contact__r.IsActive__c" not in query
+    assert "Contact__r.Active__c" not in query
+    assert "Contact__r.Is_Active__c" not in query
 
 
 @pytest.mark.asyncio
@@ -1248,20 +1486,24 @@ async def test_get_unpaid_contacts_skips_invalid_crm_ids(sf, caplog):
     sf.query_all.return_value = {
         "records": [
             {
-                "CRM_ID__c": "legacy-text-id",
-                "FirstName": "Legacy",
-                "LastName": "Broken",
-                "Email": "legacy.broken@example.com",
-                "AccountId": None,
-                "IsActive__c": True,
+                "Contact__r": {
+                    "CRM_ID__c": "legacy-text-id",
+                    "FirstName": "Legacy",
+                    "LastName": "Broken",
+                    "Email": "legacy.broken@example.com",
+                    "AccountId": None,
+                    "IsActive__c": True,
+                },
             },
             {
-                "CRM_ID__c": "550E8400-E29B-41D4-A716-446655440099",
-                "FirstName": "Upper",
-                "LastName": "Case",
-                "Email": "upper.case@example.com",
-                "AccountId": None,
-                "IsActive__c": True,
+                "Contact__r": {
+                    "CRM_ID__c": "550E8400-E29B-41D4-A716-446655440099",
+                    "FirstName": "Upper",
+                    "LastName": "Case",
+                    "Email": "upper.case@example.com",
+                    "AccountId": None,
+                    "IsActive__c": True,
+                },
             },
         ]
     }
@@ -1287,19 +1529,24 @@ async def test_get_unpaid_contacts_skips_invalid_crm_ids(sf, caplog):
 
 @pytest.mark.asyncio
 async def test_update_payment_status_updates_via_crm_id(sf):
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000040"}]}
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "a01000000000001"}]}
+    sf.Session_Registration__c.get.return_value = {
+        "Id": "a01000000000001",
+        "Registration_ID__c": "REG-123",
+        "Session_ID__c": "SESS-001",
+        "Contact__c": "003000000000040",
+        "Is_Active__c": True,
+    }
     sf.Contact.get.side_effect = [
         {
             "Id": "003000000000040",
             "CRM_ID__c": "crm-user-1",
             "Email": "john@example.com",
-            "Registration_ID__c": "REG-123",
         },
         {
             "Id": "003000000000040",
             "CRM_ID__c": "crm-user-1",
             "Email": "john@example.com",
-            "Registration_ID__c": "REG-123",
             "Paid_At__c": "2026-04-02T10:00:00Z",
         },
     ]
@@ -1312,6 +1559,9 @@ async def test_update_payment_status_updates_via_crm_id(sf):
         paid_at="2026-04-02T10:00:00Z",
     )
 
+    sf.Session_Registration__c.update.assert_called_once_with(
+        "a01000000000001", {"Paid_At__c": "2026-04-02T10:00:00Z"}
+    )
     sf.Contact.update.assert_called_once_with(
         "003000000000040", {"Paid_At__c": "2026-04-02T10:00:00Z"}
     )
@@ -1319,9 +1569,10 @@ async def test_update_payment_status_updates_via_crm_id(sf):
 
 
 @pytest.mark.asyncio
-async def test_update_payment_status_falls_back_to_unique_email(sf):
+async def test_update_payment_status_advances_contact_timestamp_when_newer(sf):
     sf.query.side_effect = [
         {"totalSize": 1, "records": [{"Id": "003000000000041"}]},
+        {"totalSize": 1, "records": [{"Id": "a01000000000002"}]},
     ]
     sf.Contact.get.side_effect = [
         {
@@ -1336,6 +1587,13 @@ async def test_update_payment_status_falls_back_to_unique_email(sf):
             "Paid_At__c": "2026-04-02T11:00:00Z",
         },
     ]
+    sf.Session_Registration__c.get.return_value = {
+        "Id": "a01000000000002",
+        "Registration_ID__c": "REG-UNIQUE",
+        "Session_ID__c": "SESS-002",
+        "Contact__c": "003000000000041",
+        "Is_Active__c": True,
+    }
 
     result = await update_payment_status(
         sf,
@@ -1345,6 +1603,9 @@ async def test_update_payment_status_falls_back_to_unique_email(sf):
         paid_at="2026-04-02T11:00:00Z",
     )
 
+    sf.Session_Registration__c.update.assert_called_once_with(
+        "a01000000000002", {"Paid_At__c": "2026-04-02T11:00:00Z"}
+    )
     sf.Contact.update.assert_called_once_with(
         "003000000000041", {"Paid_At__c": "2026-04-02T11:00:00Z"}
     )
@@ -1372,12 +1633,18 @@ async def test_update_payment_status_returns_none_for_ambiguous_email(sf):
 
 @pytest.mark.asyncio
 async def test_update_payment_status_returns_none_for_registration_id_mismatch(sf):
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000043"}]}
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "a01000000000003"}]}
+    sf.Session_Registration__c.get.return_value = {
+        "Id": "a01000000000003",
+        "Registration_ID__c": "REG-NEW",
+        "Session_ID__c": "SESS-003",
+        "Contact__c": "003000000000043",
+        "Is_Active__c": True,
+    }
     sf.Contact.get.return_value = {
         "Id": "003000000000043",
-        "CRM_ID__c": "crm-user-3",
+        "CRM_ID__c": "different-user",
         "Email": "mismatch@example.com",
-        "Registration_ID__c": "REG-OLD",
     }
 
     result = await update_payment_status(
@@ -1389,7 +1656,95 @@ async def test_update_payment_status_returns_none_for_registration_id_mismatch(s
     )
 
     assert result is None
+    sf.Session_Registration__c.update.assert_not_called()
     sf.Contact.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_payment_status_does_not_move_contact_timestamp_backwards(sf):
+    sf.query.side_effect = [
+        {"totalSize": 1, "records": [{"Id": "003000000000044"}]},
+        {"totalSize": 1, "records": [{"Id": "a01000000000004"}]},
+    ]
+    sf.Contact.get.side_effect = [
+        {
+            "Id": "003000000000044",
+            "CRM_ID__c": "crm-user-4",
+            "Email": "backwards@example.com",
+            "Paid_At__c": "2026-04-02T12:00:00Z",
+        },
+        {
+            "Id": "003000000000044",
+            "CRM_ID__c": "crm-user-4",
+            "Email": "backwards@example.com",
+            "Paid_At__c": "2026-04-02T12:00:00Z",
+        },
+    ]
+    sf.Session_Registration__c.get.return_value = {
+        "Id": "a01000000000004",
+        "Registration_ID__c": "REG-BACK",
+        "Session_ID__c": "SESS-004",
+        "Contact__c": "003000000000044",
+        "Is_Active__c": True,
+    }
+
+    result = await update_payment_status(
+        sf,
+        user_id=None,
+        email="backwards@example.com",
+        registration_id=None,
+        paid_at="2026-04-02T11:00:00Z",
+    )
+
+    sf.Session_Registration__c.update.assert_called_once_with(
+        "a01000000000004", {"Paid_At__c": "2026-04-02T11:00:00Z"}
+    )
+    sf.Contact.update.assert_not_called()
+    assert result["Paid_At__c"] == "2026-04-02T12:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_update_payment_status_overwrites_invalid_existing_contact_timestamp(sf, caplog):
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "a01000000000005"}]}
+    sf.Session_Registration__c.get.return_value = {
+        "Id": "a01000000000005",
+        "Registration_ID__c": "REG-BAD-TS",
+        "Session_ID__c": "SESS-005",
+        "Contact__c": "003000000000045",
+        "Is_Active__c": True,
+    }
+    sf.Contact.get.side_effect = [
+        {
+            "Id": "003000000000045",
+            "CRM_ID__c": "crm-user-5",
+            "Email": "badts@example.com",
+            "Paid_At__c": "not-a-date",
+        },
+        {
+            "Id": "003000000000045",
+            "CRM_ID__c": "crm-user-5",
+            "Email": "badts@example.com",
+            "Paid_At__c": "2026-04-02T13:00:00Z",
+        },
+    ]
+
+    with caplog.at_level(logging.WARNING):
+        result = await update_payment_status(
+            sf,
+            user_id=None,
+            email="badts@example.com",
+            registration_id="REG-BAD-TS",
+            paid_at="2026-04-02T13:00:00Z",
+        )
+
+    sf.Session_Registration__c.update.assert_called_once_with(
+        "a01000000000005", {"Paid_At__c": "2026-04-02T13:00:00Z"}
+    )
+    sf.Contact.update.assert_called_once_with(
+        "003000000000045", {"Paid_At__c": "2026-04-02T13:00:00Z"}
+    )
+    assert "invalid Paid_At__c value" in caplog.text
+    assert result["Paid_At__c"] == "2026-04-02T13:00:00Z"
 
 
 @pytest.mark.asyncio

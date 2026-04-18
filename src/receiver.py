@@ -16,22 +16,28 @@ from src.config import Config
 from src.salesforce_client import (
     backfill_mailing_contact_fields,
     backfill_planning_contact_fields,
+    count_active_session_registrations,
     create_contact,
-    deactivate_contact,
     deactivate_contact_record,
+    deactivate_session_registration,
     ensure_contact_identifiers,
+    ensure_session_registration_active,
+    get_active_session_participants,
     get_contact_by_email,
     get_contact_match_by_email,
     get_contact_match_by_mailing_id,
     get_contact_match_by_planning_id,
     get_salesforce_client,
+    get_session_registration_by_registration_id,
     get_unpaid_contacts,
     has_contact_mailing_id_field,
     has_contact_planning_id_field,
+    has_session_registration_object,
     update_mailing_contact,
     update_payment_status,
     update_planning_contact,
     upsert_contact_by_email,
+    upsert_session_registration,
 )
 
 if TYPE_CHECKING:
@@ -155,9 +161,10 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     queue_unpaid = await _declare_and_bind(channel, "kassa.unpaid.requested", durable=True)
     await queue_unpaid.consume(partial(handle_unpaid_requested, sf=sf_client))
 
-    # Contract 11 — Planning → CRM: session update (Release 2)
-    # queue_session = await _declare_and_bind(channel, "planning.session.updated", durable=True)
-    # await queue_session.consume(handle_session_updated)
+    # Contract 11 — Planning → CRM: session update
+    # Queue: planning.session.updated | Exchange: planning.topic | durable: true
+    queue_session = await _declare_and_bind(channel, "planning.session.updated", durable=True)
+    await queue_session.consume(partial(handle_session_updated, sf=sf_client))
 
     # Contract 12 — IoT → CRM: badge linked (Release 2)
     # queue_badge = await _declare_and_bind(channel, "iot.badge.linked", durable=True)
@@ -202,7 +209,8 @@ async def handle_payment_confirmed(
 
     Behaviour:
     - Validate XML against schema.
-    - Update Contact.Paid_At__c in Salesforce.
+    - Update the canonical session registration payment state in Salesforce.
+    - Sync Contact.Paid_At__c as a compatibility field.
     - Invalid XML: rejected without requeue.
     - Unknown/ambiguous Contact or registrationId mismatch: ack without retry.
     - Other errors: requeued.
@@ -270,6 +278,82 @@ async def handle_unpaid_requested(
         await message.reject(requeue=True)
 
 
+async def handle_session_updated(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 11 — Planning -> CRM: notify all active participants of a session change."""
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("SessionUpdate — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        if not await has_session_registration_object(sf):
+            logger.error(
+                "SessionUpdate rejected — Salesforce object Session_Registration__c is missing",
+            )
+            await message.reject(requeue=False)
+            return
+
+        session_id = xml.findtext("sessionId") or ""
+        session_name = xml.findtext("sessionName") or ""
+        change_type = xml.findtext("changeType") or ""
+        new_time = _normalize_optional_text(xml.findtext("newTime"))
+        new_location = _normalize_optional_text(xml.findtext("newLocation"))
+
+        participants = await get_active_session_participants(sf, session_id)
+        if not participants:
+            logger.info(
+                "SessionUpdate for sessionId=%s changeType=%s has no active participants",
+                session_id,
+                change_type,
+            )
+            await message.ack()
+            return
+
+        published_count = 0
+        for participant in participants:
+            email = _normalize_optional_text(participant.get("Email"))
+            if email is None:
+                logger.warning(
+                    "Skipping session update notification for sessionId=%s because participant %s has no email",
+                    session_id,
+                    participant.get("Id"),
+                )
+                continue
+
+            display_name = _build_mail_display_name(
+                participant.get("FirstName"),
+                participant.get("LastName"),
+                email,
+            )
+            recipient = {"email": email, "name": display_name}
+            dynamic_data = {
+                "guest_name": display_name,
+                "session_name": session_name,
+            }
+            if new_time is not None:
+                dynamic_data["session_time"] = new_time
+            if new_location is not None:
+                dynamic_data["session_location"] = new_location
+
+            await sender.publish_mail_requested("session_change", recipient, dynamic_data)
+            published_count += 1
+
+        logger.info(
+            "Published %s crm.mail.requested messages for sessionId=%s changeType=%s",
+            published_count,
+            session_id,
+            change_type,
+        )
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("SessionUpdate — error processing message: %s", exc)
+        await message.reject(requeue=True)
+
+
 def _get_contact_is_active(contact: dict) -> bool:
     """Return the normalized active flag across supported Salesforce field names."""
     for active_field in ("IsActive__c", "Active__c", "Is_Active__c"):
@@ -314,6 +398,45 @@ def _build_user_deactivation_data(contact: dict, deactivated_at: str) -> dict[st
 def _build_full_name(first_name: str | None, last_name: str | None) -> str:
     """Build a display name from first/last name, skipping missing parts."""
     return f"{first_name or ''} {last_name or ''}".strip()
+
+
+def _build_mail_display_name(
+    first_name: str | None,
+    last_name: str | None,
+    email: str | None,
+) -> str:
+    """Build a non-empty display name for outbound mail requests."""
+    full_name = _build_full_name(first_name, last_name)
+    if full_name:
+        return full_name
+    return email or ""
+
+
+def _contact_has_native_identity(contact: dict) -> bool:
+    """Return whether the Contact is also owned by a native producer id."""
+    return any(
+        _normalize_optional_text(contact.get(field)) is not None
+        for field in ("Planning_ID__c", "Mailing_ID__c")
+    )
+
+
+def _registration_fields_are_compatible(contact: dict, xml: etree._Element) -> bool:
+    """Return whether a Contract 1 payload can safely reuse an existing Contact."""
+    comparisons = (
+        ("FirstName", xml.findtext("firstName")),
+        ("LastName", xml.findtext("lastName")),
+        ("Role__c", xml.findtext("role")),
+    )
+    for sf_field, incoming_value in comparisons:
+        normalized_existing = _normalize_optional_text(contact.get(sf_field))
+        normalized_incoming = _normalize_optional_text(incoming_value)
+        if (
+            normalized_existing is not None
+            and normalized_incoming is not None
+            and normalized_existing != normalized_incoming
+        ):
+            return False
+    return True
 
 
 def _normalize_optional_text(value: str | None) -> str | None:
@@ -1358,10 +1481,19 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
 
     try:
         email = xml.findtext("email")
+        registration_id = xml.findtext("registrationId") or ""
+        session_id = xml.findtext("sessionId") or ""
 
         gdpr_text = xml.findtext("gdprConsent")
         if gdpr_text not in ("true", "1"):
             logger.warning("Registration refused — gdprConsent=%s for email %s", gdpr_text, email)
+            await message.reject(requeue=False)
+            return
+
+        if not await has_session_registration_object(sf):
+            logger.error(
+                "Registration rejected — Salesforce object Session_Registration__c is missing",
+            )
             await message.reject(requeue=False)
             return
 
@@ -1376,29 +1508,75 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
         existing_contact = await get_contact_by_email(sf, email)
 
         if existing_contact:
-            reg_id_incoming = xml.findtext("registrationId")
-            reg_id_existing = existing_contact.get("Registration_ID__c")
-            
-            if reg_id_incoming == reg_id_existing:
+            existing_session_registration = await get_session_registration_by_registration_id(
+                sf,
+                registration_id,
+            )
+
+            if (
+                existing_session_registration is not None
+                and existing_session_registration.get("Is_Active__c") is not False
+            ):
                 # Retry na publish failure -> opnieuw publishen
-                logger.info("Retry for registrationId %s — republishing", reg_id_incoming)
+                logger.info("Retry for registrationId %s — republishing", registration_id)
 
                 await sender.publish_user_confirmed(_build_user_data(existing_contact))
-                
+
                 # C6: Publish mail request
-                full_name = _build_full_name(
+                full_name = _build_mail_display_name(
                     existing_contact.get("FirstName"),
                     existing_contact.get("LastName"),
+                    email,
                 )
-                
+
                 recipient = {"email": email, "name": full_name}
                 dynamic_data = {"guest_name": full_name}
                 await sender.publish_mail_requested("registration_confirmation", recipient, dynamic_data)
 
                 await message.ack()
                 return
+            if existing_session_registration is not None:
+                logger.info(
+                    "Reactivating inactive registrationId %s via normal registration flow",
+                    registration_id,
+                )
 
-            logger.warning("Conflict: email %s exists with different registrationId", email)
+            if not _registration_fields_are_compatible(existing_contact, xml):
+                logger.warning(
+                    "Conflict: email %s exists with incompatible person fields for registrationId %s",
+                    email,
+                    registration_id,
+                )
+                await message.ack()
+                return
+
+            contact = await ensure_contact_identifiers(
+                sf,
+                existing_contact,
+                registration_id=registration_id,
+            )
+            await upsert_session_registration(
+                sf,
+                registration_id=registration_id,
+                session_id=session_id,
+                contact_id=contact["Id"],
+            )
+
+            logger.info(
+                "Reusing existing Salesforce Contact for email=%s registrationId=%s",
+                email,
+                registration_id,
+            )
+            await sender.publish_user_confirmed(_build_user_data(contact))
+
+            full_name = _build_mail_display_name(
+                contact.get("FirstName"),
+                contact.get("LastName"),
+                email,
+            )
+            recipient = {"email": email, "name": full_name}
+            dynamic_data = {"guest_name": full_name}
+            await sender.publish_mail_requested("registration_confirmation", recipient, dynamic_data)
             await message.ack()
             return
 
@@ -1409,7 +1587,7 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
             "Email": email,
             "Role__c": xml.findtext("role"),
             "GDPR_Consent__c": xml.findtext("gdprConsent") in ("true", "1"),
-            "Registration_ID__c": xml.findtext("registrationId"),
+            "Registration_ID__c": registration_id,
         }
 
         phone = xml.findtext("phone")
@@ -1417,21 +1595,27 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
             contact_data["Phone"] = phone
 
         # Company mapping deferred to Contract 3 (aparte taak)
-        # TODO: sessionId mapping needed for Contract 2
 
         logger.info("Creating new Salesforce Contact for %s", email)
         contact = await create_contact(sf, contact_data)
+        await upsert_session_registration(
+            sf,
+            registration_id=registration_id,
+            session_id=session_id,
+            contact_id=contact["Id"],
+        )
 
         # Publish crm.user.confirmed
         await sender.publish_user_confirmed(_build_user_data(contact))
         logger.info("Published crm.user.confirmed for %s", email)
 
         # Contract 6 (R1 scope) — publish registration_confirmation
-        full_name = _build_full_name(
+        full_name = _build_mail_display_name(
             contact_data.get("FirstName"),
             contact_data.get("LastName"),
+            email,
         )
-        
+
         recipient = {"email": email, "name": full_name}
         dynamic_data = {"guest_name": full_name}
         await sender.publish_mail_requested("registration_confirmation", recipient, dynamic_data)
@@ -1492,9 +1676,12 @@ async def handle_registration_updated(message: aio_pika.IncomingMessage, sf: "Sa
     Behaviour:
     - Validate XML against schema (<RegistrationChange>).
     - Branch on changeType:
-        updated   → Upsert Contact in Salesforce, publish crm.user.updated (C18).
-        cancelled → Soft-delete Contact (IsActive__c=false), publish crm.user.deactivated (C22).
-    - Cancellation is always a soft delete — never physically remove (GDPR).
+        updated   → Upsert Contact in Salesforce, keep the session registration active,
+                    publish crm.user.updated (C18).
+        cancelled → Soft-delete the session registration first; only soft-delete the
+                    Contact and publish crm.user.deactivated (C22) when no active
+                    registrations remain.
+    - Contact removal remains soft delete only — never physically remove (GDPR).
     - Invalid XML: rejected without requeue.
     - Other errors: requeued.
     """
@@ -1518,7 +1705,7 @@ async def handle_registration_updated(message: aio_pika.IncomingMessage, sf: "Sa
         if change_type == "updated":
             await _handle_update(xml, email, sf, message)
         elif change_type == "cancelled":
-            await _handle_cancellation(email, sf, message)
+            await _handle_cancellation(xml, email, sf, message)
         else:
             # XSD validation should prevent this, but defence-in-depth
             logger.error("Unknown changeType '%s' for email %s — rejecting", change_type, email)
@@ -1533,6 +1720,13 @@ async def _handle_update(
     xml: etree._Element, email: str, sf: "Salesforce", message: aio_pika.IncomingMessage
 ) -> None:
     """Process changeType=updated: upsert Contact and publish crm.user.updated."""
+    if not await has_session_registration_object(sf):
+        logger.error(
+            "RegistrationChange updated rejected — Salesforce object Session_Registration__c is missing",
+        )
+        await message.reject(requeue=False)
+        return
+
     update_data: dict = {}
 
     updated_fields = xml.find("updatedFields")
@@ -1551,6 +1745,14 @@ async def _handle_update(
                 update_data[sf_field] = value
 
     contact = await upsert_contact_by_email(sf, email, update_data)
+    registration_id = _normalize_optional_text(xml.findtext("registrationId"))
+    session_id = xml.findtext("sessionId") or ""
+    await ensure_session_registration_active(
+        sf,
+        contact_id=contact["Id"],
+        session_id=session_id,
+        registration_id=registration_id,
+    )
 
     await sender.publish_user_updated(_build_updated_user_data(contact))
     logger.info("Published crm.user.updated for %s", email)
@@ -1558,10 +1760,22 @@ async def _handle_update(
 
 
 async def _handle_cancellation(
-    email: str, sf: "Salesforce", message: aio_pika.IncomingMessage
+    xml: etree._Element,
+    email: str,
+    sf: "Salesforce",
+    message: aio_pika.IncomingMessage,
 ) -> None:
-    """Process changeType=cancelled: soft-delete Contact and publish crm.user.deactivated."""
-    contact = await deactivate_contact(sf, email)
+    """Process changeType=cancelled: deactivate registration, maybe Contact."""
+    if not await has_session_registration_object(sf):
+        logger.error(
+            "RegistrationChange cancelled rejected — Salesforce object Session_Registration__c is missing",
+        )
+        await message.reject(requeue=False)
+        return
+
+    session_id = xml.findtext("sessionId") or ""
+    registration_id = _normalize_optional_text(xml.findtext("registrationId"))
+    contact = await get_contact_by_email(sf, email)
 
     if contact is None:
         # Contact doesn't exist — nothing to deactivate. Ack to prevent infinite requeue.
@@ -1569,6 +1783,45 @@ async def _handle_cancellation(
         await message.ack()
         return
 
+    session_registration = await deactivate_session_registration(
+        sf,
+        registration_id=registration_id,
+        contact_id=contact["Id"],
+        session_id=session_id,
+    )
+    if session_registration is None:
+        remaining_registrations = await count_active_session_registrations(sf, contact["Id"])
+        native_identity = _contact_has_native_identity(contact)
+        if remaining_registrations > 0 or native_identity:
+            logger.warning(
+                "Cancellation for %s session %s has no Session_Registration__c row — skipping legacy Contact fallback; remaining_active_registrations=%s native_identity=%s",
+                email,
+                session_id,
+                remaining_registrations,
+                native_identity,
+            )
+            await message.ack()
+            return
+
+        logger.warning(
+            "Cancellation for %s session %s has no Session_Registration__c row — using legacy Contact fallback",
+            email,
+            session_id,
+        )
+    else:
+        remaining_registrations = await count_active_session_registrations(sf, contact["Id"])
+        native_identity = _contact_has_native_identity(contact)
+        if remaining_registrations > 0 or native_identity:
+            logger.info(
+                "Cancelled registration for %s without deactivating Contact; remaining_active_registrations=%s native_identity=%s",
+                email,
+                remaining_registrations,
+                native_identity,
+            )
+            await message.ack()
+            return
+
+    contact = await deactivate_contact_record(sf, contact, log_value=email)
     deactivation_data = _build_user_deactivation_data(
         contact,
         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
