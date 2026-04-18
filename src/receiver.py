@@ -22,8 +22,8 @@ from src.salesforce_client import (
     deactivate_session_registration,
     ensure_contact_identifiers,
     ensure_session_registration_active,
-    get_contact_by_email,
     get_active_session_participants,
+    get_contact_by_email,
     get_contact_match_by_email,
     get_contact_match_by_mailing_id,
     get_contact_match_by_planning_id,
@@ -36,8 +36,8 @@ from src.salesforce_client import (
     update_mailing_contact,
     update_payment_status,
     update_planning_contact,
-    upsert_session_registration,
     upsert_contact_by_email,
+    upsert_session_registration,
 )
 
 if TYPE_CHECKING:

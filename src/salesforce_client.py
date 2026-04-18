@@ -25,9 +25,9 @@ All SF calls are wrapped in asyncio.to_thread() to prevent blocking the event lo
 """
 
 import asyncio
-from datetime import datetime, timezone
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from simple_salesforce import Salesforce, SalesforceError
