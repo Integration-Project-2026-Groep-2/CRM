@@ -3,7 +3,6 @@ Unit tests — receiver.py
 Contract 9: controlroom.warning.issued
 Contract 1 + 13: frontend.registration.created → crm.user.confirmed
 Contract 24: facturatie.user.created → crm.user.confirmed
-Contract 23: facturatie.company.deactivated → crm.company.deactivated
 Contract 27 + 15: mailing.user.created → crm.user.confirmed / crm.user.conflict
 Contract 28: mailing.user.updated → crm.user.updated / crm.user.conflict
 """
@@ -144,26 +143,6 @@ FACTURATIE_CONTACT_RETURN = {
     "Phone": "+32470111222",
     "Company_ID__c": "c3d4e5f6-a7b8-4901-8d23-ef4567ab8901",
     "Registration_ID__c": "REG-20260415-010",
-}
-
-VALID_FACTURATIE_COMPANY_DEACTIVATED_BY_ID_XML = b"""<?xml version='1.0' encoding='utf-8'?>
-<CompanyDeactivated>
-    <companyId>660e8400-e29b-41d4-a716-446655440040</companyId>
-    <deactivatedAt>2026-04-15T10:00:00Z</deactivatedAt>
-</CompanyDeactivated>"""
-
-VALID_FACTURATIE_COMPANY_DEACTIVATED_BY_VAT_XML = b"""<?xml version='1.0' encoding='utf-8'?>
-<CompanyDeactivated>
-    <vatNumber>BE0123456789</vatNumber>
-    <deactivatedAt>2026-04-15T10:00:00Z</deactivatedAt>
-</CompanyDeactivated>"""
-
-FACTURATIE_COMPANY_ACCOUNT_RETURN = {
-    "Id": "001000000000040",
-    "CRM_ID__c": "660e8400-e29b-41d4-a716-446655440040",
-    "VAT_Number__c": "BE0123456789",
-    "Name": "Bedrijf NV",
-    "IsActive__c": True,
 }
 
 VALID_MAILING_USER_CREATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
@@ -803,63 +782,6 @@ class TestHandleFacturatieUserCreated:
             mock_create.assert_not_called()
             mock_publish.assert_called_once()
             mock_fallback_lookup.assert_not_called()
-            msg.ack.assert_called_once()
-
-
-# ========================================================================== 
-# Contract 23: facturatie.company.deactivated
-# ========================================================================== 
-
-
-class TestHandleFacturatieCompanyDeactivated:
-    @pytest.fixture
-    def sf_mock(self):
-        return AsyncMock()
-
-    @pytest.mark.asyncio
-    async def test_company_id_triggers_account_deactivation_and_publish(self, sf_mock):
-        deactivated_account = {
-            **FACTURATIE_COMPANY_ACCOUNT_RETURN,
-            "IsActive__c": False,
-        }
-        with (
-            patch("src.receiver.deactivate_account_by_crm_id", return_value=deactivated_account) as mock_deactivate,
-            patch("src.receiver.get_account_by_vat") as mock_get_by_vat,
-            patch("src.sender.publish_company_deactivated") as mock_publish,
-        ):
-            from src.receiver import handle_facturatie_company_deactivated
-
-            msg = _make_message(VALID_FACTURATIE_COMPANY_DEACTIVATED_BY_ID_XML)
-            await handle_facturatie_company_deactivated(msg, sf_mock)
-
-            mock_deactivate.assert_called_once_with(sf_mock, FACTURATIE_COMPANY_ACCOUNT_RETURN["CRM_ID__c"])
-            mock_get_by_vat.assert_not_called()
-            mock_publish.assert_called_once()
-            published_company = mock_publish.call_args.args[0]
-            assert published_company["id"] == FACTURATIE_COMPANY_ACCOUNT_RETURN["CRM_ID__c"]
-            assert published_company["vatNumber"] == FACTURATIE_COMPANY_ACCOUNT_RETURN["VAT_Number__c"]
-            msg.ack.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_vat_number_lookup_deactivates_and_publishes(self, sf_mock):
-        account = dict(FACTURATIE_COMPANY_ACCOUNT_RETURN)
-        deactivated_account = {**account, "IsActive__c": False}
-        with (
-            patch("src.receiver.get_account_by_vat", return_value=account) as mock_get_by_vat,
-            patch("src.receiver.deactivate_account_by_crm_id", return_value=deactivated_account) as mock_deactivate,
-            patch("src.sender.publish_company_deactivated") as mock_publish,
-        ):
-            from src.receiver import handle_facturatie_company_deactivated
-
-            msg = _make_message(VALID_FACTURATIE_COMPANY_DEACTIVATED_BY_VAT_XML)
-            await handle_facturatie_company_deactivated(msg, sf_mock)
-
-            mock_get_by_vat.assert_called_once_with(sf_mock, "BE0123456789")
-            mock_deactivate.assert_called_once_with(sf_mock, FACTURATIE_COMPANY_ACCOUNT_RETURN["CRM_ID__c"])
-            mock_publish.assert_called_once()
-            published_company = mock_publish.call_args.args[0]
-            assert published_company["id"] == FACTURATIE_COMPANY_ACCOUNT_RETURN["CRM_ID__c"]
-            assert published_company["vatNumber"] == "BE0123456789"
             msg.ack.assert_called_once()
 
 
@@ -2809,17 +2731,6 @@ class TestRunReceiver:
         self._assert_declared_queue(mock_declare, "facturatie.user.created", durable=True)
         self._assert_partial_callback(
             queues["facturatie.user.created"], handle_facturatie_user_created, sf_client
-        )
-
-    @pytest.mark.asyncio
-    async def test_run_receiver_registers_contract_23_queue(self):
-        from src.receiver import handle_facturatie_company_deactivated
-
-        queues, mock_declare, sf_client = await self._run_receiver()
-
-        self._assert_declared_queue(mock_declare, "facturatie.company.deactivated", durable=True)
-        self._assert_partial_callback(
-            queues["facturatie.company.deactivated"], handle_facturatie_company_deactivated, sf_client
         )
 
     @pytest.mark.asyncio

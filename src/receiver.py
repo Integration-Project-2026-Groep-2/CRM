@@ -16,11 +16,9 @@ from src.config import Config
 from src.salesforce_client import (
     backfill_mailing_contact_fields,
     create_contact,
-    deactivate_account_by_crm_id,
     deactivate_contact,
     deactivate_contact_record,
     ensure_contact_identifiers,
-    get_account_by_vat,
     get_contact_by_email,
     get_contact_match_by_email,
     get_contact_match_by_mailing_id,
@@ -43,7 +41,6 @@ _INBOUND_EXCHANGE: dict[str, str] = {
     "frontend.registration.updated": "user.topic",
     "frontend.company.created": "user.topic",
     "facturatie.user.created": "user.topic",
-    "facturatie.company.deactivated": "company.topic",
     "mailing.user.created": "user.topic",
     "mailing.user.updated": "user.topic",
     "mailing.user.deactivated": "user.topic",
@@ -100,11 +97,6 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     # Queue: facturatie.user.created | Exchange: user.topic | durable: true
     queue_facturatie_user_created = await _declare_and_bind(channel, "facturatie.user.created", durable=True)
     await queue_facturatie_user_created.consume(partial(handle_facturatie_user_created, sf=sf_client))
-
-    # Contract 23 — Facturatie → CRM: company deactivated
-    # Queue: facturatie.company.deactivated | Exchange: company.topic | durable: true
-    queue_facturatie_company_deactivated = await _declare_and_bind(channel, "facturatie.company.deactivated", durable=True)
-    await queue_facturatie_company_deactivated.consume(partial(handle_facturatie_company_deactivated, sf=sf_client))
 
     # Contract 27 — Mailing → CRM: new Mailing user sync
     # Queue: mailing.user.created | Exchange: user.topic | durable: true
@@ -1136,90 +1128,3 @@ async def _handle_cancellation(
     logger.info("Published crm.user.deactivated for %s", email)
 
     await message.ack()
-
-
-async def handle_facturatie_company_deactivated(
-    message: aio_pika.IncomingMessage, sf: "Salesforce"
-) -> None:
-    """Contract 23 — Facturatie -> CRM: company deactivated.
-
-    Queue: facturatie.company.deactivated | durable: true
-
-    Behaviour:
-    - Accept either companyId (CRM UUID) or vatNumber as lookup key.
-    - Soft-delete the linked Salesforce Account.
-    - Publish crm.company.deactivated after successful deactivation.
-    - Invalid XML: rejected without requeue.
-    - Missing/unknown Account: ack without retry.
-    - Other errors: requeued.
-    """
-    try:
-        xml = etree.fromstring(message.body)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("FacturatieCompanyDeactivated — invalid XML, rejecting message: %s", exc)
-        await message.reject(requeue=False)
-        return
-
-    try:
-        company_id = _normalize_optional_text(xml.findtext("companyId")) or _normalize_optional_text(xml.findtext("id"))
-        vat_number = _normalize_optional_text(xml.findtext("vatNumber"))
-
-        account = None
-        if company_id is not None:
-            account = await deactivate_account_by_crm_id(sf, company_id)
-        elif vat_number is not None:
-            account = await get_account_by_vat(sf, vat_number)
-            if account is None:
-                logger.warning(
-                    "FacturatieCompanyDeactivated ignored — no Account found for vatNumber %s",
-                    vat_number,
-                )
-                await message.ack()
-                return
-
-            account_crm_id = _normalize_optional_text(account.get("CRM_ID__c"))
-            if account_crm_id is None:
-                logger.warning(
-                    "FacturatieCompanyDeactivated ignored — Account without CRM_ID__c for vatNumber %s",
-                    vat_number,
-                )
-                await message.ack()
-                return
-
-            account = await deactivate_account_by_crm_id(sf, account_crm_id)
-        else:
-            logger.warning("FacturatieCompanyDeactivated ignored — missing companyId/vatNumber")
-            await message.ack()
-            return
-
-        if account is None:
-            logger.warning(
-                "FacturatieCompanyDeactivated ignored — no Account found for companyId=%s vatNumber=%s",
-                company_id,
-                vat_number,
-            )
-            await message.ack()
-            return
-
-        account_crm_id = _normalize_optional_text(account.get("CRM_ID__c"))
-        account_vat_number = _normalize_optional_text(account.get("VAT_Number__c")) or vat_number
-        if account_crm_id is None or account_vat_number is None:
-            logger.warning(
-                "FacturatieCompanyDeactivated ignored — incomplete Account data for companyId=%s vatNumber=%s",
-                company_id,
-                vat_number,
-            )
-            await message.ack()
-            return
-
-        deactivation_data = {
-            "id": account_crm_id,
-            "vatNumber": account_vat_number,
-            "deactivatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
-        await sender.publish_company_deactivated(deactivation_data)
-        logger.info("Published crm.company.deactivated for Account %s", account_crm_id)
-        await message.ack()
-    except Exception as exc:  # noqa: BLE001
-        logger.error("FacturatieCompanyDeactivated — error processing message: %s", exc)
-        await message.reject(requeue=True)
