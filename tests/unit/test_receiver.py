@@ -2139,6 +2139,13 @@ DEACTIVATED_CONTACT_RETURN = {
     "IsActive__c": False,
 }
 
+DEACTIVATED_ACCOUNT_RETURN = {
+    "Id": "001000000000042",
+    "CRM_ID__c": "acc-crm-001",
+    "VAT_Number__c": "BE0123456789",
+    "IsActive__c": False,
+}
+
 PAID_CONTACT_RETURN = {
     "Id": "003000000000077",
     "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440099",
@@ -2371,6 +2378,56 @@ class TestHandleRegistrationUpdated:
             assert deact_data["id"] == "550e8400-e29b-41d4-a716-446655440088"
             assert deact_data["email"] == "cancel@example.com"
             assert "deactivatedAt" in deact_data
+
+    @pytest.mark.asyncio
+    async def test_cancelled_with_linked_company_deactivates_account_and_publishes_company_deactivated(self, sf_mock):
+        """Contract 23: a linked company must be deactivated and published on cancellation."""
+        parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        deactivated_contact_with_company = {
+            **DEACTIVATED_CONTACT_RETURN,
+            "Company_ID__c": "acc-crm-001",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.deactivate_contact", return_value=deactivated_contact_with_company),
+            patch("src.receiver.deactivate_account_by_crm_id", return_value=DEACTIVATED_ACCOUNT_RETURN) as mock_deactivate_account,
+            patch("src.sender.publish_user_deactivated") as mock_publish_user,
+            patch("src.sender.publish_company_deactivated") as mock_publish_company,
+        ):
+            from src.receiver import handle_registration_updated
+
+            msg = _make_message(VALID_CANCEL_XML)
+            await handle_registration_updated(msg, sf_mock)
+
+            mock_deactivate_account.assert_called_once_with(sf_mock, "acc-crm-001")
+            mock_publish_user.assert_called_once()
+            mock_publish_company.assert_called_once()
+
+            company_deact_data = mock_publish_company.call_args.args[0]
+            assert company_deact_data["id"] == "acc-crm-001"
+            assert company_deact_data["vatNumber"] == "BE0123456789"
+            assert "deactivatedAt" in company_deact_data
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_without_company_link_does_not_deactivate_or_publish_company(self, sf_mock):
+        """Contract 23 is skipped when the cancelled contact is not linked to a company."""
+        parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.deactivate_contact", return_value=DEACTIVATED_CONTACT_RETURN),
+            patch("src.receiver.deactivate_account_by_crm_id") as mock_deactivate_account,
+            patch("src.sender.publish_user_deactivated"),
+            patch("src.sender.publish_company_deactivated") as mock_publish_company,
+        ):
+            from src.receiver import handle_registration_updated
+
+            msg = _make_message(VALID_CANCEL_XML)
+            await handle_registration_updated(msg, sf_mock)
+
+            mock_deactivate_account.assert_not_called()
+            mock_publish_company.assert_not_called()
+            msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_cancelled_acks_message(self, sf_mock):

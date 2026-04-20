@@ -16,6 +16,7 @@ from src.config import Config
 from src.salesforce_client import (
     backfill_mailing_contact_fields,
     create_contact,
+    deactivate_account_by_crm_id,
     deactivate_contact,
     deactivate_contact_record,
     ensure_contact_identifiers,
@@ -285,6 +286,15 @@ def _build_user_deactivation_data(contact: dict, deactivated_at: str) -> dict[st
     return {
         "id": contact["CRM_ID__c"],
         "email": contact["Email"],
+        "deactivatedAt": deactivated_at,
+    }
+
+
+def _build_company_deactivation_data(account: dict, deactivated_at: str) -> dict[str, str]:
+    """Build the outbound Contract 23 payload from a Salesforce Account."""
+    return {
+        "id": account["CRM_ID__c"],
+        "vatNumber": account["VAT_Number__c"],
         "deactivatedAt": deactivated_at,
     }
 
@@ -1120,11 +1130,31 @@ async def _handle_cancellation(
         await message.ack()
         return
 
-    deactivation_data = _build_user_deactivation_data(
-        contact,
-        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    )
+    deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    deactivation_data = _build_user_deactivation_data(contact, deactivated_at)
     await sender.publish_user_deactivated(deactivation_data)
     logger.info("Published crm.user.deactivated for %s", email)
+
+    company_id = _normalize_optional_text(contact.get("Company_ID__c"))
+    if company_id is not None:
+        account = await deactivate_account_by_crm_id(sf, company_id)
+        if account is None:
+            logger.warning(
+                "Contact %s is linked to Company_ID__c %s, but Account was not found",
+                email,
+                company_id,
+            )
+        elif not account.get("VAT_Number__c"):
+            logger.warning(
+                "Account %s has no VAT_Number__c; skipping crm.company.deactivated publish",
+                company_id,
+            )
+        else:
+            company_deactivation_data = _build_company_deactivation_data(account, deactivated_at)
+            await sender.publish_company_deactivated(company_deactivation_data)
+            logger.info(
+                "Published crm.company.deactivated for company CRM_ID__c %s",
+                company_id,
+            )
 
     await message.ack()
