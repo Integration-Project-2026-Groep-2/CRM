@@ -2106,6 +2106,7 @@ class TestHandleMailingUserUpdated:
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.receiver.has_contact_mailing_id_field", return_value=True),
             patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
             caplog.at_level(logging.WARNING),
@@ -2118,7 +2119,8 @@ class TestHandleMailingUserUpdated:
             mock_publish.assert_not_called()
             mock_conflict.assert_not_called()
             msg.reject.assert_called_once_with(requeue=True)
-            assert "no Contact found for Mailing_ID__c" in caplog.text
+            assert "MailingUserUpdated deferred" in caplog.text
+            assert "Mailing_ID__c" in caplog.text
 
     @pytest.mark.asyncio
     async def test_ambiguous_mailing_id_is_acked_without_publish(self, sf_mock, caplog):
@@ -2347,6 +2349,7 @@ class TestHandlePlanningUserUpdated:
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.receiver.has_contact_planning_id_field", return_value=True),
             patch("src.receiver.get_contact_match_by_planning_id", return_value=("none", None)),
+            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
             patch("src.receiver.get_contact_match_by_email") as mock_email_lookup,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
@@ -2361,7 +2364,8 @@ class TestHandlePlanningUserUpdated:
             mock_publish.assert_not_called()
             mock_conflict.assert_not_called()
             msg.reject.assert_called_once_with(requeue=True)
-            assert "no Contact found for Planning_ID__c" in caplog.text
+            assert "PlanningUserUpdated deferred" in caplog.text
+            assert "Planning_ID__c" in caplog.text
 
     @pytest.mark.asyncio
     async def test_ambiguous_planning_id_is_acked_without_publish(self, sf_mock, caplog):
@@ -2575,6 +2579,7 @@ class TestHandlePlanningUserDeactivated:
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.receiver.has_contact_planning_id_field", return_value=True),
             patch("src.receiver.get_contact_match_by_planning_id", return_value=("none", None)),
+            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -2585,7 +2590,8 @@ class TestHandlePlanningUserDeactivated:
 
             mock_publish.assert_not_called()
             msg.reject.assert_called_once_with(requeue=True)
-            assert "no Contact found for Planning_ID__c" in caplog.text
+            assert "PlanningUserDeactivated deferred" in caplog.text
+            assert "Planning_ID__c" in caplog.text
 
     @pytest.mark.asyncio
     async def test_ambiguous_planning_id_is_acked_without_publish(self, sf_mock, caplog):
@@ -2814,6 +2820,7 @@ class TestHandleMailingUserDeactivated:
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.receiver.has_contact_mailing_id_field", return_value=True),
             patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -2824,7 +2831,8 @@ class TestHandleMailingUserDeactivated:
 
             mock_publish.assert_not_called()
             msg.reject.assert_called_once_with(requeue=True)
-            assert "no Contact found for Mailing_ID__c" in caplog.text
+            assert "MailingUserDeactivated deferred" in caplog.text
+            assert "Mailing_ID__c" in caplog.text
 
     @pytest.mark.asyncio
     async def test_ambiguous_mailing_id_is_acked_without_publish(self, sf_mock, caplog):
@@ -4068,14 +4076,19 @@ class TestHandleProcessingError:
         message.reject.assert_awaited_once_with(requeue=False)
 
     @pytest.mark.asyncio
-    async def test_transient_error_requeues(self, message, caplog):
+    async def test_transient_error_requeues_with_backoff(self, message, caplog):
         from src.receiver import _handle_processing_error
 
-        with caplog.at_level(logging.ERROR):
+        with (
+            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            caplog.at_level(logging.ERROR),
+        ):
             await _handle_processing_error("MailingUserUpdated", message, RuntimeError("boom"))
 
+        mock_sleep.assert_awaited_once_with(1.0)
         message.reject.assert_awaited_once_with(requeue=True)
-        assert "attempt 1" in caplog.text
+        assert "attempt 1/5" in caplog.text
+        assert "sleeping 1.0s" in caplog.text
 
     @pytest.mark.asyncio
     async def test_max_retry_drops_without_requeue(self, message, caplog):
@@ -4088,3 +4101,94 @@ class TestHandleProcessingError:
 
         message.reject.assert_awaited_once_with(requeue=False)
         assert "max retries (5) exceeded" in caplog.text
+
+
+class TestExponentialBackoff:
+    @pytest.mark.parametrize(
+        "attempt,expected",
+        [(0, 1.0), (1, 2.0), (2, 4.0), (3, 8.0), (4, 16.0), (5, 30.0), (6, 30.0), (10, 30.0)],
+    )
+    def test_backoff_progression(self, attempt: int, expected: float):
+        from src.receiver import _exponential_backoff_seconds
+
+        assert _exponential_backoff_seconds(attempt) == expected
+
+    def test_backoff_negative_attempt_clamped_to_zero(self):
+        from src.receiver import _exponential_backoff_seconds
+
+        assert _exponential_backoff_seconds(-5) == 1.0
+
+    def test_backoff_respects_custom_cap(self):
+        from src.receiver import _exponential_backoff_seconds
+
+        assert _exponential_backoff_seconds(10, cap=5) == 5.0
+
+
+class TestHandleOutOfOrderDeferral:
+    @pytest.fixture
+    def message(self):
+        msg = MagicMock()
+        msg.body = b"<Placeholder/>"
+        msg.ack = AsyncMock()
+        msg.reject = AsyncMock()
+        msg.headers = {}
+        return msg
+
+    @pytest.mark.asyncio
+    async def test_first_attempt_sleeps_1s_and_requeues(self, message, caplog):
+        from src.receiver import _handle_out_of_order_deferral
+
+        with (
+            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            caplog.at_level(logging.WARNING),
+        ):
+            await _handle_out_of_order_deferral(
+                "MailingUserUpdated",
+                message,
+                identifier_label="Mailing_ID__c",
+                identifier_value="abc-123",
+            )
+
+        mock_sleep.assert_awaited_once_with(1.0)
+        message.reject.assert_awaited_once_with(requeue=True)
+        assert "attempt 1/10" in caplog.text
+        assert "Mailing_ID__c=abc-123" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_sixth_attempt_caps_at_30s(self, message):
+        from src.receiver import _handle_out_of_order_deferral
+
+        message.headers = {"x-death": [{"count": 5, "reason": "rejected"}]}
+
+        with patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await _handle_out_of_order_deferral(
+                "PlanningUserUpdated",
+                message,
+                identifier_label="Planning_ID__c",
+                identifier_value="xyz-789",
+            )
+
+        mock_sleep.assert_awaited_once_with(30.0)
+        message.reject.assert_awaited_once_with(requeue=True)
+
+    @pytest.mark.asyncio
+    async def test_max_attempts_drops_without_requeue(self, message, caplog):
+        from src.receiver import _handle_out_of_order_deferral
+
+        message.headers = {"x-death": [{"count": 10, "reason": "rejected"}]}
+
+        with (
+            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            caplog.at_level(logging.WARNING),
+        ):
+            await _handle_out_of_order_deferral(
+                "MailingUserDeactivated",
+                message,
+                identifier_label="Mailing_ID__c",
+                identifier_value="dead-beef",
+            )
+
+        mock_sleep.assert_not_awaited()
+        message.reject.assert_awaited_once_with(requeue=False)
+        assert "deferred 10 times" in caplog.text
+        assert "dropping" in caplog.text
