@@ -217,6 +217,22 @@ async def _ensure_contact_active(sf: Salesforce, data: dict[str, Any]) -> dict[s
     return data
 
 
+async def apply_is_active(
+    sf: Salesforce, data: dict[str, Any], is_active: bool,
+) -> dict[str, Any]:
+    """Set the resolved Contact active field on a payload dict.
+
+    Used by producer-sync receivers (Mailing/Facturatie) that carry
+    authoritative `isActive` state from the source system.
+    """
+    active_field = await _resolve_contact_active_field_optional(sf)
+    if active_field is None:
+        return data
+
+    data[active_field] = is_active
+    return data
+
+
 async def _resolve_contact_active_field_optional(sf: Salesforce) -> str | None:
     """Resolve the optional Contact active field without requiring the migration."""
     global _active_field_cache  # noqa: PLW0603

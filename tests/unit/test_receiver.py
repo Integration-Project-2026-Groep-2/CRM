@@ -130,7 +130,7 @@ VALID_FACTURATIE_USER_CREATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <email>els.peeters@example.com</email>
     <phone>+32470111222</phone>
     <role>COMPANY_CONTACT</role>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
     <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
     <createdAt>2026-04-15T09:30:00Z</createdAt>
 </UserCreated>"""
@@ -154,7 +154,7 @@ VALID_MAILING_USER_CREATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <email>mia.mail@example.com</email>
     <firstName>Mia</firstName>
     <lastName>Mail</lastName>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
     <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
 </MailingUserCreated>"""
 
@@ -162,7 +162,7 @@ VALID_MAILING_USER_CREATED_MINIMAL_XML = b"""<?xml version='1.0' encoding='utf-8
 <MailingUserCreated>
     <id>323e4567-e89b-42d3-a456-426614174027</id>
     <email>mia.mail@example.com</email>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
 </MailingUserCreated>"""
 
 VALID_MAILING_USER_UPDATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
@@ -171,7 +171,7 @@ VALID_MAILING_USER_UPDATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <email>mia.updated@example.com</email>
     <firstName>Mila</firstName>
     <lastName>Updated</lastName>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
     <companyId>f4e5d6c7-b8a9-4012-8f34-ab5678cd9012</companyId>
 </MailingUserUpdated>"""
 
@@ -179,7 +179,7 @@ VALID_MAILING_USER_UPDATED_MINIMAL_XML = b"""<?xml version='1.0' encoding='utf-8
 <MailingUserUpdated>
     <id>323e4567-e89b-42d3-a456-426614174027</id>
     <email>mia.updated@example.com</email>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
 </MailingUserUpdated>"""
 
 VALID_MAILING_USER_DEACTIVATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
@@ -1112,23 +1112,33 @@ class TestHandlePlanningUserCreated:
             msg.reject.assert_called_once_with(requeue=False)
 
     @pytest.mark.asyncio
-    async def test_facturatie_user_created_without_gdpr_consent_rejected(self, sf_mock, caplog):
-        invalid_gdpr_xml = VALID_FACTURATIE_USER_CREATED_XML.replace(
-            b"<gdprConsent>true</gdprConsent>",
-            b"<gdprConsent>false</gdprConsent>",
+    async def test_facturatie_user_created_inactive_publishes_deactivated(self, sf_mock, caplog):
+        inactive_xml = VALID_FACTURATIE_USER_CREATED_XML.replace(
+            b"<isActive>true</isActive>",
+            b"<isActive>false</isActive>",
         )
-        parsed_xml = etree.fromstring(invalid_gdpr_xml)
+        parsed_xml = etree.fromstring(inactive_xml)
+        inactive_contact = {**FACTURATIE_CONTACT_RETURN, "IsActive__c": False}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            caplog.at_level(logging.WARNING),
+            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.receiver.apply_is_active", side_effect=lambda _sf, data, flag: {**data, "IsActive__c": flag}),
+            patch("src.receiver.create_contact", return_value=inactive_contact) as mock_create,
+            patch("src.sender.publish_user_confirmed") as mock_confirmed,
+            caplog.at_level(logging.INFO),
         ):
             from src.receiver import handle_facturatie_user_created
 
-            msg = _make_message(invalid_gdpr_xml)
+            msg = _make_message(inactive_xml)
             await handle_facturatie_user_created(msg, sf_mock)
 
-            msg.reject.assert_called_once_with(requeue=False)
-            assert "FacturatieUserCreated refused — gdprConsent=false" in caplog.text
+            create_payload = mock_create.call_args.args[1]
+            assert create_payload["IsActive__c"] is False
+            mock_confirmed.assert_called_once()
+            confirmed_payload = mock_confirmed.call_args.args[0]
+            assert confirmed_payload["isActive"] is False
+            msg.ack.assert_called_once()
+            assert "isActive=False" in caplog.text
 
     @pytest.mark.asyncio
     async def test_facturatie_user_created_publish_failure_requeues(self, sf_mock):
@@ -1845,23 +1855,35 @@ class TestHandleMailingUserCreated:
             msg.reject.assert_called_once_with(requeue=False)
 
     @pytest.mark.asyncio
-    async def test_mailing_user_created_without_gdpr_consent_rejected(self, sf_mock, caplog):
-        invalid_gdpr_xml = VALID_MAILING_USER_CREATED_XML.replace(
-            b"<gdprConsent>true</gdprConsent>",
-            b"<gdprConsent>false</gdprConsent>",
+    async def test_mailing_user_created_inactive_creates_inactive_contact(self, sf_mock, caplog):
+        inactive_xml = VALID_MAILING_USER_CREATED_XML.replace(
+            b"<isActive>true</isActive>",
+            b"<isActive>false</isActive>",
         )
-        parsed_xml = etree.fromstring(invalid_gdpr_xml)
+        parsed_xml = etree.fromstring(inactive_xml)
+        inactive_contact = {**MAILING_CONTACT_RETURN, "IsActive__c": False}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            caplog.at_level(logging.WARNING),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.receiver.apply_is_active", side_effect=lambda _sf, data, flag: {**data, "IsActive__c": flag}),
+            patch("src.receiver.create_contact", return_value=inactive_contact) as mock_create,
+            patch("src.sender.publish_user_confirmed") as mock_confirmed,
+            caplog.at_level(logging.INFO),
         ):
             from src.receiver import handle_mailing_user_created
 
-            msg = _make_message(invalid_gdpr_xml)
+            msg = _make_message(inactive_xml)
             await handle_mailing_user_created(msg, sf_mock)
 
-            msg.reject.assert_called_once_with(requeue=False)
-            assert "MailingUserCreated refused — gdprConsent=false" in caplog.text
+            create_payload = mock_create.call_args.args[1]
+            assert create_payload["IsActive__c"] is False
+            mock_confirmed.assert_called_once()
+            confirmed_payload = mock_confirmed.call_args.args[0]
+            assert confirmed_payload["isActive"] is False
+            msg.ack.assert_called_once()
+            assert "isActive=False" in caplog.text
 
     @pytest.mark.asyncio
     async def test_ambiguous_email_is_acked_without_publish(self, sf_mock, caplog):
@@ -2187,23 +2209,37 @@ class TestHandleMailingUserUpdated:
             assert "email mia.updated@example.com is ambiguous" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_mailing_user_updated_without_gdpr_consent_rejected(self, sf_mock, caplog):
-        invalid_gdpr_xml = VALID_MAILING_USER_UPDATED_XML.replace(
-            b"<gdprConsent>true</gdprConsent>",
-            b"<gdprConsent>false</gdprConsent>",
+    async def test_mailing_user_updated_inactive_deactivates_contact(self, sf_mock, caplog):
+        inactive_xml = VALID_MAILING_USER_UPDATED_XML.replace(
+            b"<isActive>true</isActive>",
+            b"<isActive>false</isActive>",
         )
-        parsed_xml = etree.fromstring(invalid_gdpr_xml)
+        parsed_xml = etree.fromstring(inactive_xml)
+        existing_contact = {**MAILING_CONTACT_RETURN}
+        deactivated_contact = {**existing_contact, "IsActive__c": False}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            caplog.at_level(logging.WARNING),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact),
+            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
+            patch("src.receiver.update_mailing_contact") as mock_update,
+            patch("src.sender.publish_user_deactivated") as mock_deactivated_publish,
+            patch("src.sender.publish_user_updated") as mock_updated_publish,
+            caplog.at_level(logging.INFO),
         ):
             from src.receiver import handle_mailing_user_updated
 
-            msg = _make_message(invalid_gdpr_xml)
+            msg = _make_message(inactive_xml)
             await handle_mailing_user_updated(msg, sf_mock)
 
-            msg.reject.assert_called_once_with(requeue=False)
-            assert "MailingUserUpdated refused — gdprConsent=false" in caplog.text
+            mock_deactivate.assert_called_once()
+            mock_update.assert_not_called()
+            mock_deactivated_publish.assert_called_once()
+            mock_updated_publish.assert_not_called()
+            msg.ack.assert_called_once()
+            assert "isActive=false on update" in caplog.text
 
     @pytest.mark.asyncio
     async def test_publish_failure_requeues(self, sf_mock):

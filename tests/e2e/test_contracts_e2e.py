@@ -538,7 +538,7 @@ class TestContract27MailingUserCreated:
     <email>{email}</email>
     <firstName>Mailing</firstName>
     <lastName>User</lastName>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
     <companyId>{company_id}</companyId>
 </MailingUserCreated>"""
 
@@ -601,7 +601,7 @@ class TestContract27MailingUserCreated:
     <email>{email}</email>
     <firstName>Different</firstName>
     <lastName>User</lastName>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
 </MailingUserCreated>"""
 
         await _publish(inbound_exchanges["user.topic"], "mailing.user.created", mailing_xml)
@@ -650,7 +650,7 @@ class TestContract28MailingUserUpdated:
     <email>{email}</email>
     <firstName>Before</firstName>
     <lastName>Update</lastName>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
     <companyId>{company_id}</companyId>
 </MailingUserCreated>"""
 
@@ -668,7 +668,7 @@ class TestContract28MailingUserUpdated:
     <id>{mailing_id}</id>
     <email>{email}</email>
     <firstName>After</firstName>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
 </MailingUserUpdated>"""
 
         await _publish(inbound_exchanges["user.topic"], "mailing.user.updated", update_xml)
@@ -719,7 +719,7 @@ class TestContract29MailingUserDeactivated:
     <email>{email}</email>
     <firstName>Before</firstName>
     <lastName>Deactivate</lastName>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
 </MailingUserCreated>"""
 
         await _publish(inbound_exchanges["user.topic"], "mailing.user.created", create_xml)
