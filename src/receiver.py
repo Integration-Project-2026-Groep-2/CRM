@@ -7,6 +7,7 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 import aio_pika
+import aiormq
 from aio_pika import ExchangeType
 from aio_pika.abc import AbstractChannel, AbstractRobustConnection
 from lxml import etree
@@ -128,6 +129,11 @@ async def _republish_with_retry_count(
     queue's binding) and the next handler invocation reads the updated
     counter via `_delivery_attempt_count`.
 
+    Implementation note: `aio_pika.IncomingMessage.channel` returns the raw
+    `aiormq.Channel` (not the aio-pika wrapper), so we use the low-level
+    `basic_publish` directly with an `aiormq.spec.Basic.Properties` struct.
+    No exchange declare is needed — the broker already knows the exchange.
+
     Trade-off: message_id and timestamp are regenerated per retry, and the
     AMQP `redelivered` flag no longer reflects retries. We don't rely on
     either, so this is acceptable.
@@ -135,22 +141,19 @@ async def _republish_with_retry_count(
     headers = dict(message.headers or {})
     headers["x-retry-count"] = new_count
 
-    new_message = aio_pika.Message(
-        body=message.body,
-        headers=headers,
+    properties = aiormq.spec.Basic.Properties(
         content_type=message.content_type,
         content_encoding=message.content_encoding,
+        headers=headers,
         delivery_mode=message.delivery_mode,
     )
 
-    exchange_name = message.exchange or ""
-    channel = message.channel
-    if exchange_name:
-        exchange = await channel.declare_exchange(exchange_name, passive=True)
-    else:
-        exchange = channel.default_exchange
-
-    await exchange.publish(new_message, routing_key=message.routing_key)
+    await message.channel.basic_publish(
+        body=message.body,
+        exchange=message.exchange or "",
+        routing_key=message.routing_key or "",
+        properties=properties,
+    )
     await message.ack()
 
 
