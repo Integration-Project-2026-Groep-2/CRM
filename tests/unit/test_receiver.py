@@ -31,19 +31,17 @@ def _make_message(body: bytes) -> MagicMock:
     msg.body = body
     msg.ack = AsyncMock()
     msg.reject = AsyncMock()
-    # Required by _republish_with_retry_count: declare_exchange + publish are awaited.
-    # Tests that care about republish behaviour mock it out explicitly; this stub
-    # just prevents TypeErrors for the majority that don't.
+    # Required by _republish_with_retry_count: the low-level aiormq channel's
+    # basic_publish is awaited. Tests that care about republish behaviour assert
+    # on it explicitly; this stub just prevents TypeErrors for the rest.
     msg.headers = None
     msg.content_type = "application/xml"
     msg.content_encoding = None
     msg.delivery_mode = 2
     msg.exchange = "user.topic"
     msg.routing_key = "test.rk"
-    _stub_exchange = MagicMock()
-    _stub_exchange.publish = AsyncMock()
     msg.channel = MagicMock()
-    msg.channel.declare_exchange = AsyncMock(return_value=_stub_exchange)
+    msg.channel.basic_publish = AsyncMock()
     return msg
 
 
@@ -4329,12 +4327,11 @@ class TestRepublishWithRetryCount:
         msg.exchange = "user.topic"
         msg.routing_key = "mailing.user.updated"
 
-        mock_exchange = MagicMock()
-        mock_exchange.publish = AsyncMock()
+        # aio-pika exposes the raw aiormq.Channel through IncomingMessage.channel;
+        # that's the surface that basic_publish is called on directly.
         mock_channel = MagicMock()
-        mock_channel.declare_exchange = AsyncMock(return_value=mock_exchange)
+        mock_channel.basic_publish = AsyncMock()
         msg.channel = mock_channel
-        msg._mock_exchange = mock_exchange
         return msg
 
     @pytest.mark.asyncio
@@ -4343,13 +4340,15 @@ class TestRepublishWithRetryCount:
 
         await _republish_with_retry_count(message, 3)
 
-        message.channel.declare_exchange.assert_awaited_once_with("user.topic", passive=True)
-        message._mock_exchange.publish.assert_awaited_once()
-        call = message._mock_exchange.publish.await_args
-        new_msg = call.args[0]
+        message.channel.basic_publish.assert_awaited_once()
+        call = message.channel.basic_publish.await_args
+        assert call.kwargs["exchange"] == "user.topic"
         assert call.kwargs["routing_key"] == "mailing.user.updated"
-        assert new_msg.headers["x-retry-count"] == 3
-        assert new_msg.body == b"<Placeholder/>"
+        assert call.kwargs["body"] == b"<Placeholder/>"
+        props = call.kwargs["properties"]
+        assert props.headers["x-retry-count"] == 3
+        assert props.content_type == "application/xml"
+        assert props.delivery_mode == 2
 
     @pytest.mark.asyncio
     async def test_acks_original_message(self, message):
@@ -4367,20 +4366,17 @@ class TestRepublishWithRetryCount:
 
         await _republish_with_retry_count(message, 2)
 
-        new_msg = message._mock_exchange.publish.await_args.args[0]
-        assert new_msg.headers["custom-header"] == "preserved-value"
-        assert new_msg.headers["x-retry-count"] == 2
+        props = message.channel.basic_publish.await_args.kwargs["properties"]
+        assert props.headers["custom-header"] == "preserved-value"
+        assert props.headers["x-retry-count"] == 2
 
     @pytest.mark.asyncio
-    async def test_uses_default_exchange_when_source_empty(self, message):
+    async def test_uses_empty_string_exchange_when_source_empty(self, message):
         from src.receiver import _republish_with_retry_count
 
         message.exchange = ""
-        default_exchange = MagicMock()
-        default_exchange.publish = AsyncMock()
-        message.channel.default_exchange = default_exchange
 
         await _republish_with_retry_count(message, 1)
 
-        message.channel.declare_exchange.assert_not_awaited()
-        default_exchange.publish.assert_awaited_once()
+        call = message.channel.basic_publish.await_args
+        assert call.kwargs["exchange"] == ""
