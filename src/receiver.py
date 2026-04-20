@@ -89,17 +89,19 @@ def _is_rate_limit_error(exc: Exception) -> bool:
 
 
 def _delivery_attempt_count(message: aio_pika.IncomingMessage) -> int:
-    """Return how often RabbitMQ has re-delivered this message (x-death header)."""
+    """Return the retry count stored in our custom `x-retry-count` header.
+
+    RabbitMQ does not track retry counts on classic queues when messages
+    are requeued via basic.reject(requeue=True). We therefore maintain the
+    counter ourselves: each time a handler requeues a message, it ack's
+    the original and publishes a fresh copy with `x-retry-count` bumped
+    by one (see `_republish_with_retry_count`).
+    """
     headers = message.headers or {}
-    x_death = headers.get("x-death")
-    if isinstance(x_death, list) and x_death:
-        first = x_death[0]
-        if isinstance(first, dict):
-            try:
-                return int(first.get("count", 0))
-            except (TypeError, ValueError):
-                return 0
-    return 0
+    try:
+        return int(headers.get("x-retry-count", 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _exponential_backoff_seconds(attempt: int, cap: int = _BACKOFF_CAP_SECONDS) -> float:
@@ -112,6 +114,46 @@ def _exponential_backoff_seconds(attempt: int, cap: int = _BACKOFF_CAP_SECONDS) 
     return float(min(2 ** attempt, cap))
 
 
+async def _republish_with_retry_count(
+    message: aio_pika.IncomingMessage, new_count: int,
+) -> None:
+    """Ack the current message and publish a fresh copy with updated retry count.
+
+    RabbitMQ's `basic.reject(requeue=True)` does not add tracking metadata
+    to the requeued message, so we cannot count retries via the AMQP
+    `x-death` header unless dead-lettering is configured. Instead, we ack
+    the current delivery and publish a new copy of the payload to the same
+    exchange+routing_key with an incremented `x-retry-count` header. The
+    fresh message lands back in the same queue (RabbitMQ routes it via the
+    queue's binding) and the next handler invocation reads the updated
+    counter via `_delivery_attempt_count`.
+
+    Trade-off: message_id and timestamp are regenerated per retry, and the
+    AMQP `redelivered` flag no longer reflects retries. We don't rely on
+    either, so this is acceptable.
+    """
+    headers = dict(message.headers or {})
+    headers["x-retry-count"] = new_count
+
+    new_message = aio_pika.Message(
+        body=message.body,
+        headers=headers,
+        content_type=message.content_type,
+        content_encoding=message.content_encoding,
+        delivery_mode=message.delivery_mode,
+    )
+
+    exchange_name = message.exchange or ""
+    channel = message.channel
+    if exchange_name:
+        exchange = await channel.declare_exchange(exchange_name, passive=True)
+    else:
+        exchange = channel.default_exchange
+
+    await exchange.publish(new_message, routing_key=message.routing_key)
+    await message.ack()
+
+
 async def _handle_processing_error(
     contract: str, message: aio_pika.IncomingMessage, exc: Exception,
 ) -> None:
@@ -119,7 +161,8 @@ async def _handle_processing_error(
 
     - Salesforce rate-limit → sleep then drop (no requeue, no self-DOS).
     - Max retries exceeded → drop without requeue.
-    - Otherwise: exponential backoff, then requeue for another attempt.
+    - Otherwise: exponential backoff, then republish with incremented retry
+      count so the next attempt reads the correct counter.
     """
     if _is_rate_limit_error(exc):
         logger.error(
@@ -143,7 +186,7 @@ async def _handle_processing_error(
         contract, attempts + 1, _MAX_REQUEUE_ATTEMPTS, sleep_s, exc,
     )
     await asyncio.sleep(sleep_s)
-    await message.reject(requeue=True)
+    await _republish_with_retry_count(message, attempts + 1)
 
 
 async def _handle_out_of_order_deferral(
@@ -162,6 +205,9 @@ async def _handle_out_of_order_deferral(
 
     Drops the message after _MAX_DEFERRAL_ATTEMPTS retries — at that point the
     create almost certainly never arrived and further retries are pointless.
+
+    Uses `_republish_with_retry_count` so the retry counter survives across
+    deliveries (see that helper's docstring for rationale).
     """
     attempts = _delivery_attempt_count(message)
     if attempts >= _MAX_DEFERRAL_ATTEMPTS:
@@ -178,7 +224,7 @@ async def _handle_out_of_order_deferral(
         identifier_label, identifier_value, sleep_s,
     )
     await asyncio.sleep(sleep_s)
-    await message.reject(requeue=True)
+    await _republish_with_retry_count(message, attempts + 1)
 
 
 async def _declare_and_bind(

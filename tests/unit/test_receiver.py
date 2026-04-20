@@ -31,6 +31,19 @@ def _make_message(body: bytes) -> MagicMock:
     msg.body = body
     msg.ack = AsyncMock()
     msg.reject = AsyncMock()
+    # Required by _republish_with_retry_count: declare_exchange + publish are awaited.
+    # Tests that care about republish behaviour mock it out explicitly; this stub
+    # just prevents TypeErrors for the majority that don't.
+    msg.headers = None
+    msg.content_type = "application/xml"
+    msg.content_encoding = None
+    msg.delivery_mode = 2
+    msg.exchange = "user.topic"
+    msg.routing_key = "test.rk"
+    _stub_exchange = MagicMock()
+    _stub_exchange.publish = AsyncMock()
+    msg.channel = MagicMock()
+    msg.channel.declare_exchange = AsyncMock(return_value=_stub_exchange)
     return msg
 
 
@@ -592,7 +605,10 @@ class TestHandleRegistration:
             await handle_registration(msg, sf_mock)
 
             mock_publish.assert_not_called()
-            msg.reject.assert_called_once_with(requeue=True)
+            # Transient error → republish acks original + publishes new copy
+            # with incremented x-retry-count (instead of raw reject(requeue=True)).
+            msg.ack.assert_awaited_once()
+            msg.reject.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_invalid_xml_rejected(self, sf_mock, caplog):
@@ -724,7 +740,10 @@ class TestHandleRegistration:
             await handle_registration(msg, sf_mock)
 
             mock_create.assert_not_called()
-            msg.reject.assert_called_once_with(requeue=True)
+            # Transient error → republish acks original + publishes new copy
+            # with incremented x-retry-count (instead of raw reject(requeue=True)).
+            msg.ack.assert_awaited_once()
+            msg.reject.assert_not_called()
 
 
 # ==========================================================================
@@ -1154,7 +1173,10 @@ class TestHandlePlanningUserCreated:
             msg = _make_message(VALID_FACTURATIE_USER_CREATED_XML)
             await handle_facturatie_user_created(msg, sf_mock)
 
-            msg.reject.assert_called_once_with(requeue=True)
+            # Transient error → republish acks original + publishes new copy
+            # with incremented x-retry-count (instead of raw reject(requeue=True)).
+            msg.ack.assert_awaited_once()
+            msg.reject.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_unique_match_state_is_not_treated_as_ambiguous(self, sf_mock):
@@ -1936,7 +1958,10 @@ class TestHandleMailingUserCreated:
             msg = _make_message(conflicting_xml)
             await handle_mailing_user_created(msg, sf_mock)
 
-            msg.reject.assert_called_once_with(requeue=True)
+            # Transient error → republish acks original + publishes new copy
+            # with incremented x-retry-count (instead of raw reject(requeue=True)).
+            msg.ack.assert_awaited_once()
+            msg.reject.assert_not_called()
 
 
 # ==========================================================================
@@ -2107,6 +2132,7 @@ class TestHandleMailingUserUpdated:
             patch("src.receiver.has_contact_mailing_id_field", return_value=True),
             patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
+            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
             caplog.at_level(logging.WARNING),
@@ -2118,7 +2144,8 @@ class TestHandleMailingUserUpdated:
 
             mock_publish.assert_not_called()
             mock_conflict.assert_not_called()
-            msg.reject.assert_called_once_with(requeue=True)
+            mock_republish.assert_awaited_once_with(msg, 1)
+            msg.reject.assert_not_called()
             assert "MailingUserUpdated deferred" in caplog.text
             assert "Mailing_ID__c" in caplog.text
 
@@ -2263,7 +2290,10 @@ class TestHandleMailingUserUpdated:
             msg = _make_message(VALID_MAILING_USER_UPDATED_XML)
             await handle_mailing_user_updated(msg, sf_mock)
 
-            msg.reject.assert_called_once_with(requeue=True)
+            # Transient error → republish acks original + publishes new copy
+            # with incremented x-retry-count (instead of raw reject(requeue=True)).
+            msg.ack.assert_awaited_once()
+            msg.reject.assert_not_called()
 
 
 # ==========================================================================
@@ -2350,6 +2380,7 @@ class TestHandlePlanningUserUpdated:
             patch("src.receiver.has_contact_planning_id_field", return_value=True),
             patch("src.receiver.get_contact_match_by_planning_id", return_value=("none", None)),
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
+            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.receiver.get_contact_match_by_email") as mock_email_lookup,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
@@ -2363,7 +2394,8 @@ class TestHandlePlanningUserUpdated:
             mock_email_lookup.assert_not_called()
             mock_publish.assert_not_called()
             mock_conflict.assert_not_called()
-            msg.reject.assert_called_once_with(requeue=True)
+            mock_republish.assert_awaited_once_with(msg, 1)
+            msg.reject.assert_not_called()
             assert "PlanningUserUpdated deferred" in caplog.text
             assert "Planning_ID__c" in caplog.text
 
@@ -2500,7 +2532,10 @@ class TestHandlePlanningUserUpdated:
             msg = _make_message(VALID_PLANNING_USER_UPDATED_XML)
             await handle_planning_user_updated(msg, sf_mock)
 
-            msg.reject.assert_called_once_with(requeue=True)
+            # Transient error → republish acks original + publishes new copy
+            # with incremented x-retry-count (instead of raw reject(requeue=True)).
+            msg.ack.assert_awaited_once()
+            msg.reject.assert_not_called()
 
 
 # ==========================================================================
@@ -2580,6 +2615,7 @@ class TestHandlePlanningUserDeactivated:
             patch("src.receiver.has_contact_planning_id_field", return_value=True),
             patch("src.receiver.get_contact_match_by_planning_id", return_value=("none", None)),
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
+            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -2589,7 +2625,8 @@ class TestHandlePlanningUserDeactivated:
             await handle_planning_user_deactivated(msg, sf_mock)
 
             mock_publish.assert_not_called()
-            msg.reject.assert_called_once_with(requeue=True)
+            mock_republish.assert_awaited_once_with(msg, 1)
+            msg.reject.assert_not_called()
             assert "PlanningUserDeactivated deferred" in caplog.text
             assert "Planning_ID__c" in caplog.text
 
@@ -2716,7 +2753,10 @@ class TestHandlePlanningUserDeactivated:
             await handle_planning_user_deactivated(msg, sf_mock)
 
             mock_publish.assert_not_called()
-            msg.reject.assert_called_once_with(requeue=True)
+            # Transient error → republish acks original + publishes new copy
+            # with incremented x-retry-count (instead of raw reject(requeue=True)).
+            msg.ack.assert_awaited_once()
+            msg.reject.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_publish_failure_requeues(self, sf_mock):
@@ -2740,7 +2780,10 @@ class TestHandlePlanningUserDeactivated:
             msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
             await handle_planning_user_deactivated(msg, sf_mock)
 
-            msg.reject.assert_called_once_with(requeue=True)
+            # Transient error → republish acks original + publishes new copy
+            # with incremented x-retry-count (instead of raw reject(requeue=True)).
+            msg.ack.assert_awaited_once()
+            msg.reject.assert_not_called()
 
 
 # ==========================================================================
@@ -2821,6 +2864,7 @@ class TestHandleMailingUserDeactivated:
             patch("src.receiver.has_contact_mailing_id_field", return_value=True),
             patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
+            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -2830,7 +2874,8 @@ class TestHandleMailingUserDeactivated:
             await handle_mailing_user_deactivated(msg, sf_mock)
 
             mock_publish.assert_not_called()
-            msg.reject.assert_called_once_with(requeue=True)
+            mock_republish.assert_awaited_once_with(msg, 1)
+            msg.reject.assert_not_called()
             assert "MailingUserDeactivated deferred" in caplog.text
             assert "Mailing_ID__c" in caplog.text
 
@@ -2957,7 +3002,10 @@ class TestHandleMailingUserDeactivated:
             await handle_mailing_user_deactivated(msg, sf_mock)
 
             mock_publish.assert_not_called()
-            msg.reject.assert_called_once_with(requeue=True)
+            # Transient error → republish acks original + publishes new copy
+            # with incremented x-retry-count (instead of raw reject(requeue=True)).
+            msg.ack.assert_awaited_once()
+            msg.reject.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_publish_failure_requeues(self, sf_mock):
@@ -2981,7 +3029,10 @@ class TestHandleMailingUserDeactivated:
             msg = _make_message(VALID_MAILING_USER_DEACTIVATED_XML)
             await handle_mailing_user_deactivated(msg, sf_mock)
 
-            msg.reject.assert_called_once_with(requeue=True)
+            # Transient error → republish acks original + publishes new copy
+            # with incremented x-retry-count (instead of raw reject(requeue=True)).
+            msg.ack.assert_awaited_once()
+            msg.reject.assert_not_called()
 
 
 # ==========================================================================
@@ -3491,7 +3542,10 @@ class TestHandleRegistrationUpdated:
             await handle_registration_updated(msg, sf_mock)
 
             mock_publish.assert_not_called()
-            msg.reject.assert_called_once_with(requeue=True)
+            # Transient error → republish acks original + publishes new copy
+            # with incremented x-retry-count (instead of raw reject(requeue=True)).
+            msg.ack.assert_awaited_once()
+            msg.reject.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_publish_failure_on_update_requeues(self, sf_mock):
@@ -3508,7 +3562,10 @@ class TestHandleRegistrationUpdated:
             msg = _make_message(VALID_UPDATE_XML)
             await handle_registration_updated(msg, sf_mock)
 
-            msg.reject.assert_called_once_with(requeue=True)
+            # Transient error → republish acks original + publishes new copy
+            # with incremented x-retry-count (instead of raw reject(requeue=True)).
+            msg.ack.assert_awaited_once()
+            msg.reject.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_publish_failure_on_cancel_requeues(self, sf_mock):
@@ -3534,7 +3591,10 @@ class TestHandleRegistrationUpdated:
             msg = _make_message(VALID_CANCEL_XML)
             await handle_registration_updated(msg, sf_mock)
 
-            msg.reject.assert_called_once_with(requeue=True)
+            # Transient error → republish acks original + publishes new copy
+            # with incremented x-retry-count (instead of raw reject(requeue=True)).
+            msg.ack.assert_awaited_once()
+            msg.reject.assert_not_called()
 
 
 SESSION_PARTICIPANTS = [
@@ -3653,7 +3713,10 @@ class TestHandleSessionUpdated:
             msg = _make_message(VALID_SESSION_UPDATED_XML)
             await handle_session_updated(msg, sf_mock)
 
-            msg.reject.assert_called_once_with(requeue=True)
+            # Transient error → republish acks original + publishes new copy
+            # with incremented x-retry-count (instead of raw reject(requeue=True)).
+            msg.ack.assert_awaited_once()
+            msg.reject.assert_not_called()
 
 
 # ==========================================================================
@@ -3737,7 +3800,10 @@ class TestHandlePaymentConfirmed:
             msg = _make_message(VALID_PAYMENT_XML)
             await handle_payment_confirmed(msg, sf_mock)
 
-            msg.reject.assert_called_once_with(requeue=True)
+            # Transient error → republish acks original + publishes new copy
+            # with incremented x-retry-count (instead of raw reject(requeue=True)).
+            msg.ack.assert_awaited_once()
+            msg.reject.assert_not_called()
 
 
 class TestHandleUnpaidRequested:
@@ -3815,7 +3881,10 @@ class TestHandleUnpaidRequested:
             msg = _make_message(VALID_UNPAID_REQUEST_XML)
             await handle_unpaid_requested(msg, sf_mock)
 
-            msg.reject.assert_called_once_with(requeue=True)
+            # Transient error → republish acks original + publishes new copy
+            # with incremented x-retry-count (instead of raw reject(requeue=True)).
+            msg.ack.assert_awaited_once()
+            msg.reject.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_unpaid_requested_publish_error_requeues(self, sf_mock):
@@ -3830,7 +3899,10 @@ class TestHandleUnpaidRequested:
             msg = _make_message(VALID_UNPAID_REQUEST_XML)
             await handle_unpaid_requested(msg, sf_mock)
 
-            msg.reject.assert_called_once_with(requeue=True)
+            # Transient error → republish acks original + publishes new copy
+            # with incremented x-retry-count (instead of raw reject(requeue=True)).
+            msg.ack.assert_awaited_once()
+            msg.reject.assert_not_called()
 
 
 class TestRunReceiver:
@@ -4081,20 +4153,40 @@ class TestHandleProcessingError:
 
         with (
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             caplog.at_level(logging.ERROR),
         ):
             await _handle_processing_error("MailingUserUpdated", message, RuntimeError("boom"))
 
         mock_sleep.assert_awaited_once_with(1.0)
-        message.reject.assert_awaited_once_with(requeue=True)
+        mock_republish.assert_awaited_once_with(message, 1)
+        message.reject.assert_not_awaited()
         assert "attempt 1/5" in caplog.text
         assert "sleeping 1.0s" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_transient_error_progression_reads_retry_count(self, message, caplog):
+        """After 3 previous retries, next attempt uses 2**3 = 8s backoff."""
+        from src.receiver import _handle_processing_error
+
+        message.headers = {"x-retry-count": 3}
+
+        with (
+            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+            caplog.at_level(logging.ERROR),
+        ):
+            await _handle_processing_error("MailingUserUpdated", message, RuntimeError("still broken"))
+
+        mock_sleep.assert_awaited_once_with(8.0)
+        mock_republish.assert_awaited_once_with(message, 4)
+        assert "attempt 4/5" in caplog.text
 
     @pytest.mark.asyncio
     async def test_max_retry_drops_without_requeue(self, message, caplog):
         from src.receiver import _handle_processing_error
 
-        message.headers = {"x-death": [{"count": 5, "reason": "rejected"}]}
+        message.headers = {"x-retry-count": 5}
 
         with caplog.at_level(logging.ERROR):
             await _handle_processing_error("MailingUserUpdated", message, RuntimeError("persistent failure"))
@@ -4135,11 +4227,12 @@ class TestHandleOutOfOrderDeferral:
         return msg
 
     @pytest.mark.asyncio
-    async def test_first_attempt_sleeps_1s_and_requeues(self, message, caplog):
+    async def test_first_attempt_sleeps_1s_and_republishes(self, message, caplog):
         from src.receiver import _handle_out_of_order_deferral
 
         with (
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             caplog.at_level(logging.WARNING),
         ):
             await _handle_out_of_order_deferral(
@@ -4150,7 +4243,8 @@ class TestHandleOutOfOrderDeferral:
             )
 
         mock_sleep.assert_awaited_once_with(1.0)
-        message.reject.assert_awaited_once_with(requeue=True)
+        mock_republish.assert_awaited_once_with(message, 1)
+        message.reject.assert_not_awaited()
         assert "attempt 1/10" in caplog.text
         assert "Mailing_ID__c=abc-123" in caplog.text
 
@@ -4158,9 +4252,12 @@ class TestHandleOutOfOrderDeferral:
     async def test_sixth_attempt_caps_at_30s(self, message):
         from src.receiver import _handle_out_of_order_deferral
 
-        message.headers = {"x-death": [{"count": 5, "reason": "rejected"}]}
+        message.headers = {"x-retry-count": 5}
 
-        with patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        with (
+            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+        ):
             await _handle_out_of_order_deferral(
                 "PlanningUserUpdated",
                 message,
@@ -4169,16 +4266,40 @@ class TestHandleOutOfOrderDeferral:
             )
 
         mock_sleep.assert_awaited_once_with(30.0)
-        message.reject.assert_awaited_once_with(requeue=True)
+        mock_republish.assert_awaited_once_with(message, 6)
+        message.reject.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_attempt_counter_read_from_x_retry_count_header(self, message):
+        """Verify the counter comes from the new header, not x-death."""
+        from src.receiver import _handle_out_of_order_deferral
+
+        # x-death present but should be ignored; only x-retry-count matters.
+        message.headers = {"x-retry-count": 3, "x-death": [{"count": 99}]}
+
+        with (
+            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+        ):
+            await _handle_out_of_order_deferral(
+                "MailingUserDeactivated",
+                message,
+                identifier_label="Mailing_ID__c",
+                identifier_value="tick-tock",
+            )
+
+        mock_sleep.assert_awaited_once_with(8.0)
+        mock_republish.assert_awaited_once_with(message, 4)
 
     @pytest.mark.asyncio
     async def test_max_attempts_drops_without_requeue(self, message, caplog):
         from src.receiver import _handle_out_of_order_deferral
 
-        message.headers = {"x-death": [{"count": 10, "reason": "rejected"}]}
+        message.headers = {"x-retry-count": 10}
 
         with (
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             caplog.at_level(logging.WARNING),
         ):
             await _handle_out_of_order_deferral(
@@ -4189,6 +4310,77 @@ class TestHandleOutOfOrderDeferral:
             )
 
         mock_sleep.assert_not_awaited()
+        mock_republish.assert_not_awaited()
         message.reject.assert_awaited_once_with(requeue=False)
         assert "deferred 10 times" in caplog.text
         assert "dropping" in caplog.text
+
+
+class TestRepublishWithRetryCount:
+    @pytest.fixture
+    def message(self):
+        msg = MagicMock()
+        msg.body = b"<Placeholder/>"
+        msg.ack = AsyncMock()
+        msg.headers = {}
+        msg.content_type = "application/xml"
+        msg.content_encoding = None
+        msg.delivery_mode = 2
+        msg.exchange = "user.topic"
+        msg.routing_key = "mailing.user.updated"
+
+        mock_exchange = MagicMock()
+        mock_exchange.publish = AsyncMock()
+        mock_channel = MagicMock()
+        mock_channel.declare_exchange = AsyncMock(return_value=mock_exchange)
+        msg.channel = mock_channel
+        msg._mock_exchange = mock_exchange
+        return msg
+
+    @pytest.mark.asyncio
+    async def test_publishes_with_incremented_header(self, message):
+        from src.receiver import _republish_with_retry_count
+
+        await _republish_with_retry_count(message, 3)
+
+        message.channel.declare_exchange.assert_awaited_once_with("user.topic", passive=True)
+        message._mock_exchange.publish.assert_awaited_once()
+        call = message._mock_exchange.publish.await_args
+        new_msg = call.args[0]
+        assert call.kwargs["routing_key"] == "mailing.user.updated"
+        assert new_msg.headers["x-retry-count"] == 3
+        assert new_msg.body == b"<Placeholder/>"
+
+    @pytest.mark.asyncio
+    async def test_acks_original_message(self, message):
+        from src.receiver import _republish_with_retry_count
+
+        await _republish_with_retry_count(message, 1)
+
+        message.ack.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_preserves_existing_headers(self, message):
+        from src.receiver import _republish_with_retry_count
+
+        message.headers = {"custom-header": "preserved-value", "x-retry-count": 1}
+
+        await _republish_with_retry_count(message, 2)
+
+        new_msg = message._mock_exchange.publish.await_args.args[0]
+        assert new_msg.headers["custom-header"] == "preserved-value"
+        assert new_msg.headers["x-retry-count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_uses_default_exchange_when_source_empty(self, message):
+        from src.receiver import _republish_with_retry_count
+
+        message.exchange = ""
+        default_exchange = MagicMock()
+        default_exchange.publish = AsyncMock()
+        message.channel.default_exchange = default_exchange
+
+        await _republish_with_retry_count(message, 1)
+
+        message.channel.declare_exchange.assert_not_awaited()
+        default_exchange.publish.assert_awaited_once()
