@@ -14,21 +14,32 @@ from lxml import etree
 from src import sender, xml_validator
 from src.config import Config
 from src.salesforce_client import (
+    apply_is_active,
     backfill_mailing_contact_fields,
+    backfill_planning_contact_fields,
+    count_active_session_registrations,
     create_contact,
     deactivate_account_by_crm_id,
-    deactivate_contact,
     deactivate_contact_record,
+    deactivate_session_registration,
     ensure_contact_identifiers,
+    ensure_session_registration_active,
+    get_active_session_participants,
     get_contact_by_email,
     get_contact_match_by_email,
     get_contact_match_by_mailing_id,
+    get_contact_match_by_planning_id,
     get_salesforce_client,
+    get_session_registration_by_registration_id,
     get_unpaid_contacts,
     has_contact_mailing_id_field,
+    has_contact_planning_id_field,
+    has_session_registration_object,
     update_mailing_contact,
     update_payment_status,
+    update_planning_contact,
     upsert_contact_by_email,
+    upsert_session_registration,
 )
 
 if TYPE_CHECKING:
@@ -45,6 +56,9 @@ _INBOUND_EXCHANGE: dict[str, str] = {
     "mailing.user.created": "user.topic",
     "mailing.user.updated": "user.topic",
     "mailing.user.deactivated": "user.topic",
+    "planning.user.created": "user.topic",
+    "planning.user.updated": "user.topic",
+    "planning.user.deactivated": "user.topic",
     "facturatie.company.requested": "invoice.topic",
     "kassa.person.lookup.requested": "payment.topic",
     "kassa.payment.confirmed": "payment.topic",
@@ -114,6 +128,21 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     queue_mailing_user_deactivated = await _declare_and_bind(channel, "mailing.user.deactivated", durable=True)
     await queue_mailing_user_deactivated.consume(partial(handle_mailing_user_deactivated, sf=sf_client))
 
+    # Contract 30 — Planning → CRM: new Planning user sync
+    # Queue: planning.user.created | Exchange: user.topic | durable: true
+    queue_planning_user_created = await _declare_and_bind(channel, "planning.user.created", durable=True)
+    await queue_planning_user_created.consume(partial(handle_planning_user_created, sf=sf_client))
+
+    # Contract 31 — Planning → CRM: update existing Planning user sync
+    # Queue: planning.user.updated | Exchange: user.topic | durable: true
+    queue_planning_user_updated = await _declare_and_bind(channel, "planning.user.updated", durable=True)
+    await queue_planning_user_updated.consume(partial(handle_planning_user_updated, sf=sf_client))
+
+    # Contract 32 — Planning → CRM: deactivate existing Planning user sync
+    # Queue: planning.user.deactivated | Exchange: user.topic | durable: true
+    queue_planning_user_deactivated = await _declare_and_bind(channel, "planning.user.deactivated", durable=True)
+    await queue_planning_user_deactivated.consume(partial(handle_planning_user_deactivated, sf=sf_client))
+
     # Contract 3 — Frontend → CRM: create company
     # queue_company = await _declare_and_bind(channel, "frontend.company.created", durable=True)
     # await queue_company.consume(handle_company_created)
@@ -134,9 +163,10 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     queue_unpaid = await _declare_and_bind(channel, "kassa.unpaid.requested", durable=True)
     await queue_unpaid.consume(partial(handle_unpaid_requested, sf=sf_client))
 
-    # Contract 11 — Planning → CRM: session update (Release 2)
-    # queue_session = await _declare_and_bind(channel, "planning.session.updated", durable=True)
-    # await queue_session.consume(handle_session_updated)
+    # Contract 11 — Planning → CRM: session update
+    # Queue: planning.session.updated | Exchange: planning.topic | durable: true
+    queue_session = await _declare_and_bind(channel, "planning.session.updated", durable=True)
+    await queue_session.consume(partial(handle_session_updated, sf=sf_client))
 
     # Contract 12 — IoT → CRM: badge linked (Release 2)
     # queue_badge = await _declare_and_bind(channel, "iot.badge.linked", durable=True)
@@ -181,7 +211,8 @@ async def handle_payment_confirmed(
 
     Behaviour:
     - Validate XML against schema.
-    - Update Contact.Paid_At__c in Salesforce.
+    - Update the canonical session registration payment state in Salesforce.
+    - Sync Contact.Paid_At__c as a compatibility field.
     - Invalid XML: rejected without requeue.
     - Unknown/ambiguous Contact or registrationId mismatch: ack without retry.
     - Other errors: requeued.
@@ -249,6 +280,82 @@ async def handle_unpaid_requested(
         await message.reject(requeue=True)
 
 
+async def handle_session_updated(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 11 — Planning -> CRM: notify all active participants of a session change."""
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("SessionUpdate — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        if not await has_session_registration_object(sf):
+            logger.error(
+                "SessionUpdate rejected — Salesforce object Session_Registration__c is missing",
+            )
+            await message.reject(requeue=False)
+            return
+
+        session_id = xml.findtext("sessionId") or ""
+        session_name = xml.findtext("sessionName") or ""
+        change_type = xml.findtext("changeType") or ""
+        new_time = _normalize_optional_text(xml.findtext("newTime"))
+        new_location = _normalize_optional_text(xml.findtext("newLocation"))
+
+        participants = await get_active_session_participants(sf, session_id)
+        if not participants:
+            logger.info(
+                "SessionUpdate for sessionId=%s changeType=%s has no active participants",
+                session_id,
+                change_type,
+            )
+            await message.ack()
+            return
+
+        published_count = 0
+        for participant in participants:
+            email = _normalize_optional_text(participant.get("Email"))
+            if email is None:
+                logger.warning(
+                    "Skipping session update notification for sessionId=%s because participant %s has no email",
+                    session_id,
+                    participant.get("Id"),
+                )
+                continue
+
+            display_name = _build_mail_display_name(
+                participant.get("FirstName"),
+                participant.get("LastName"),
+                email,
+            )
+            recipient = {"email": email, "name": display_name}
+            dynamic_data = {
+                "guest_name": display_name,
+                "session_name": session_name,
+            }
+            if new_time is not None:
+                dynamic_data["session_time"] = new_time
+            if new_location is not None:
+                dynamic_data["session_location"] = new_location
+
+            await sender.publish_mail_requested("session_change", recipient, dynamic_data)
+            published_count += 1
+
+        logger.info(
+            "Published %s crm.mail.requested messages for sessionId=%s changeType=%s",
+            published_count,
+            session_id,
+            change_type,
+        )
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("SessionUpdate — error processing message: %s", exc)
+        await message.reject(requeue=True)
+
+
 def _get_contact_is_active(contact: dict) -> bool:
     """Return the normalized active flag across supported Salesforce field names."""
     for active_field in ("IsActive__c", "Active__c", "Is_Active__c"):
@@ -302,6 +409,45 @@ def _build_company_deactivation_data(account: dict, deactivated_at: str) -> dict
 def _build_full_name(first_name: str | None, last_name: str | None) -> str:
     """Build a display name from first/last name, skipping missing parts."""
     return f"{first_name or ''} {last_name or ''}".strip()
+
+
+def _build_mail_display_name(
+    first_name: str | None,
+    last_name: str | None,
+    email: str | None,
+) -> str:
+    """Build a non-empty display name for outbound mail requests."""
+    full_name = _build_full_name(first_name, last_name)
+    if full_name:
+        return full_name
+    return email or ""
+
+
+def _contact_has_native_identity(contact: dict) -> bool:
+    """Return whether the Contact is also owned by a native producer id."""
+    return any(
+        _normalize_optional_text(contact.get(field)) is not None
+        for field in ("Planning_ID__c", "Mailing_ID__c")
+    )
+
+
+def _registration_fields_are_compatible(contact: dict, xml: etree._Element) -> bool:
+    """Return whether a Contract 1 payload can safely reuse an existing Contact."""
+    comparisons = (
+        ("FirstName", xml.findtext("firstName")),
+        ("LastName", xml.findtext("lastName")),
+        ("Role__c", xml.findtext("role")),
+    )
+    for sf_field, incoming_value in comparisons:
+        normalized_existing = _normalize_optional_text(contact.get(sf_field))
+        normalized_incoming = _normalize_optional_text(incoming_value)
+        if (
+            normalized_existing is not None
+            and normalized_incoming is not None
+            and normalized_existing != normalized_incoming
+        ):
+            return False
+    return True
 
 
 def _normalize_optional_text(value: str | None) -> str | None:
@@ -450,6 +596,433 @@ def _get_mailing_backfill_kwargs(contact: dict, xml: etree._Element) -> dict[str
     return kwargs
 
 
+def _build_planning_contact_data(xml: etree._Element) -> dict:
+    """Map Contract 30 XML fields to Salesforce Contact fields."""
+    contact_data = {
+        "Planning_ID__c": xml.findtext("id"),
+        "Email": xml.findtext("email"),
+        "FirstName": xml.findtext("firstName"),
+        "LastName": xml.findtext("lastName"),
+        "Role__c": xml.findtext("role"),
+        "GDPR_Consent__c": True,
+    }
+
+    phone_number = _normalize_optional_text(xml.findtext("phoneNumber"))
+    if phone_number is not None:
+        contact_data["Phone"] = phone_number
+
+    return contact_data
+
+
+def _planning_user_has_conflicting_data(contact: dict, xml: etree._Element) -> bool:
+    """Detect conflicting immutable profile data for Planning create-link logic."""
+    if _has_conflicting_optional_value(contact.get("FirstName"), xml.findtext("firstName")):
+        return True
+    if _has_conflicting_optional_value(contact.get("LastName"), xml.findtext("lastName")):
+        return True
+    if _has_conflicting_optional_value(contact.get("Role__c"), xml.findtext("role")):
+        return True
+    return _has_conflicting_optional_value(contact.get("Phone"), xml.findtext("phoneNumber"))
+
+
+def _build_planning_user_conflict_data(email: str, contact: dict, xml: etree._Element) -> dict:
+    """Build a Contract 15 payload from an existing Contact and incoming Planning payload."""
+    return {
+        "email": email,
+        "existingValue": _build_conflict_value(
+            contact.get("FirstName"),
+            contact.get("LastName"),
+            contact.get("Company_ID__c"),
+        ),
+        "incomingValue": _build_conflict_value(
+            xml.findtext("firstName"),
+            xml.findtext("lastName"),
+            xml.findtext("company"),
+        ),
+        "detectedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+async def handle_planning_user_created(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 30 — Planning -> CRM: create or attach a Planning user identity.
+
+    Queue: planning.user.created | durable: true
+
+    Behaviour:
+    - Validate XML against schema.
+    - Reject users without GDPR consent.
+    - Resolve users primarily by Planning_ID__c (stable producer identifier).
+    - Only use email as a secondary bootstrap key for safe first-time linking.
+    - Persist Planning_ID__c on Contact for future idempotent matching.
+    - Publish crm.user.confirmed or crm.user.conflict as needed.
+    - Invalid XML: rejected without requeue.
+    - Ambiguous Contacts: ack without retry.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("PlanningUserCreated — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        email = xml.findtext("email") or ""
+        planning_id = xml.findtext("id") or ""
+        gdpr_text = xml.findtext("gdprConsent")
+        if gdpr_text not in ("true", "1"):
+            logger.warning(
+                "PlanningUserCreated refused — gdprConsent=%s for email %s",
+                gdpr_text,
+                email,
+            )
+            await message.reject(requeue=False)
+            return
+
+        if not await has_contact_planning_id_field(sf):
+            logger.error(
+                "PlanningUserCreated rejected — Salesforce Contact field Planning_ID__c is missing",
+            )
+            await message.reject(requeue=False)
+            return
+
+        planning_match_status, existing_by_planning_id = await get_contact_match_by_planning_id(sf, planning_id)
+        if planning_match_status == "ambiguous":
+            logger.warning(
+                "PlanningUserCreated ignored — ambiguous Planning_ID__c %s in Salesforce",
+                planning_id,
+            )
+            await message.ack()
+            return
+
+        if planning_match_status == "unique":
+            existing_contact = existing_by_planning_id
+
+            existing_email = _normalize_email_for_compare(existing_contact.get("Email"))
+            incoming_email = _normalize_email_for_compare(email)
+            if existing_email is not None and existing_email != incoming_email:
+                logger.warning(
+                    "PlanningUserCreated conflict — Planning ID %s already linked to email %s",
+                    planning_id,
+                    existing_contact.get("Email"),
+                )
+                await sender.publish_user_conflict(
+                    _build_planning_user_conflict_data(email, existing_contact, xml)
+                )
+                await message.ack()
+                return
+
+            if existing_contact.get("GDPR_Consent__c") is False:
+                logger.warning(
+                    "PlanningUserCreated conflict — email %s already has explicit GDPR opt-out",
+                    email,
+                )
+                await sender.publish_user_conflict(
+                    _build_planning_user_conflict_data(email, existing_contact, xml)
+                )
+                await message.ack()
+                return
+
+            if _planning_user_has_conflicting_data(existing_contact, xml):
+                logger.warning(
+                    "PlanningUserCreated conflict — Planning ID %s exists with conflicting profile data",
+                    planning_id,
+                )
+                await sender.publish_user_conflict(
+                    _build_planning_user_conflict_data(email, existing_contact, xml)
+                )
+                await message.ack()
+                return
+
+            contact = await ensure_contact_identifiers(
+                sf,
+                existing_contact,
+                planning_id=planning_id,
+            )
+            contact = await backfill_planning_contact_fields(
+                sf,
+                contact,
+                first_name=xml.findtext("firstName") or "",
+                last_name=xml.findtext("lastName") or "",
+                role=xml.findtext("role") or "VISITOR",
+                phone_number=_normalize_optional_text(xml.findtext("phoneNumber")),
+                gdpr_consent=True,
+            )
+            await sender.publish_user_confirmed(_build_user_data(contact))
+            logger.info("Published crm.user.confirmed for existing Planning user %s", email)
+            await message.ack()
+            return
+
+        # No Planning_ID__c match yet: only a one-time safe bootstrap via unique email.
+        email_match_status, existing_by_email = await get_contact_match_by_email(sf, email)
+        if email_match_status == "ambiguous":
+            logger.warning(
+                "PlanningUserCreated ignored — ambiguous email %s in Salesforce",
+                email,
+            )
+            await message.ack()
+            return
+
+        if email_match_status == "none":
+            contact = await create_contact(sf, _build_planning_contact_data(xml))
+            await sender.publish_user_confirmed(_build_user_data(contact))
+            logger.info("Published crm.user.confirmed for new Planning user %s", email)
+            await message.ack()
+            return
+
+        existing_contact = existing_by_email
+        existing_planning_id = _normalize_optional_text(existing_contact.get("Planning_ID__c"))
+        if existing_planning_id is not None and existing_planning_id != planning_id:
+            logger.warning(
+                "PlanningUserCreated conflict — email %s already linked to Planning ID %s",
+                email,
+                existing_planning_id,
+            )
+            await sender.publish_user_conflict(
+                _build_planning_user_conflict_data(email, existing_contact, xml)
+            )
+            await message.ack()
+            return
+
+        if existing_contact.get("GDPR_Consent__c") is False:
+            logger.warning(
+                "PlanningUserCreated conflict — email %s already has explicit GDPR opt-out",
+                email,
+            )
+            await sender.publish_user_conflict(
+                _build_planning_user_conflict_data(email, existing_contact, xml)
+            )
+            await message.ack()
+            return
+
+        if _planning_user_has_conflicting_data(existing_contact, xml):
+            logger.warning(
+                "PlanningUserCreated conflict — email %s already exists with differing data",
+                email,
+            )
+            await sender.publish_user_conflict(
+                _build_planning_user_conflict_data(email, existing_contact, xml)
+            )
+            await message.ack()
+            return
+
+        contact = await ensure_contact_identifiers(
+            sf,
+            existing_contact,
+            planning_id=planning_id,
+        )
+        contact = await backfill_planning_contact_fields(
+            sf,
+            contact,
+            first_name=xml.findtext("firstName") or "",
+            last_name=xml.findtext("lastName") or "",
+            role=xml.findtext("role") or "VISITOR",
+            phone_number=_normalize_optional_text(xml.findtext("phoneNumber")),
+            gdpr_consent=True,
+        )
+        await sender.publish_user_confirmed(_build_user_data(contact))
+        logger.info("Published crm.user.confirmed for linked Planning user %s", email)
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("PlanningUserCreated — error processing message: %s", exc)
+        await message.reject(requeue=True)
+
+
+async def handle_planning_user_updated(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 31 — Planning -> CRM: update an existing Planning-linked user.
+
+    Queue: planning.user.updated | durable: true
+
+    Behaviour:
+    - Validate XML against schema.
+    - Reject users without GDPR consent.
+    - Resolve the Contact strictly by Planning_ID__c.
+    - Requeue unknown Planning identities so out-of-order create/update can recover.
+    - Ack ambiguous Planning identities without retry.
+    - Publish crm.user.conflict on email collisions.
+    - Update Planning-owned fields authoritatively in Salesforce.
+    - Publish crm.user.updated after a successful update.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("PlanningUserUpdated — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        email = xml.findtext("email") or ""
+        planning_id = xml.findtext("id") or ""
+        gdpr_text = xml.findtext("gdprConsent")
+        if gdpr_text not in ("true", "1"):
+            logger.warning(
+                "PlanningUserUpdated refused — gdprConsent=%s for email %s",
+                gdpr_text,
+                email,
+            )
+            await message.reject(requeue=False)
+            return
+
+        if not await has_contact_planning_id_field(sf):
+            logger.error(
+                "PlanningUserUpdated rejected — Salesforce Contact field Planning_ID__c is missing",
+            )
+            await message.reject(requeue=False)
+            return
+
+        planning_match_status, existing_contact = await get_contact_match_by_planning_id(sf, planning_id)
+        if planning_match_status == "none":
+            logger.warning(
+                "PlanningUserUpdated deferred — no Contact found for Planning_ID__c %s; retrying for possible out-of-order create/update",
+                planning_id,
+            )
+            await message.reject(requeue=True)
+            return
+
+        if planning_match_status == "ambiguous":
+            logger.warning(
+                "PlanningUserUpdated ignored — ambiguous Planning_ID__c %s in Salesforce",
+                planning_id,
+            )
+            await message.ack()
+            return
+
+        email_match_status, existing_by_email = await get_contact_match_by_email(sf, email)
+        if email_match_status == "ambiguous":
+            logger.warning(
+                "PlanningUserUpdated conflict — email %s is ambiguous in Salesforce",
+                email,
+            )
+            await sender.publish_user_conflict(
+                _build_planning_user_conflict_data(email, existing_contact, xml)
+            )
+            await message.ack()
+            return
+
+        if email_match_status == "unique" and existing_by_email["Id"] != existing_contact["Id"]:
+            logger.warning(
+                "PlanningUserUpdated conflict — email %s already linked to another Contact",
+                email,
+            )
+            await sender.publish_user_conflict(
+                _build_planning_user_conflict_data(email, existing_by_email, xml)
+            )
+            await message.ack()
+            return
+
+        contact = await ensure_contact_identifiers(
+            sf,
+            existing_contact,
+            planning_id=planning_id,
+        )
+        contact = await update_planning_contact(
+            sf,
+            contact,
+            email=email,
+            first_name=xml.findtext("firstName") or "",
+            last_name=xml.findtext("lastName") or "",
+            role=xml.findtext("role") or "VISITOR",
+            phone_number=_normalize_optional_text(xml.findtext("phoneNumber")),
+        )
+        await sender.publish_user_updated(_build_updated_user_data(contact))
+        logger.info("Published crm.user.updated for Planning user %s", email)
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("PlanningUserUpdated — error processing message: %s", exc)
+        await message.reject(requeue=True)
+
+
+async def handle_planning_user_deactivated(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 32 — Planning -> CRM: deactivate an existing Planning-linked user.
+
+    Queue: planning.user.deactivated | durable: true
+
+    Behaviour:
+    - Validate XML against schema.
+    - Require Salesforce support for Planning_ID__c.
+    - Resolve the Contact strictly by Planning_ID__c.
+    - Requeue unknown Planning identities so out-of-order create/deactivate can recover.
+    - Ack ambiguous Planning identities without retry.
+    - Trust Planning_ID__c over a stale payload email, but log the mismatch.
+    - Perform a soft delete only and publish crm.user.deactivated.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("PlanningUserDeactivated — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        email = xml.findtext("email") or ""
+        planning_id = xml.findtext("id") or ""
+        deactivated_at = xml.findtext("deactivatedAt") or ""
+
+        if not await has_contact_planning_id_field(sf):
+            logger.error(
+                "PlanningUserDeactivated rejected — Salesforce Contact field Planning_ID__c is missing",
+            )
+            await message.reject(requeue=False)
+            return
+
+        planning_match_status, existing_contact = await get_contact_match_by_planning_id(sf, planning_id)
+        if planning_match_status == "none":
+            logger.warning(
+                "PlanningUserDeactivated deferred — no Contact found for Planning_ID__c %s; retrying for possible out-of-order create/deactivate",
+                planning_id,
+            )
+            await message.reject(requeue=True)
+            return
+
+        if planning_match_status == "ambiguous":
+            logger.warning(
+                "PlanningUserDeactivated ignored — ambiguous Planning_ID__c %s in Salesforce",
+                planning_id,
+            )
+            await message.ack()
+            return
+
+        contact = await ensure_contact_identifiers(
+            sf,
+            existing_contact,
+            planning_id=planning_id,
+        )
+
+        existing_email = _normalize_email_for_compare(contact.get("Email"))
+        incoming_email = _normalize_email_for_compare(email)
+        if existing_email is not None and incoming_email is not None and existing_email != incoming_email:
+            logger.warning(
+                "PlanningUserDeactivated email mismatch — Planning_ID__c %s resolved to %s but payload contained %s; proceeding with soft delete",
+                planning_id,
+                contact.get("Email"),
+                email,
+            )
+
+        contact = await deactivate_contact_record(
+            sf,
+            contact,
+            log_value=f"Planning_ID__c {planning_id}",
+        )
+        await sender.publish_user_deactivated(
+            _build_user_deactivation_data(contact, deactivated_at)
+        )
+        logger.info("Published crm.user.deactivated for Planning_ID__c %s", planning_id)
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("PlanningUserDeactivated — error processing message: %s", exc)
+        await message.reject(requeue=True)
+
+
 async def handle_mailing_user_created(
     message: aio_pika.IncomingMessage, sf: "Salesforce"
 ) -> None:
@@ -459,9 +1032,11 @@ async def handle_mailing_user_created(
 
     Behaviour:
     - Validate XML against schema.
-    - Reject users without GDPR consent.
+    - Mirror Mailing's `isActive` flag to the Contact active field.
     - Create a new Contact when the email and Mailing ID are new.
     - Reuse a unique existing Contact when the Mailing payload is idempotent.
+    - When `isActive=false` reaches an existing Contact, deactivate it and
+      publish crm.user.deactivated instead of crm.user.confirmed.
     - Publish crm.user.conflict when the email already exists with conflicting data.
     - Invalid XML: rejected without requeue.
     - Ambiguous Contacts: ack without retry.
@@ -477,15 +1052,7 @@ async def handle_mailing_user_created(
     try:
         email = xml.findtext("email") or ""
         mailing_id = xml.findtext("id") or ""
-        gdpr_text = xml.findtext("gdprConsent")
-        if gdpr_text not in ("true", "1"):
-            logger.warning(
-                "MailingUserCreated refused — gdprConsent=%s for email %s",
-                gdpr_text,
-                email,
-            )
-            await message.reject(requeue=False)
-            return
+        is_active = xml.findtext("isActive") in ("true", "1")
 
         if not await has_contact_mailing_id_field(sf):
             logger.error(
@@ -517,9 +1084,16 @@ async def handle_mailing_user_created(
                 return
 
             if email_match_status == "none":
-                contact = await create_contact(sf, _build_mailing_contact_data(xml))
+                contact_data = _build_mailing_contact_data(xml)
+                if not is_active:
+                    contact_data = await apply_is_active(sf, contact_data, False)
+                contact = await create_contact(sf, contact_data)
                 await sender.publish_user_confirmed(_build_user_data(contact))
-                logger.info("Published crm.user.confirmed for new Mailing user %s", email)
+                logger.info(
+                    "Published crm.user.confirmed for new Mailing user %s (isActive=%s)",
+                    email,
+                    is_active,
+                )
                 await message.ack()
                 return
 
@@ -613,6 +1187,20 @@ async def handle_mailing_user_created(
             contact,
             **_get_mailing_backfill_kwargs(contact, xml),
         )
+        if not is_active:
+            contact = await deactivate_contact_record(
+                sf, contact, log_value=f"Mailing_ID__c {mailing_id}",
+            )
+            deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            await sender.publish_user_deactivated(
+                _build_user_deactivation_data(contact, deactivated_at),
+            )
+            logger.info(
+                "Published crm.user.deactivated for existing Mailing user %s (isActive=false on create)",
+                email,
+            )
+            await message.ack()
+            return
         await sender.publish_user_confirmed(_build_user_data(contact))
         logger.info("Published crm.user.confirmed for existing Mailing user %s", email)
         await message.ack()
@@ -630,13 +1218,13 @@ async def handle_mailing_user_updated(
 
     Behaviour:
     - Validate XML against schema.
-    - Reject users without GDPR consent.
     - Resolve the Contact strictly by Mailing_ID__c.
     - Requeue unknown Mailing identities so out-of-order create/update can recover.
     - Ack ambiguous Mailing identities without retry.
     - Publish crm.user.conflict on email collisions.
-    - Update Mailing-owned fields authoritatively in Salesforce.
-    - Publish crm.user.updated after a successful update.
+    - If `isActive=false`, soft-delete the Contact and publish crm.user.deactivated.
+    - Otherwise update Mailing-owned fields authoritatively in Salesforce,
+      reactivate when needed, and publish crm.user.updated.
     - Invalid XML: rejected without requeue.
     - Other errors: requeued.
     """
@@ -650,15 +1238,7 @@ async def handle_mailing_user_updated(
     try:
         email = xml.findtext("email") or ""
         mailing_id = xml.findtext("id") or ""
-        gdpr_text = xml.findtext("gdprConsent")
-        if gdpr_text not in ("true", "1"):
-            logger.warning(
-                "MailingUserUpdated refused — gdprConsent=%s for email %s",
-                gdpr_text,
-                email,
-            )
-            await message.reject(requeue=False)
-            return
+        is_active = xml.findtext("isActive") in ("true", "1")
 
         if not await has_contact_mailing_id_field(sf):
             logger.error(
@@ -712,6 +1292,21 @@ async def handle_mailing_user_updated(
             existing_contact,
             mailing_id=mailing_id,
         )
+        if not is_active:
+            contact = await deactivate_contact_record(
+                sf, contact, log_value=f"Mailing_ID__c {mailing_id}",
+            )
+            deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            await sender.publish_user_deactivated(
+                _build_user_deactivation_data(contact, deactivated_at),
+            )
+            logger.info(
+                "Published crm.user.deactivated for Mailing user %s (isActive=false on update)",
+                email,
+            )
+            await message.ack()
+            return
+
         contact = await update_mailing_contact(
             sf,
             contact,
@@ -720,6 +1315,17 @@ async def handle_mailing_user_updated(
             last_name=_get_mailing_last_name_for_contact(xml),
             company_id=_normalize_optional_text(xml.findtext("companyId")),
         )
+        if not _get_contact_is_active(contact):
+            reactivation_update = await apply_is_active(sf, {}, True)
+            if reactivation_update:
+                contact_id = contact["Id"]
+                await asyncio.to_thread(sf.Contact.update, contact_id, reactivation_update)
+                contact = await asyncio.to_thread(sf.Contact.get, contact_id)
+                logger.info(
+                    "Reactivated Contact %s for Mailing user %s (isActive=true on update)",
+                    contact_id,
+                    email,
+                )
         await sender.publish_user_updated(_build_updated_user_data(contact))
         logger.info("Published crm.user.updated for Mailing user %s", email)
         await message.ack()
@@ -822,9 +1428,11 @@ async def handle_facturatie_user_created(
 
     Behaviour:
     - Validate XML against schema.
-    - Reject users without GDPR consent.
-    - Reuse an existing unique Contact after ensuring canonical identifiers.
-    - Create a new Contact when no Contact exists yet.
+    - Mirror Facturatie's `isActive` flag to the Contact active field on create.
+    - Reuse an existing unique Contact after ensuring canonical identifiers;
+      deactivate it when `isActive=false` arrives for an existing Contact.
+    - Create a new Contact when no Contact exists yet (inactive if
+      `isActive=false`).
     - Do not publish crm.mail.requested for this flow.
     - Invalid XML: rejected without requeue.
     - Ambiguous Contacts: ack without retry.
@@ -839,15 +1447,7 @@ async def handle_facturatie_user_created(
 
     try:
         email = xml.findtext("email") or ""
-        gdpr_text = xml.findtext("gdprConsent")
-        if gdpr_text not in ("true", "1"):
-            logger.warning(
-                "FacturatieUserCreated refused — gdprConsent=%s for email %s",
-                gdpr_text,
-                email,
-            )
-            await message.reject(requeue=False)
-            return
+        is_active = xml.findtext("isActive") in ("true", "1")
 
         registration_id = xml.findtext("registrationId")
         match_status, existing_contact = await get_contact_match_by_email(sf, email)
@@ -857,6 +1457,20 @@ async def handle_facturatie_user_created(
                 existing_contact,
                 registration_id=registration_id,
             )
+            if not is_active:
+                contact = await deactivate_contact_record(
+                    sf, contact, log_value=email,
+                )
+                deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                await sender.publish_user_deactivated(
+                    _build_user_deactivation_data(contact, deactivated_at),
+                )
+                logger.info(
+                    "Published crm.user.deactivated for existing Facturatie user %s (isActive=false)",
+                    email,
+                )
+                await message.ack()
+                return
             await sender.publish_user_confirmed(_build_user_data(contact))
             logger.info("Published crm.user.confirmed for existing Facturatie user %s", email)
             await message.ack()
@@ -888,9 +1502,15 @@ async def handle_facturatie_user_created(
         if company_id:
             contact_data["Company_ID__c"] = company_id
 
+        if not is_active:
+            contact_data = await apply_is_active(sf, contact_data, False)
         contact = await create_contact(sf, contact_data)
         await sender.publish_user_confirmed(_build_user_data(contact))
-        logger.info("Published crm.user.confirmed for new Facturatie user %s", email)
+        logger.info(
+            "Published crm.user.confirmed for new Facturatie user %s (isActive=%s)",
+            email,
+            is_active,
+        )
         await message.ack()
     except Exception as exc:  # noqa: BLE001
         logger.error("FacturatieUserCreated — error processing message: %s", exc)
@@ -919,10 +1539,19 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
 
     try:
         email = xml.findtext("email")
+        registration_id = xml.findtext("registrationId") or ""
+        session_id = xml.findtext("sessionId") or ""
 
         gdpr_text = xml.findtext("gdprConsent")
         if gdpr_text not in ("true", "1"):
             logger.warning("Registration refused — gdprConsent=%s for email %s", gdpr_text, email)
+            await message.reject(requeue=False)
+            return
+
+        if not await has_session_registration_object(sf):
+            logger.error(
+                "Registration rejected — Salesforce object Session_Registration__c is missing",
+            )
             await message.reject(requeue=False)
             return
 
@@ -937,29 +1566,75 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
         existing_contact = await get_contact_by_email(sf, email)
 
         if existing_contact:
-            reg_id_incoming = xml.findtext("registrationId")
-            reg_id_existing = existing_contact.get("Registration_ID__c")
-            
-            if reg_id_incoming == reg_id_existing:
+            existing_session_registration = await get_session_registration_by_registration_id(
+                sf,
+                registration_id,
+            )
+
+            if (
+                existing_session_registration is not None
+                and existing_session_registration.get("Is_Active__c") is not False
+            ):
                 # Retry na publish failure -> opnieuw publishen
-                logger.info("Retry for registrationId %s — republishing", reg_id_incoming)
+                logger.info("Retry for registrationId %s — republishing", registration_id)
 
                 await sender.publish_user_confirmed(_build_user_data(existing_contact))
-                
+
                 # C6: Publish mail request
-                full_name = _build_full_name(
+                full_name = _build_mail_display_name(
                     existing_contact.get("FirstName"),
                     existing_contact.get("LastName"),
+                    email,
                 )
-                
+
                 recipient = {"email": email, "name": full_name}
                 dynamic_data = {"guest_name": full_name}
                 await sender.publish_mail_requested("registration_confirmation", recipient, dynamic_data)
 
                 await message.ack()
                 return
+            if existing_session_registration is not None:
+                logger.info(
+                    "Reactivating inactive registrationId %s via normal registration flow",
+                    registration_id,
+                )
 
-            logger.warning("Conflict: email %s exists with different registrationId", email)
+            if not _registration_fields_are_compatible(existing_contact, xml):
+                logger.warning(
+                    "Conflict: email %s exists with incompatible person fields for registrationId %s",
+                    email,
+                    registration_id,
+                )
+                await message.ack()
+                return
+
+            contact = await ensure_contact_identifiers(
+                sf,
+                existing_contact,
+                registration_id=registration_id,
+            )
+            await upsert_session_registration(
+                sf,
+                registration_id=registration_id,
+                session_id=session_id,
+                contact_id=contact["Id"],
+            )
+
+            logger.info(
+                "Reusing existing Salesforce Contact for email=%s registrationId=%s",
+                email,
+                registration_id,
+            )
+            await sender.publish_user_confirmed(_build_user_data(contact))
+
+            full_name = _build_mail_display_name(
+                contact.get("FirstName"),
+                contact.get("LastName"),
+                email,
+            )
+            recipient = {"email": email, "name": full_name}
+            dynamic_data = {"guest_name": full_name}
+            await sender.publish_mail_requested("registration_confirmation", recipient, dynamic_data)
             await message.ack()
             return
 
@@ -970,7 +1645,7 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
             "Email": email,
             "Role__c": xml.findtext("role"),
             "GDPR_Consent__c": xml.findtext("gdprConsent") in ("true", "1"),
-            "Registration_ID__c": xml.findtext("registrationId"),
+            "Registration_ID__c": registration_id,
         }
 
         phone = xml.findtext("phone")
@@ -978,21 +1653,27 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
             contact_data["Phone"] = phone
 
         # Company mapping deferred to Contract 3 (aparte taak)
-        # TODO: sessionId mapping needed for Contract 2
 
         logger.info("Creating new Salesforce Contact for %s", email)
         contact = await create_contact(sf, contact_data)
+        await upsert_session_registration(
+            sf,
+            registration_id=registration_id,
+            session_id=session_id,
+            contact_id=contact["Id"],
+        )
 
         # Publish crm.user.confirmed
         await sender.publish_user_confirmed(_build_user_data(contact))
         logger.info("Published crm.user.confirmed for %s", email)
 
         # Contract 6 (R1 scope) — publish registration_confirmation
-        full_name = _build_full_name(
+        full_name = _build_mail_display_name(
             contact_data.get("FirstName"),
             contact_data.get("LastName"),
+            email,
         )
-        
+
         recipient = {"email": email, "name": full_name}
         dynamic_data = {"guest_name": full_name}
         await sender.publish_mail_requested("registration_confirmation", recipient, dynamic_data)
@@ -1053,9 +1734,12 @@ async def handle_registration_updated(message: aio_pika.IncomingMessage, sf: "Sa
     Behaviour:
     - Validate XML against schema (<RegistrationChange>).
     - Branch on changeType:
-        updated   → Upsert Contact in Salesforce, publish crm.user.updated (C18).
-        cancelled → Soft-delete Contact (IsActive__c=false), publish crm.user.deactivated (C22).
-    - Cancellation is always a soft delete — never physically remove (GDPR).
+        updated   → Upsert Contact in Salesforce, keep the session registration active,
+                    publish crm.user.updated (C18).
+        cancelled → Soft-delete the session registration first; only soft-delete the
+                    Contact and publish crm.user.deactivated (C22) when no active
+                    registrations remain.
+    - Contact removal remains soft delete only — never physically remove (GDPR).
     - Invalid XML: rejected without requeue.
     - Other errors: requeued.
     """
@@ -1079,7 +1763,7 @@ async def handle_registration_updated(message: aio_pika.IncomingMessage, sf: "Sa
         if change_type == "updated":
             await _handle_update(xml, email, sf, message)
         elif change_type == "cancelled":
-            await _handle_cancellation(email, sf, message)
+            await _handle_cancellation(xml, email, sf, message)
         else:
             # XSD validation should prevent this, but defence-in-depth
             logger.error("Unknown changeType '%s' for email %s — rejecting", change_type, email)
@@ -1094,6 +1778,13 @@ async def _handle_update(
     xml: etree._Element, email: str, sf: "Salesforce", message: aio_pika.IncomingMessage
 ) -> None:
     """Process changeType=updated: upsert Contact and publish crm.user.updated."""
+    if not await has_session_registration_object(sf):
+        logger.error(
+            "RegistrationChange updated rejected — Salesforce object Session_Registration__c is missing",
+        )
+        await message.reject(requeue=False)
+        return
+
     update_data: dict = {}
 
     updated_fields = xml.find("updatedFields")
@@ -1112,6 +1803,14 @@ async def _handle_update(
                 update_data[sf_field] = value
 
     contact = await upsert_contact_by_email(sf, email, update_data)
+    registration_id = _normalize_optional_text(xml.findtext("registrationId"))
+    session_id = xml.findtext("sessionId") or ""
+    await ensure_session_registration_active(
+        sf,
+        contact_id=contact["Id"],
+        session_id=session_id,
+        registration_id=registration_id,
+    )
 
     await sender.publish_user_updated(_build_updated_user_data(contact))
     logger.info("Published crm.user.updated for %s", email)
@@ -1119,10 +1818,22 @@ async def _handle_update(
 
 
 async def _handle_cancellation(
-    email: str, sf: "Salesforce", message: aio_pika.IncomingMessage
+    xml: etree._Element,
+    email: str,
+    sf: "Salesforce",
+    message: aio_pika.IncomingMessage,
 ) -> None:
-    """Process changeType=cancelled: soft-delete Contact and publish crm.user.deactivated."""
-    contact = await deactivate_contact(sf, email)
+    """Process changeType=cancelled: deactivate registration, maybe Contact."""
+    if not await has_session_registration_object(sf):
+        logger.error(
+            "RegistrationChange cancelled rejected — Salesforce object Session_Registration__c is missing",
+        )
+        await message.reject(requeue=False)
+        return
+
+    session_id = xml.findtext("sessionId") or ""
+    registration_id = _normalize_optional_text(xml.findtext("registrationId"))
+    contact = await get_contact_by_email(sf, email)
 
     if contact is None:
         # Contact doesn't exist — nothing to deactivate. Ack to prevent infinite requeue.
@@ -1130,6 +1841,46 @@ async def _handle_cancellation(
         await message.ack()
         return
 
+    deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    session_registration = await deactivate_session_registration(
+        sf,
+        registration_id=registration_id,
+        contact_id=contact["Id"],
+        session_id=session_id,
+    )
+    if session_registration is None:
+        remaining_registrations = await count_active_session_registrations(sf, contact["Id"])
+        native_identity = _contact_has_native_identity(contact)
+        if remaining_registrations > 0 or native_identity:
+            logger.warning(
+                "Cancellation for %s session %s has no Session_Registration__c row — skipping legacy Contact fallback; remaining_active_registrations=%s native_identity=%s",
+                email,
+                session_id,
+                remaining_registrations,
+                native_identity,
+            )
+            await message.ack()
+            return
+
+        logger.warning(
+            "Cancellation for %s session %s has no Session_Registration__c row — using legacy Contact fallback",
+            email,
+            session_id,
+        )
+    else:
+        remaining_registrations = await count_active_session_registrations(sf, contact["Id"])
+        native_identity = _contact_has_native_identity(contact)
+        if remaining_registrations > 0 or native_identity:
+            logger.info(
+                "Cancelled registration for %s without deactivating Contact; remaining_active_registrations=%s native_identity=%s",
+                email,
+                remaining_registrations,
+                native_identity,
+            )
+            await message.ack()
+            return
+
+    contact = await deactivate_contact_record(sf, contact, log_value=email)
     deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     deactivation_data = _build_user_deactivation_data(contact, deactivated_at)
     await sender.publish_user_deactivated(deactivation_data)

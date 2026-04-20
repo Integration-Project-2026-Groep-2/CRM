@@ -5,6 +5,9 @@ Contract 1 + 13: frontend.registration.created → crm.user.confirmed
 Contract 24: facturatie.user.created → crm.user.confirmed
 Contract 27 + 15: mailing.user.created → crm.user.confirmed / crm.user.conflict
 Contract 28: mailing.user.updated → crm.user.updated / crm.user.conflict
+Contract 30 + 13 + 15: planning.user.created → crm.user.confirmed / crm.user.conflict
+Contract 31 + 18 + 15: planning.user.updated → crm.user.updated / crm.user.conflict
+Contract 32 + 22: planning.user.deactivated → crm.user.deactivated
 """
 
 import logging
@@ -127,7 +130,7 @@ VALID_FACTURATIE_USER_CREATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <email>els.peeters@example.com</email>
     <phone>+32470111222</phone>
     <role>COMPANY_CONTACT</role>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
     <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
     <createdAt>2026-04-15T09:30:00Z</createdAt>
 </UserCreated>"""
@@ -151,7 +154,7 @@ VALID_MAILING_USER_CREATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <email>mia.mail@example.com</email>
     <firstName>Mia</firstName>
     <lastName>Mail</lastName>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
     <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
 </MailingUserCreated>"""
 
@@ -159,7 +162,7 @@ VALID_MAILING_USER_CREATED_MINIMAL_XML = b"""<?xml version='1.0' encoding='utf-8
 <MailingUserCreated>
     <id>323e4567-e89b-42d3-a456-426614174027</id>
     <email>mia.mail@example.com</email>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
 </MailingUserCreated>"""
 
 VALID_MAILING_USER_UPDATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
@@ -168,7 +171,7 @@ VALID_MAILING_USER_UPDATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <email>mia.updated@example.com</email>
     <firstName>Mila</firstName>
     <lastName>Updated</lastName>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
     <companyId>f4e5d6c7-b8a9-4012-8f34-ab5678cd9012</companyId>
 </MailingUserUpdated>"""
 
@@ -176,7 +179,7 @@ VALID_MAILING_USER_UPDATED_MINIMAL_XML = b"""<?xml version='1.0' encoding='utf-8
 <MailingUserUpdated>
     <id>323e4567-e89b-42d3-a456-426614174027</id>
     <email>mia.updated@example.com</email>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
 </MailingUserUpdated>"""
 
 VALID_MAILING_USER_DEACTIVATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
@@ -185,6 +188,37 @@ VALID_MAILING_USER_DEACTIVATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <email>mia.mail@example.com</email>
     <deactivatedAt>2026-04-15T16:00:00Z</deactivatedAt>
 </MailingUserDeactivated>"""
+
+VALID_PLANNING_USER_CREATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<PlanningUserCreated>
+    <id>423e4567-e89b-42d3-a456-426614174030</id>
+    <email>sofie.declercq@example.com</email>
+    <firstName>Sofie</firstName>
+    <lastName>Declercq</lastName>
+    <role>SPEAKER</role>
+    <gdprConsent>true</gdprConsent>
+    <phoneNumber>+32470123456</phoneNumber>
+    <company>Desideriushogeschool</company>
+</PlanningUserCreated>"""
+
+VALID_PLANNING_USER_UPDATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<PlanningUserUpdated>
+    <id>423e4567-e89b-42d3-a456-426614174030</id>
+    <email>sofie.updated@example.com</email>
+    <firstName>Sofie</firstName>
+    <lastName>Updated</lastName>
+    <role>SPEAKER</role>
+    <gdprConsent>true</gdprConsent>
+    <phoneNumber>+32470999999</phoneNumber>
+    <company>Desideriushogeschool</company>
+</PlanningUserUpdated>"""
+
+VALID_PLANNING_USER_DEACTIVATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<PlanningUserDeactivated>
+    <id>423e4567-e89b-42d3-a456-426614174030</id>
+    <email>sofie.declercq@example.com</email>
+    <deactivatedAt>2026-04-15T16:00:00Z</deactivatedAt>
+</PlanningUserDeactivated>"""
 
 MAILING_CONTACT_RETURN = {
     "Id": "003000000000027",
@@ -232,6 +266,30 @@ MAILING_UPDATED_MINIMAL_CONTACT_RETURN = {
     "Company_ID__c": None,
 }
 
+PLANNING_CONTACT_RETURN = {
+    "Id": "003000000000030",
+    "CRM_ID__c": "423e4567-e89b-42d3-a456-426614174130",
+    "Planning_ID__c": "423e4567-e89b-42d3-a456-426614174030",
+    "Email": "sofie.declercq@example.com",
+    "FirstName": "Sofie",
+    "LastName": "Declercq",
+    "Role__c": "SPEAKER",
+    "GDPR_Consent__c": True,
+    "Phone": "+32470123456",
+}
+
+PLANNING_UPDATED_CONTACT_RETURN = {
+    "Id": "003000000000030",
+    "CRM_ID__c": "423e4567-e89b-42d3-a456-426614174130",
+    "Planning_ID__c": "423e4567-e89b-42d3-a456-426614174030",
+    "Email": "sofie.updated@example.com",
+    "FirstName": "Sofie",
+    "LastName": "Updated",
+    "Role__c": "SPEAKER",
+    "GDPR_Consent__c": True,
+    "Phone": "+32470999999",
+}
+
 
 def _registration_patches(
     parsed_xml=None, existing_contact=None, created_contact=None
@@ -244,8 +302,11 @@ def _registration_patches(
 
     return (
         patch("src.xml_validator.validate", return_value=parsed_xml),
+        patch("src.receiver.has_session_registration_object", return_value=True),
         patch("src.receiver.get_contact_by_email", return_value=existing_contact),
+        patch("src.receiver.get_session_registration_by_registration_id", return_value=None),
         patch("src.receiver.create_contact", return_value=created_contact),
+        patch("src.receiver.upsert_session_registration"),
         patch("src.sender.publish_user_confirmed"),
         patch("src.sender.publish_mail_requested"),
     )
@@ -262,8 +323,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_publishes_user_confirmed(self, sf_mock):
-        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
-        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
+        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
+        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -271,8 +332,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_publishes_mail_requested_with_correct_args(self, sf_mock):
-        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
-        with p_val, p_get, p_create, p_publish, p_mail as mock_mail_publish:
+        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
+        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail as mock_mail_publish:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -285,8 +346,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_id(self, sf_mock):
-        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
-        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
+        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
+        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -295,8 +356,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_email(self, sf_mock):
-        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
-        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
+        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
+        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -305,8 +366,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_names(self, sf_mock):
-        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
-        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
+        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
+        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -316,8 +377,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_role(self, sf_mock):
-        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
-        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
+        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
+        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -326,8 +387,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_gdpr_consent(self, sf_mock):
-        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
-        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
+        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
+        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -336,8 +397,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_confirmed_at(self, sf_mock):
-        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
-        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
+        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
+        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -346,8 +407,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_is_active(self, sf_mock):
-        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
-        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
+        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
+        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -356,8 +417,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_acks_message(self, sf_mock):
-        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
-        with p_val, p_get, p_create, p_publish, p_mail:
+        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
+        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail:
             from src.receiver import handle_registration
 
             msg = _make_message(VALID_REG_XML)
@@ -376,7 +437,9 @@ class TestHandleRegistration:
 
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.get_contact_by_email", return_value=None),
+            patch("src.receiver.upsert_session_registration"),
             patch("src.receiver.create_contact", return_value=CONTACT_RETURN) as mock_create,
             patch("src.sender.publish_user_confirmed"),
             patch("src.sender.publish_mail_requested"),
@@ -401,8 +464,20 @@ class TestHandleRegistration:
         parsed_xml = etree.fromstring(VALID_REG_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_by_email", return_value={"Id": "003xxx", "Registration_ID__c": "OTHER"}),
+            patch("src.receiver.has_session_registration_object", return_value=True),
+            patch(
+                "src.receiver.get_contact_by_email",
+                return_value={
+                    "Id": "003xxx",
+                    "Registration_ID__c": "OTHER",
+                    "FirstName": "Other",
+                    "LastName": "Person",
+                    "Role__c": "VISITOR",
+                },
+            ),
+            patch("src.receiver.get_session_registration_by_registration_id", return_value=None),
             patch("src.receiver.create_contact") as mock_create,
+            patch("src.receiver.upsert_session_registration") as mock_upsert,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested"),
             caplog.at_level(logging.WARNING),
@@ -413,16 +488,100 @@ class TestHandleRegistration:
             await handle_registration(msg, sf_mock)
 
             mock_create.assert_not_called()
+            mock_upsert.assert_not_called()
             mock_publish.assert_not_called()
             msg.ack.assert_called_once()
-            assert "Conflict: email john.doe@example.com exists with different registrationId" in caplog.text
+            assert "incompatible person fields" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_existing_contact_with_new_registration_reuses_contact_and_creates_session_link(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_REG_XML)
+        existing_contact = {
+            **CONTACT_RETURN,
+            "Id": "003000000000001",
+            "Registration_ID__c": "REG-OLD",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
+            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
+            patch("src.receiver.get_session_registration_by_registration_id", return_value=None),
+            patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
+            patch("src.receiver.upsert_session_registration") as mock_upsert,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_mail_requested") as mock_mail,
+        ):
+            from src.receiver import handle_registration
+
+            msg = _make_message(VALID_REG_XML)
+            await handle_registration(msg, sf_mock)
+
+            mock_ensure.assert_called_once_with(
+                sf_mock,
+                existing_contact,
+                registration_id="REG-12345",
+            )
+            mock_upsert.assert_called_once_with(
+                sf_mock,
+                registration_id="REG-12345",
+                session_id="SESS-001",
+                contact_id="003000000000001",
+            )
+            mock_publish.assert_called_once()
+            mock_mail.assert_called_once()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_inactive_existing_registration_reactivates_instead_of_retry(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_REG_XML)
+        existing_contact = {
+            **CONTACT_RETURN,
+            "Id": "003000000000001",
+            "Registration_ID__c": "REG-12345",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
+            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
+            patch(
+                "src.receiver.get_session_registration_by_registration_id",
+                return_value={"Id": "a01", "Registration_ID__c": "REG-12345", "Is_Active__c": False},
+            ),
+            patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
+            patch("src.receiver.upsert_session_registration") as mock_upsert,
+            patch("src.receiver.create_contact") as mock_create,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_mail_requested") as mock_mail,
+        ):
+            from src.receiver import handle_registration
+
+            msg = _make_message(VALID_REG_XML)
+            await handle_registration(msg, sf_mock)
+
+            mock_create.assert_not_called()
+            mock_ensure.assert_called_once_with(
+                sf_mock,
+                existing_contact,
+                registration_id="REG-12345",
+            )
+            mock_upsert.assert_called_once_with(
+                sf_mock,
+                registration_id="REG-12345",
+                session_id="SESS-001",
+                contact_id="003000000000001",
+            )
+            mock_publish.assert_called_once()
+            mock_mail.assert_called_once()
+            msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_salesforce_create_failure_requeues(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_REG_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.get_contact_by_email", return_value=None),
+            patch("src.receiver.upsert_session_registration"),
             patch("src.receiver.create_contact", side_effect=Exception("SF Create Down")),
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested"),
@@ -463,11 +622,13 @@ class TestHandleRegistration:
         parsed_xml = etree.fromstring(VALID_REG_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.get_contact_by_email", return_value={
                 "CRM_ID__c": "123e4567-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
                 "Email": "john.doe@example.com",
                 "Registration_ID__c": "REG-12345",
             }),
+            patch("src.receiver.get_session_registration_by_registration_id", return_value={"Id": "a01"}),
             patch("src.receiver.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested") as mock_mail_publish,
@@ -496,7 +657,9 @@ class TestHandleRegistration:
 
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.get_contact_by_email", return_value=None),
+            patch("src.receiver.upsert_session_registration"),
             patch("src.receiver.create_contact", return_value=CONTACT_RETURN),
             patch("src.sender.publish_user_confirmed"),
             patch("src.sender.publish_mail_requested"),
@@ -520,7 +683,9 @@ class TestHandleRegistration:
 
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.get_contact_by_email", return_value=None),
+            patch("src.receiver.upsert_session_registration"),
             patch("src.receiver.create_contact", return_value=contact_no_phone),
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested"),
@@ -542,11 +707,13 @@ class TestHandleRegistration:
 
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.get_contact_by_email", return_value={
                 "CRM_ID__c": "123e4567-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
                 "Email": "john.doe@example.com",
                 "Registration_ID__c": "REG-12345",
             }),
+            patch("src.receiver.get_session_registration_by_registration_id", return_value={"Id": "a01"}),
             patch("src.receiver.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed", side_effect=Exception("Publish failed")),
             patch("src.sender.publish_mail_requested"),
@@ -601,6 +768,226 @@ class TestHandleFacturatieUserCreated:
             mock_mail.assert_not_called()
             mock_fallback_lookup.assert_not_called()
             msg.ack.assert_called_once()
+
+
+# ===========================================================================
+# Contract 30 + 13 + 15: planning.user.created
+# ===========================================================================
+
+
+class TestHandlePlanningUserCreated:
+    @pytest.fixture
+    def sf_mock(self):
+        return AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_new_planning_user_creates_contact_and_publishes_confirmed(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_CREATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("none", None)),
+            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.receiver.create_contact", return_value=PLANNING_CONTACT_RETURN) as mock_create,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+        ):
+            from src.receiver import handle_planning_user_created
+
+            msg = _make_message(VALID_PLANNING_USER_CREATED_XML)
+            await handle_planning_user_created(msg, sf_mock)
+
+            mock_create.assert_called_once()
+            create_payload = mock_create.call_args.args[1]
+            assert create_payload["Planning_ID__c"] == "423e4567-e89b-42d3-a456-426614174030"
+            assert create_payload["Email"] == "sofie.declercq@example.com"
+            assert create_payload["FirstName"] == "Sofie"
+            assert create_payload["LastName"] == "Declercq"
+            assert create_payload["Role__c"] == "SPEAKER"
+            assert create_payload["Phone"] == "+32470123456"
+            mock_publish.assert_called_once()
+            mock_conflict.assert_not_called()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_existing_planning_id_is_reused_without_email_lookup(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_CREATED_XML)
+        existing_contact = {
+            **PLANNING_CONTACT_RETURN,
+            "Id": "003000000000031",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_email") as mock_email_lookup,
+            patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
+            patch("src.receiver.backfill_planning_contact_fields", return_value=existing_contact) as mock_backfill,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+        ):
+            from src.receiver import handle_planning_user_created
+
+            msg = _make_message(VALID_PLANNING_USER_CREATED_XML)
+            await handle_planning_user_created(msg, sf_mock)
+
+            mock_email_lookup.assert_not_called()
+            mock_ensure.assert_called_once_with(
+                sf_mock,
+                existing_contact,
+                planning_id="423e4567-e89b-42d3-a456-426614174030",
+            )
+            mock_backfill.assert_called_once()
+            mock_publish.assert_called_once()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_existing_unique_email_is_safely_linked_to_planning_id(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_CREATED_XML)
+        existing_contact = {
+            "Id": "003000000000032",
+            "Email": "sofie.declercq@example.com",
+            "FirstName": "Sofie",
+            "LastName": "Declercq",
+            "Role__c": "SPEAKER",
+            "Planning_ID__c": None,
+            "GDPR_Consent__c": True,
+        }
+        normalized_contact = {
+            **PLANNING_CONTACT_RETURN,
+            "Id": "003000000000032",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("none", None)),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.receiver.backfill_planning_contact_fields", return_value=normalized_contact) as mock_backfill,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+            patch("src.receiver.create_contact") as mock_create,
+        ):
+            from src.receiver import handle_planning_user_created
+
+            msg = _make_message(VALID_PLANNING_USER_CREATED_XML)
+            await handle_planning_user_created(msg, sf_mock)
+
+            mock_create.assert_not_called()
+            mock_ensure.assert_called_once_with(
+                sf_mock,
+                existing_contact,
+                planning_id="423e4567-e89b-42d3-a456-426614174030",
+            )
+            mock_backfill.assert_called_once()
+            mock_conflict.assert_not_called()
+            mock_publish.assert_called_once()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_conflicting_existing_email_publishes_user_conflict(self, sf_mock):
+        conflicting_xml = VALID_PLANNING_USER_CREATED_XML.replace(
+            b"<lastName>Declercq</lastName>",
+            b"<lastName>Different</lastName>",
+        )
+        parsed_xml = etree.fromstring(conflicting_xml)
+        existing_contact = {
+            "Id": "003000000000033",
+            "Email": "sofie.declercq@example.com",
+            "FirstName": "Sofie",
+            "LastName": "Declercq",
+            "Role__c": "SPEAKER",
+            "Planning_ID__c": None,
+            "GDPR_Consent__c": True,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("none", None)),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.receiver.ensure_contact_identifiers") as mock_ensure,
+            patch("src.receiver.backfill_planning_contact_fields") as mock_backfill,
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+        ):
+            from src.receiver import handle_planning_user_created
+
+            msg = _make_message(conflicting_xml)
+            await handle_planning_user_created(msg, sf_mock)
+
+            mock_ensure.assert_not_called()
+            mock_backfill.assert_not_called()
+            mock_publish.assert_not_called()
+            mock_conflict.assert_called_once()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_existing_planning_id_with_different_email_publishes_conflict(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_CREATED_XML)
+        existing_contact = {
+            **PLANNING_CONTACT_RETURN,
+            "Email": "other@example.com",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+        ):
+            from src.receiver import handle_planning_user_created
+
+            msg = _make_message(VALID_PLANNING_USER_CREATED_XML)
+            await handle_planning_user_created(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            mock_conflict.assert_called_once()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_planning_id_is_acked_without_retry(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_CREATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("ambiguous", None)),
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_planning_user_created
+
+            msg = _make_message(VALID_PLANNING_USER_CREATED_XML)
+            await handle_planning_user_created(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            msg.ack.assert_called_once()
+            msg.reject.assert_not_called()
+            assert "ambiguous Planning_ID__c" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_planning_user_created_invalid_xml_rejected(self, sf_mock):
+        with patch("src.xml_validator.validate", side_effect=ValueError("Bad XML")):
+            from src.receiver import handle_planning_user_created
+
+            msg = _make_message(INVALID_XML)
+            await handle_planning_user_created(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+
+    @pytest.mark.asyncio
+    async def test_planning_user_created_without_planning_id_field_rejected(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_CREATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=False),
+            caplog.at_level(logging.ERROR),
+        ):
+            from src.receiver import handle_planning_user_created
+
+            msg = _make_message(VALID_PLANNING_USER_CREATED_XML)
+            await handle_planning_user_created(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+            assert "Planning_ID__c is missing" in caplog.text
 
     @pytest.mark.asyncio
     async def test_existing_unique_facturatie_user_is_reused_and_confirmed(self, sf_mock):
@@ -725,23 +1112,33 @@ class TestHandleFacturatieUserCreated:
             msg.reject.assert_called_once_with(requeue=False)
 
     @pytest.mark.asyncio
-    async def test_facturatie_user_created_without_gdpr_consent_rejected(self, sf_mock, caplog):
-        invalid_gdpr_xml = VALID_FACTURATIE_USER_CREATED_XML.replace(
-            b"<gdprConsent>true</gdprConsent>",
-            b"<gdprConsent>false</gdprConsent>",
+    async def test_facturatie_user_created_inactive_publishes_deactivated(self, sf_mock, caplog):
+        inactive_xml = VALID_FACTURATIE_USER_CREATED_XML.replace(
+            b"<isActive>true</isActive>",
+            b"<isActive>false</isActive>",
         )
-        parsed_xml = etree.fromstring(invalid_gdpr_xml)
+        parsed_xml = etree.fromstring(inactive_xml)
+        inactive_contact = {**FACTURATIE_CONTACT_RETURN, "IsActive__c": False}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            caplog.at_level(logging.WARNING),
+            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.receiver.apply_is_active", side_effect=lambda _sf, data, flag: {**data, "IsActive__c": flag}),
+            patch("src.receiver.create_contact", return_value=inactive_contact) as mock_create,
+            patch("src.sender.publish_user_confirmed") as mock_confirmed,
+            caplog.at_level(logging.INFO),
         ):
             from src.receiver import handle_facturatie_user_created
 
-            msg = _make_message(invalid_gdpr_xml)
+            msg = _make_message(inactive_xml)
             await handle_facturatie_user_created(msg, sf_mock)
 
-            msg.reject.assert_called_once_with(requeue=False)
-            assert "FacturatieUserCreated refused — gdprConsent=false" in caplog.text
+            create_payload = mock_create.call_args.args[1]
+            assert create_payload["IsActive__c"] is False
+            mock_confirmed.assert_called_once()
+            confirmed_payload = mock_confirmed.call_args.args[0]
+            assert confirmed_payload["isActive"] is False
+            msg.ack.assert_called_once()
+            assert "isActive=False" in caplog.text
 
     @pytest.mark.asyncio
     async def test_facturatie_user_created_publish_failure_requeues(self, sf_mock):
@@ -1458,23 +1855,35 @@ class TestHandleMailingUserCreated:
             msg.reject.assert_called_once_with(requeue=False)
 
     @pytest.mark.asyncio
-    async def test_mailing_user_created_without_gdpr_consent_rejected(self, sf_mock, caplog):
-        invalid_gdpr_xml = VALID_MAILING_USER_CREATED_XML.replace(
-            b"<gdprConsent>true</gdprConsent>",
-            b"<gdprConsent>false</gdprConsent>",
+    async def test_mailing_user_created_inactive_creates_inactive_contact(self, sf_mock, caplog):
+        inactive_xml = VALID_MAILING_USER_CREATED_XML.replace(
+            b"<isActive>true</isActive>",
+            b"<isActive>false</isActive>",
         )
-        parsed_xml = etree.fromstring(invalid_gdpr_xml)
+        parsed_xml = etree.fromstring(inactive_xml)
+        inactive_contact = {**MAILING_CONTACT_RETURN, "IsActive__c": False}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            caplog.at_level(logging.WARNING),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.receiver.apply_is_active", side_effect=lambda _sf, data, flag: {**data, "IsActive__c": flag}),
+            patch("src.receiver.create_contact", return_value=inactive_contact) as mock_create,
+            patch("src.sender.publish_user_confirmed") as mock_confirmed,
+            caplog.at_level(logging.INFO),
         ):
             from src.receiver import handle_mailing_user_created
 
-            msg = _make_message(invalid_gdpr_xml)
+            msg = _make_message(inactive_xml)
             await handle_mailing_user_created(msg, sf_mock)
 
-            msg.reject.assert_called_once_with(requeue=False)
-            assert "MailingUserCreated refused — gdprConsent=false" in caplog.text
+            create_payload = mock_create.call_args.args[1]
+            assert create_payload["IsActive__c"] is False
+            mock_confirmed.assert_called_once()
+            confirmed_payload = mock_confirmed.call_args.args[0]
+            assert confirmed_payload["isActive"] is False
+            msg.ack.assert_called_once()
+            assert "isActive=False" in caplog.text
 
     @pytest.mark.asyncio
     async def test_ambiguous_email_is_acked_without_publish(self, sf_mock, caplog):
@@ -1800,23 +2209,37 @@ class TestHandleMailingUserUpdated:
             assert "email mia.updated@example.com is ambiguous" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_mailing_user_updated_without_gdpr_consent_rejected(self, sf_mock, caplog):
-        invalid_gdpr_xml = VALID_MAILING_USER_UPDATED_XML.replace(
-            b"<gdprConsent>true</gdprConsent>",
-            b"<gdprConsent>false</gdprConsent>",
+    async def test_mailing_user_updated_inactive_deactivates_contact(self, sf_mock, caplog):
+        inactive_xml = VALID_MAILING_USER_UPDATED_XML.replace(
+            b"<isActive>true</isActive>",
+            b"<isActive>false</isActive>",
         )
-        parsed_xml = etree.fromstring(invalid_gdpr_xml)
+        parsed_xml = etree.fromstring(inactive_xml)
+        existing_contact = {**MAILING_CONTACT_RETURN}
+        deactivated_contact = {**existing_contact, "IsActive__c": False}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            caplog.at_level(logging.WARNING),
+            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact),
+            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
+            patch("src.receiver.update_mailing_contact") as mock_update,
+            patch("src.sender.publish_user_deactivated") as mock_deactivated_publish,
+            patch("src.sender.publish_user_updated") as mock_updated_publish,
+            caplog.at_level(logging.INFO),
         ):
             from src.receiver import handle_mailing_user_updated
 
-            msg = _make_message(invalid_gdpr_xml)
+            msg = _make_message(inactive_xml)
             await handle_mailing_user_updated(msg, sf_mock)
 
-            msg.reject.assert_called_once_with(requeue=False)
-            assert "MailingUserUpdated refused — gdprConsent=false" in caplog.text
+            mock_deactivate.assert_called_once()
+            mock_update.assert_not_called()
+            mock_deactivated_publish.assert_called_once()
+            mock_updated_publish.assert_not_called()
+            msg.ack.assert_called_once()
+            assert "isActive=false on update" in caplog.text
 
     @pytest.mark.asyncio
     async def test_publish_failure_requeues(self, sf_mock):
@@ -1837,6 +2260,479 @@ class TestHandleMailingUserUpdated:
 
             msg = _make_message(VALID_MAILING_USER_UPDATED_XML)
             await handle_mailing_user_updated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=True)
+
+
+# ==========================================================================
+# Contract 31 + 18 + 15: planning.user.updated
+# ==========================================================================
+
+
+class TestHandlePlanningUserUpdated:
+    @pytest.fixture
+    def sf_mock(self):
+        return AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_existing_planning_user_updates_contact_and_publishes_user_updated(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_UPDATED_XML)
+        existing_contact = {
+            **PLANNING_CONTACT_RETURN,
+        }
+        normalized_contact = {
+            **existing_contact,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.receiver.update_planning_contact", return_value=PLANNING_UPDATED_CONTACT_RETURN) as mock_update,
+            patch("src.sender.publish_user_updated") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+        ):
+            from src.receiver import handle_planning_user_updated
+
+            msg = _make_message(VALID_PLANNING_USER_UPDATED_XML)
+            await handle_planning_user_updated(msg, sf_mock)
+
+            mock_ensure.assert_called_once_with(
+                sf_mock,
+                existing_contact,
+                planning_id="423e4567-e89b-42d3-a456-426614174030",
+            )
+            mock_update.assert_called_once_with(
+                sf_mock,
+                normalized_contact,
+                email="sofie.updated@example.com",
+                first_name="Sofie",
+                last_name="Updated",
+                role="SPEAKER",
+                phone_number="+32470999999",
+            )
+            mock_conflict.assert_not_called()
+            mock_publish.assert_called_once()
+            published_user = mock_publish.call_args.args[0]
+            assert published_user["id"] == PLANNING_UPDATED_CONTACT_RETURN["CRM_ID__c"]
+            assert published_user["email"] == "sofie.updated@example.com"
+            assert published_user["firstName"] == "Sofie"
+            assert published_user["lastName"] == "Updated"
+            assert published_user["role"] == "SPEAKER"
+            assert published_user["phone"] == "+32470999999"
+            assert "updatedAt" in published_user
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_missing_planning_id_field_rejects_without_requeue(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_UPDATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=False),
+            caplog.at_level(logging.ERROR),
+        ):
+            from src.receiver import handle_planning_user_updated
+
+            msg = _make_message(VALID_PLANNING_USER_UPDATED_XML)
+            await handle_planning_user_updated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+            assert "Planning_ID__c is missing" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_unknown_planning_id_is_requeued_without_email_lookup(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_UPDATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("none", None)),
+            patch("src.receiver.get_contact_match_by_email") as mock_email_lookup,
+            patch("src.sender.publish_user_updated") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_planning_user_updated
+
+            msg = _make_message(VALID_PLANNING_USER_UPDATED_XML)
+            await handle_planning_user_updated(msg, sf_mock)
+
+            mock_email_lookup.assert_not_called()
+            mock_publish.assert_not_called()
+            mock_conflict.assert_not_called()
+            msg.reject.assert_called_once_with(requeue=True)
+            assert "no Contact found for Planning_ID__c" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_planning_id_is_acked_without_publish(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_UPDATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("ambiguous", None)),
+            patch("src.sender.publish_user_updated") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_planning_user_updated
+
+            msg = _make_message(VALID_PLANNING_USER_UPDATED_XML)
+            await handle_planning_user_updated(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            mock_conflict.assert_not_called()
+            msg.ack.assert_called_once()
+            assert "ambiguous Planning_ID__c" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_conflicting_existing_email_publishes_user_conflict(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_UPDATED_XML)
+        existing_contact = {
+            **PLANNING_CONTACT_RETURN,
+        }
+        conflicting_contact = {
+            "Id": "003000000000199",
+            "Email": "sofie.updated@example.com",
+            "FirstName": "Other",
+            "LastName": "Owner",
+            "Company_ID__c": "other-company-id",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_email", return_value=("unique", conflicting_contact)),
+            patch("src.receiver.ensure_contact_identifiers") as mock_ensure,
+            patch("src.receiver.update_planning_contact") as mock_update,
+            patch("src.sender.publish_user_updated") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+        ):
+            from src.receiver import handle_planning_user_updated
+
+            msg = _make_message(VALID_PLANNING_USER_UPDATED_XML)
+            await handle_planning_user_updated(msg, sf_mock)
+
+            mock_ensure.assert_not_called()
+            mock_update.assert_not_called()
+            mock_publish.assert_not_called()
+            mock_conflict.assert_called_once()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_email_publishes_user_conflict(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_UPDATED_XML)
+        existing_contact = {
+            **PLANNING_CONTACT_RETURN,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_email", return_value=("ambiguous", None)),
+            patch("src.receiver.ensure_contact_identifiers") as mock_ensure,
+            patch("src.receiver.update_planning_contact") as mock_update,
+            patch("src.sender.publish_user_updated") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_planning_user_updated
+
+            msg = _make_message(VALID_PLANNING_USER_UPDATED_XML)
+            await handle_planning_user_updated(msg, sf_mock)
+
+            mock_ensure.assert_not_called()
+            mock_update.assert_not_called()
+            mock_publish.assert_not_called()
+            mock_conflict.assert_called_once()
+            msg.ack.assert_called_once()
+            assert "email sofie.updated@example.com is ambiguous" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_planning_user_updated_without_gdpr_consent_rejected(self, sf_mock, caplog):
+        invalid_gdpr_xml = VALID_PLANNING_USER_UPDATED_XML.replace(
+            b"<gdprConsent>true</gdprConsent>",
+            b"<gdprConsent>false</gdprConsent>",
+        )
+        parsed_xml = etree.fromstring(invalid_gdpr_xml)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_planning_user_updated
+
+            msg = _make_message(invalid_gdpr_xml)
+            await handle_planning_user_updated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+            assert "PlanningUserUpdated refused — gdprConsent=false" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_invalid_xml_rejected_without_requeue(self, sf_mock):
+        with patch("src.xml_validator.validate", side_effect=ValueError("Bad XML")):
+            from src.receiver import handle_planning_user_updated
+
+            msg = _make_message(INVALID_XML)
+            await handle_planning_user_updated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+
+    @pytest.mark.asyncio
+    async def test_publish_failure_requeues(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_UPDATED_XML)
+        existing_contact = {
+            **PLANNING_CONTACT_RETURN,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact),
+            patch("src.receiver.update_planning_contact", return_value=PLANNING_UPDATED_CONTACT_RETURN),
+            patch("src.sender.publish_user_updated", side_effect=Exception("publish failed")),
+        ):
+            from src.receiver import handle_planning_user_updated
+
+            msg = _make_message(VALID_PLANNING_USER_UPDATED_XML)
+            await handle_planning_user_updated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=True)
+
+
+# ==========================================================================
+# Contract 32 + 22: planning.user.deactivated
+# ==========================================================================
+
+
+class TestHandlePlanningUserDeactivated:
+    @pytest.fixture
+    def sf_mock(self):
+        return AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_existing_planning_user_deactivates_contact_and_publishes_user_deactivated(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
+        existing_contact = {
+            **PLANNING_CONTACT_RETURN,
+        }
+        normalized_contact = {
+            **existing_contact,
+        }
+        deactivated_contact = {
+            **normalized_contact,
+            "IsActive__c": False,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+        ):
+            from src.receiver import handle_planning_user_deactivated
+
+            msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
+            await handle_planning_user_deactivated(msg, sf_mock)
+
+            mock_ensure.assert_called_once_with(
+                sf_mock,
+                existing_contact,
+                planning_id="423e4567-e89b-42d3-a456-426614174030",
+            )
+            mock_deactivate.assert_called_once_with(
+                sf_mock,
+                normalized_contact,
+                log_value="Planning_ID__c 423e4567-e89b-42d3-a456-426614174030",
+            )
+            mock_publish.assert_called_once()
+            payload = mock_publish.call_args.args[0]
+            assert payload["id"] == PLANNING_CONTACT_RETURN["CRM_ID__c"]
+            assert payload["email"] == "sofie.declercq@example.com"
+            assert payload["deactivatedAt"] == "2026-04-15T16:00:00Z"
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_missing_planning_id_field_rejects_without_requeue(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=False),
+            caplog.at_level(logging.ERROR),
+        ):
+            from src.receiver import handle_planning_user_deactivated
+
+            msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
+            await handle_planning_user_deactivated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+            assert "Planning_ID__c is missing" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_unknown_planning_id_is_requeued_without_publish(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("none", None)),
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_planning_user_deactivated
+
+            msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
+            await handle_planning_user_deactivated(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            msg.reject.assert_called_once_with(requeue=True)
+            assert "no Contact found for Planning_ID__c" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_planning_id_is_acked_without_publish(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("ambiguous", None)),
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_planning_user_deactivated
+
+            msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
+            await handle_planning_user_deactivated(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            msg.ack.assert_called_once()
+            assert "ambiguous Planning_ID__c" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_email_mismatch_logs_warning_but_deactivates(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
+        existing_contact = {
+            **PLANNING_CONTACT_RETURN,
+            "Email": "other@example.com",
+        }
+        normalized_contact = {
+            **existing_contact,
+        }
+        deactivated_contact = {
+            **normalized_contact,
+            "IsActive__c": False,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact),
+            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact),
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_planning_user_deactivated
+
+            msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
+            await handle_planning_user_deactivated(msg, sf_mock)
+
+            payload = mock_publish.call_args.args[0]
+            assert payload["email"] == "other@example.com"
+            msg.ack.assert_called_once()
+            assert "email mismatch" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_missing_crm_id_is_backfilled_before_deactivation(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
+        legacy_contact = {
+            **PLANNING_CONTACT_RETURN,
+            "CRM_ID__c": None,
+        }
+        normalized_contact = {
+            **legacy_contact,
+            "CRM_ID__c": "523e4567-e89b-42d3-a456-426614174132",
+        }
+        deactivated_contact = {
+            **normalized_contact,
+            "IsActive__c": False,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", legacy_contact)),
+            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+        ):
+            from src.receiver import handle_planning_user_deactivated
+
+            msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
+            await handle_planning_user_deactivated(msg, sf_mock)
+
+            mock_ensure.assert_called_once_with(
+                sf_mock,
+                legacy_contact,
+                planning_id="423e4567-e89b-42d3-a456-426614174030",
+            )
+            mock_deactivate.assert_called_once_with(
+                sf_mock,
+                normalized_contact,
+                log_value="Planning_ID__c 423e4567-e89b-42d3-a456-426614174030",
+            )
+            payload = mock_publish.call_args.args[0]
+            assert payload["id"] == "523e4567-e89b-42d3-a456-426614174132"
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_invalid_xml_rejected_without_requeue(self, sf_mock):
+        with patch("src.xml_validator.validate", side_effect=ValueError("Bad XML")):
+            from src.receiver import handle_planning_user_deactivated
+
+            msg = _make_message(INVALID_XML)
+            await handle_planning_user_deactivated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+
+    @pytest.mark.asyncio
+    async def test_salesforce_failure_requeues(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
+        existing_contact = {
+            **PLANNING_CONTACT_RETURN,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.deactivate_contact_record", side_effect=Exception("SF Down")),
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+        ):
+            from src.receiver import handle_planning_user_deactivated
+
+            msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
+            await handle_planning_user_deactivated(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            msg.reject.assert_called_once_with(requeue=True)
+
+    @pytest.mark.asyncio
+    async def test_publish_failure_requeues(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
+        existing_contact = {
+            **PLANNING_CONTACT_RETURN,
+        }
+        deactivated_contact = {
+            **existing_contact,
+            "IsActive__c": False,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_contact_planning_id_field", return_value=True),
+            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact),
+            patch("src.sender.publish_user_deactivated", side_effect=Exception("publish failed")),
+        ):
+            from src.receiver import handle_planning_user_deactivated
+
+            msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
+            await handle_planning_user_deactivated(msg, sf_mock)
 
             msg.reject.assert_called_once_with(requeue=True)
 
@@ -2104,6 +3000,22 @@ VALID_CANCEL_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <changeType>cancelled</changeType>
 </RegistrationChange>"""
 
+VALID_SESSION_UPDATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<SessionUpdate>
+    <sessionId>SESS-001</sessionId>
+    <sessionName>Workshop AI</sessionName>
+    <newTime>2026-04-15T15:00:00Z</newTime>
+    <newLocation>Zaal B</newLocation>
+    <changeType>rescheduled</changeType>
+</SessionUpdate>"""
+
+VALID_SESSION_CANCELLED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<SessionUpdate>
+    <sessionId>SESS-001</sessionId>
+    <sessionName>Workshop AI</sessionName>
+    <changeType>cancelled</changeType>
+</SessionUpdate>"""
+
 VALID_PAYMENT_XML = b"""<?xml version='1.0' encoding='utf-8'?>
 <PaymentConfirmed>
     <userId>550e8400-e29b-41d4-a716-446655440099</userId>
@@ -2184,11 +3096,12 @@ class TestHandleRegistrationUpdated:
 
     @pytest.mark.asyncio
     async def test_updated_calls_upsert_contact(self, sf_mock):
-        """changeType=updated must call upsert_contact_by_email with mapped fields."""
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN) as mock_upsert,
+            patch("src.receiver.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated"),
         ):
             from src.receiver import handle_registration_updated
@@ -2206,11 +3119,12 @@ class TestHandleRegistrationUpdated:
 
     @pytest.mark.asyncio
     async def test_updated_publishes_user_updated(self, sf_mock):
-        """After upsert, crm.user.updated (C18) must be published."""
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN),
+            patch("src.receiver.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
             from src.receiver import handle_registration_updated
@@ -2225,7 +3139,6 @@ class TestHandleRegistrationUpdated:
 
     @pytest.mark.asyncio
     async def test_updated_publishes_full_profile_fields_when_available(self, sf_mock):
-        """Contract 18: publish full profile fields when Salesforce record contains them."""
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         contact_with_optional_fields = {
             **UPDATED_CONTACT_RETURN,
@@ -2241,7 +3154,9 @@ class TestHandleRegistrationUpdated:
 
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.upsert_contact_by_email", return_value=contact_with_optional_fields),
+            patch("src.receiver.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
             from src.receiver import handle_registration_updated
@@ -2260,7 +3175,6 @@ class TestHandleRegistrationUpdated:
 
     @pytest.mark.asyncio
     async def test_updated_uses_active_field_fallbacks_for_is_active(self, sf_mock):
-        """Contract 18: fallback active-field names must not publish stale isActive=true."""
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         contact_with_fallback_active_field = {
             **UPDATED_CONTACT_RETURN,
@@ -2269,7 +3183,9 @@ class TestHandleRegistrationUpdated:
 
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.upsert_contact_by_email", return_value=contact_with_fallback_active_field),
+            patch("src.receiver.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
             from src.receiver import handle_registration_updated
@@ -2284,7 +3200,9 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN),
+            patch("src.receiver.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated"),
         ):
             from src.receiver import handle_registration_updated
@@ -2295,7 +3213,6 @@ class TestHandleRegistrationUpdated:
 
     @pytest.mark.asyncio
     async def test_updated_without_updated_fields_calls_upsert_with_empty_data(self, sf_mock):
-        """changeType=updated without <updatedFields> should still upsert (no field changes)."""
         xml_no_fields = b"""<?xml version='1.0' encoding='utf-8'?>
 <RegistrationChange>
     <email>john.doe@example.com</email>
@@ -2305,7 +3222,9 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(xml_no_fields)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN) as mock_upsert,
+            patch("src.receiver.ensure_session_registration_active") as mock_ensure_session,
             patch("src.sender.publish_user_updated"),
         ):
             from src.receiver import handle_registration_updated
@@ -2316,11 +3235,11 @@ class TestHandleRegistrationUpdated:
             mock_upsert.assert_called_once()
             update_data = mock_upsert.call_args[0][2]
             assert update_data == {}
+            mock_ensure_session.assert_called_once()
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_updated_maps_role_to_salesforce_field(self, sf_mock):
-        """role in updatedFields must map to Role__c in Salesforce."""
         xml_with_role = b"""<?xml version='1.0' encoding='utf-8'?>
 <RegistrationChange>
     <email>john.doe@example.com</email>
@@ -2333,7 +3252,9 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(xml_with_role)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN) as mock_upsert,
+            patch("src.receiver.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated"),
         ):
             from src.receiver import handle_registration_updated
@@ -2342,31 +3263,72 @@ class TestHandleRegistrationUpdated:
             update_data = mock_upsert.call_args[0][2]
             assert update_data["Role__c"] == "COMPANY_CONTACT"
 
+    @pytest.mark.asyncio
+    async def test_updated_missing_session_registration_object_rejects_without_requeue(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_UPDATE_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=False),
+        ):
+            from src.receiver import handle_registration_updated
+
+            msg = _make_message(VALID_UPDATE_XML)
+            await handle_registration_updated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+
     # ------------------------------------------------------------------
     # Cancelled path
     # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_cancelled_deactivates_contact(self, sf_mock):
-        """changeType=cancelled must call deactivate_contact."""
+    async def test_cancelled_deactivates_session_registration(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        existing_contact = {
+            **DEACTIVATED_CONTACT_RETURN,
+            "Id": "003000000000088",
+            "Email": "cancel@example.com",
+            "Planning_ID__c": None,
+            "Mailing_ID__c": None,
+        }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.deactivate_contact", return_value=DEACTIVATED_CONTACT_RETURN) as mock_deact,
-            patch("src.sender.publish_user_deactivated"),
+            patch("src.receiver.has_session_registration_object", return_value=True),
+            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
+            patch("src.receiver.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}) as mock_deact_reg,
+            patch("src.receiver.count_active_session_registrations", return_value=1),
+            patch("src.receiver.deactivate_contact_record") as mock_deact_contact,
+            patch("src.sender.publish_user_deactivated") as mock_publish,
         ):
             from src.receiver import handle_registration_updated
 
             await handle_registration_updated(_make_message(VALID_CANCEL_XML), sf_mock)
-            mock_deact.assert_called_once_with(sf_mock, "cancel@example.com")
+            mock_deact_reg.assert_called_once_with(
+                sf_mock,
+                registration_id=None,
+                contact_id="003000000000088",
+                session_id="SESS-002",
+            )
+            mock_deact_contact.assert_not_called()
+            mock_publish.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_cancelled_publishes_user_deactivated(self, sf_mock):
-        """After deactivation, crm.user.deactivated (C22) must be published."""
+    async def test_cancelled_publishes_user_deactivated_when_last_registration_is_removed(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        existing_contact = {
+            **DEACTIVATED_CONTACT_RETURN,
+            "Id": "003000000000088",
+            "Email": "cancel@example.com",
+            "Planning_ID__c": None,
+            "Mailing_ID__c": None,
+        }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.deactivate_contact", return_value=DEACTIVATED_CONTACT_RETURN),
+            patch("src.receiver.has_session_registration_object", return_value=True),
+            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
+            patch("src.receiver.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
+            patch("src.receiver.count_active_session_registrations", return_value=0),
+            patch("src.receiver.deactivate_contact_record", return_value=DEACTIVATED_CONTACT_RETURN),
             patch("src.sender.publish_user_deactivated") as mock_publish,
         ):
             from src.receiver import handle_registration_updated
@@ -2383,13 +3345,25 @@ class TestHandleRegistrationUpdated:
     async def test_cancelled_with_linked_company_deactivates_account_and_publishes_company_deactivated(self, sf_mock):
         """Contract 23: a linked company must be deactivated and published on cancellation."""
         parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        existing_contact = {
+            **DEACTIVATED_CONTACT_RETURN,
+            "Id": "003000000000088",
+            "Email": "cancel@example.com",
+            "Planning_ID__c": None,
+            "Mailing_ID__c": None,
+            "Company_ID__c": "acc-crm-001",
+        }
         deactivated_contact_with_company = {
             **DEACTIVATED_CONTACT_RETURN,
             "Company_ID__c": "acc-crm-001",
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.deactivate_contact", return_value=deactivated_contact_with_company),
+            patch("src.receiver.has_session_registration_object", return_value=True),
+            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
+            patch("src.receiver.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
+            patch("src.receiver.count_active_session_registrations", return_value=0),
+            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact_with_company),
             patch("src.receiver.deactivate_account_by_crm_id", return_value=DEACTIVATED_ACCOUNT_RETURN) as mock_deactivate_account,
             patch("src.sender.publish_user_deactivated") as mock_publish_user,
             patch("src.sender.publish_company_deactivated") as mock_publish_company,
@@ -2413,9 +3387,20 @@ class TestHandleRegistrationUpdated:
     async def test_cancelled_without_company_link_does_not_deactivate_or_publish_company(self, sf_mock):
         """Contract 23 is skipped when the cancelled contact is not linked to a company."""
         parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        existing_contact = {
+            **DEACTIVATED_CONTACT_RETURN,
+            "Id": "003000000000088",
+            "Email": "cancel@example.com",
+            "Planning_ID__c": None,
+            "Mailing_ID__c": None,
+        }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.deactivate_contact", return_value=DEACTIVATED_CONTACT_RETURN),
+            patch("src.receiver.has_session_registration_object", return_value=True),
+            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
+            patch("src.receiver.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
+            patch("src.receiver.count_active_session_registrations", return_value=0),
+            patch("src.receiver.deactivate_contact_record", return_value=DEACTIVATED_CONTACT_RETURN),
             patch("src.receiver.deactivate_account_by_crm_id") as mock_deactivate_account,
             patch("src.sender.publish_user_deactivated"),
             patch("src.sender.publish_company_deactivated") as mock_publish_company,
@@ -2430,26 +3415,39 @@ class TestHandleRegistrationUpdated:
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_cancelled_acks_message(self, sf_mock):
+    async def test_cancelled_keeps_native_identity_contact_active(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        existing_contact = {
+            **DEACTIVATED_CONTACT_RETURN,
+            "Id": "003000000000088",
+            "Email": "cancel@example.com",
+            "Planning_ID__c": "plan-123",
+            "Mailing_ID__c": None,
+        }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.deactivate_contact", return_value=DEACTIVATED_CONTACT_RETURN),
-            patch("src.sender.publish_user_deactivated"),
+            patch("src.receiver.has_session_registration_object", return_value=True),
+            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
+            patch("src.receiver.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
+            patch("src.receiver.count_active_session_registrations", return_value=0),
+            patch("src.receiver.deactivate_contact_record") as mock_deact_contact,
+            patch("src.sender.publish_user_deactivated") as mock_publish,
         ):
             from src.receiver import handle_registration_updated
 
             msg = _make_message(VALID_CANCEL_XML)
             await handle_registration_updated(msg, sf_mock)
+            mock_deact_contact.assert_not_called()
+            mock_publish.assert_not_called()
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_cancelled_contact_not_found_acks_without_publish(self, sf_mock, caplog):
-        """Cancelling a non-existent contact: log warning, ack, no publish."""
         parsed_xml = etree.fromstring(VALID_CANCEL_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.deactivate_contact", return_value=None),
+            patch("src.receiver.has_session_registration_object", return_value=True),
+            patch("src.receiver.get_contact_by_email", return_value=None),
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -2461,6 +3459,80 @@ class TestHandleRegistrationUpdated:
             mock_publish.assert_not_called()
             msg.ack.assert_called_once()
             assert "acking without action" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_cancelled_without_session_row_uses_legacy_contact_fallback(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        existing_contact = {
+            **DEACTIVATED_CONTACT_RETURN,
+            "Id": "003000000000088",
+            "Email": "cancel@example.com",
+            "Planning_ID__c": None,
+            "Mailing_ID__c": None,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
+            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
+            patch("src.receiver.deactivate_session_registration", return_value=None),
+            patch("src.receiver.count_active_session_registrations", return_value=0),
+            patch("src.receiver.deactivate_contact_record", return_value=DEACTIVATED_CONTACT_RETURN) as mock_deact_contact,
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_registration_updated
+
+            msg = _make_message(VALID_CANCEL_XML)
+            await handle_registration_updated(msg, sf_mock)
+
+            mock_deact_contact.assert_called_once()
+            mock_publish.assert_called_once()
+            msg.ack.assert_called_once()
+            assert "using legacy Contact fallback" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_cancelled_without_session_row_keeps_native_identity_contact_active(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        existing_contact = {
+            **DEACTIVATED_CONTACT_RETURN,
+            "Id": "003000000000088",
+            "Email": "cancel@example.com",
+            "Planning_ID__c": "plan-123",
+            "Mailing_ID__c": None,
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
+            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
+            patch("src.receiver.deactivate_session_registration", return_value=None),
+            patch("src.receiver.count_active_session_registrations", return_value=0),
+            patch("src.receiver.deactivate_contact_record") as mock_deact_contact,
+            patch("src.sender.publish_user_deactivated") as mock_publish,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_registration_updated
+
+            msg = _make_message(VALID_CANCEL_XML)
+            await handle_registration_updated(msg, sf_mock)
+
+            mock_deact_contact.assert_not_called()
+            mock_publish.assert_not_called()
+            msg.ack.assert_called_once()
+            assert "skipping legacy Contact fallback" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_cancelled_missing_session_registration_object_rejects_without_requeue(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=False),
+        ):
+            from src.receiver import handle_registration_updated
+
+            msg = _make_message(VALID_CANCEL_XML)
+            await handle_registration_updated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
 
     # ------------------------------------------------------------------
     # Error handling
@@ -2478,10 +3550,10 @@ class TestHandleRegistrationUpdated:
 
     @pytest.mark.asyncio
     async def test_salesforce_error_requeues(self, sf_mock):
-        """Salesforce failure must requeue the message for retry."""
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.upsert_contact_by_email", side_effect=Exception("SF Down")),
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
@@ -2495,11 +3567,12 @@ class TestHandleRegistrationUpdated:
 
     @pytest.mark.asyncio
     async def test_publish_failure_on_update_requeues(self, sf_mock):
-        """If publish_user_updated fails after successful upsert, message must requeue."""
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN),
+            patch("src.receiver.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated", side_effect=Exception("RabbitMQ down")),
         ):
             from src.receiver import handle_registration_updated
@@ -2511,17 +3584,146 @@ class TestHandleRegistrationUpdated:
 
     @pytest.mark.asyncio
     async def test_publish_failure_on_cancel_requeues(self, sf_mock):
-        """If publish_user_deactivated fails after deactivation, message must requeue."""
         parsed_xml = etree.fromstring(VALID_CANCEL_XML)
+        existing_contact = {
+            **DEACTIVATED_CONTACT_RETURN,
+            "Id": "003000000000088",
+            "Email": "cancel@example.com",
+            "Planning_ID__c": None,
+            "Mailing_ID__c": None,
+        }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.deactivate_contact", return_value=DEACTIVATED_CONTACT_RETURN),
+            patch("src.receiver.has_session_registration_object", return_value=True),
+            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
+            patch("src.receiver.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
+            patch("src.receiver.count_active_session_registrations", return_value=0),
+            patch("src.receiver.deactivate_contact_record", return_value=DEACTIVATED_CONTACT_RETURN),
             patch("src.sender.publish_user_deactivated", side_effect=Exception("RabbitMQ down")),
         ):
             from src.receiver import handle_registration_updated
 
             msg = _make_message(VALID_CANCEL_XML)
             await handle_registration_updated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=True)
+
+
+SESSION_PARTICIPANTS = [
+    {
+        "Id": "003000000000201",
+        "Email": "anna@example.com",
+        "FirstName": "Anna",
+        "LastName": "Alpha",
+    },
+    {
+        "Id": "003000000000202",
+        "Email": "bert@example.com",
+        "FirstName": "Bert",
+        "LastName": "Beta",
+    },
+]
+
+
+class TestHandleSessionUpdated:
+    @pytest.fixture
+    def sf_mock(self):
+        return AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_rescheduled_publishes_mail_per_participant(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_SESSION_UPDATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
+            patch("src.receiver.get_active_session_participants", return_value=SESSION_PARTICIPANTS),
+            patch("src.sender.publish_mail_requested") as mock_publish,
+        ):
+            from src.receiver import handle_session_updated
+
+            msg = _make_message(VALID_SESSION_UPDATED_XML)
+            await handle_session_updated(msg, sf_mock)
+
+            assert mock_publish.call_count == 2
+            first_call = mock_publish.call_args_list[0].args
+            assert first_call[0] == "session_change"
+            assert first_call[1]["email"] == "anna@example.com"
+            assert first_call[2]["session_name"] == "Workshop AI"
+            assert first_call[2]["session_time"] == "2026-04-15T15:00:00Z"
+            assert first_call[2]["session_location"] == "Zaal B"
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_omits_session_time_when_not_provided(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_SESSION_CANCELLED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
+            patch("src.receiver.get_active_session_participants", return_value=[SESSION_PARTICIPANTS[0]]),
+            patch("src.sender.publish_mail_requested") as mock_publish,
+        ):
+            from src.receiver import handle_session_updated
+
+            await handle_session_updated(_make_message(VALID_SESSION_CANCELLED_XML), sf_mock)
+
+            dynamic_data = mock_publish.call_args.args[2]
+            assert "session_time" not in dynamic_data
+            assert dynamic_data["session_name"] == "Workshop AI"
+
+    @pytest.mark.asyncio
+    async def test_session_update_acks_without_publish_when_no_participants(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_SESSION_UPDATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
+            patch("src.receiver.get_active_session_participants", return_value=[]),
+            patch("src.sender.publish_mail_requested") as mock_publish,
+        ):
+            from src.receiver import handle_session_updated
+
+            msg = _make_message(VALID_SESSION_UPDATED_XML)
+            await handle_session_updated(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_session_update_missing_object_rejects_without_requeue(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_SESSION_UPDATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=False),
+        ):
+            from src.receiver import handle_session_updated
+
+            msg = _make_message(VALID_SESSION_UPDATED_XML)
+            await handle_session_updated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+
+    @pytest.mark.asyncio
+    async def test_session_update_invalid_xml_rejected(self, sf_mock):
+        with patch("src.xml_validator.validate", side_effect=ValueError("Bad XML")):
+            from src.receiver import handle_session_updated
+
+            msg = _make_message(INVALID_XML)
+            await handle_session_updated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+
+    @pytest.mark.asyncio
+    async def test_session_update_publish_error_requeues(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_SESSION_UPDATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", return_value=True),
+            patch("src.receiver.get_active_session_participants", return_value=[SESSION_PARTICIPANTS[0]]),
+            patch("src.sender.publish_mail_requested", side_effect=Exception("RabbitMQ down")),
+        ):
+            from src.receiver import handle_session_updated
+
+            msg = _make_message(VALID_SESSION_UPDATED_XML)
+            await handle_session_updated(msg, sf_mock)
 
             msg.reject.assert_called_once_with(requeue=True)
 
@@ -2813,6 +4015,17 @@ class TestRunReceiver:
         )
 
     @pytest.mark.asyncio
+    async def test_run_receiver_registers_contract_11_queue(self):
+        from src.receiver import handle_session_updated
+
+        queues, mock_declare, sf_client = await self._run_receiver()
+
+        self._assert_declared_queue(mock_declare, "planning.session.updated", durable=True)
+        self._assert_partial_callback(
+            queues["planning.session.updated"], handle_session_updated, sf_client
+        )
+
+    @pytest.mark.asyncio
     async def test_run_receiver_registers_contract_27_queue(self):
         from src.receiver import handle_mailing_user_created
 
@@ -2843,4 +4056,26 @@ class TestRunReceiver:
         self._assert_declared_queue(mock_declare, "mailing.user.deactivated", durable=True)
         self._assert_partial_callback(
             queues["mailing.user.deactivated"], handle_mailing_user_deactivated, sf_client
+        )
+
+    @pytest.mark.asyncio
+    async def test_run_receiver_registers_contract_30_queue(self):
+        from src.receiver import handle_planning_user_created
+
+        queues, mock_declare, sf_client = await self._run_receiver()
+
+        self._assert_declared_queue(mock_declare, "planning.user.created", durable=True)
+        self._assert_partial_callback(
+            queues["planning.user.created"], handle_planning_user_created, sf_client
+        )
+
+    @pytest.mark.asyncio
+    async def test_run_receiver_registers_contract_32_queue(self):
+        from src.receiver import handle_planning_user_deactivated
+
+        queues, mock_declare, sf_client = await self._run_receiver()
+
+        self._assert_declared_queue(mock_declare, "planning.user.deactivated", durable=True)
+        self._assert_partial_callback(
+            queues["planning.user.deactivated"], handle_planning_user_deactivated, sf_client
         )

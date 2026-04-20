@@ -538,7 +538,7 @@ class TestContract27MailingUserCreated:
     <email>{email}</email>
     <firstName>Mailing</firstName>
     <lastName>User</lastName>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
     <companyId>{company_id}</companyId>
 </MailingUserCreated>"""
 
@@ -601,7 +601,7 @@ class TestContract27MailingUserCreated:
     <email>{email}</email>
     <firstName>Different</firstName>
     <lastName>User</lastName>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
 </MailingUserCreated>"""
 
         await _publish(inbound_exchanges["user.topic"], "mailing.user.created", mailing_xml)
@@ -650,7 +650,7 @@ class TestContract28MailingUserUpdated:
     <email>{email}</email>
     <firstName>Before</firstName>
     <lastName>Update</lastName>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
     <companyId>{company_id}</companyId>
 </MailingUserCreated>"""
 
@@ -668,7 +668,7 @@ class TestContract28MailingUserUpdated:
     <id>{mailing_id}</id>
     <email>{email}</email>
     <firstName>After</firstName>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
 </MailingUserUpdated>"""
 
         await _publish(inbound_exchanges["user.topic"], "mailing.user.updated", update_xml)
@@ -719,7 +719,7 @@ class TestContract29MailingUserDeactivated:
     <email>{email}</email>
     <firstName>Before</firstName>
     <lastName>Deactivate</lastName>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
 </MailingUserCreated>"""
 
         await _publish(inbound_exchanges["user.topic"], "mailing.user.created", create_xml)
@@ -739,6 +739,71 @@ class TestContract29MailingUserDeactivated:
 </MailingUserDeactivated>"""
 
         await _publish(inbound_exchanges["user.topic"], "mailing.user.deactivated", deactivation_xml)
+
+        result = await _consume_one(q_deactivated)
+
+        assert result is not None, "No UserDeactivated message received within timeout"
+        assert result.tag == "UserDeactivated"
+        assert result.findtext("id") == confirmed_id
+        assert result.findtext("email") == email
+        assert result.findtext("deactivatedAt") == deactivated_at
+
+
+# ---------------------------------------------------------------------------
+# Contract 32 → Contract 22 — Planning User Deactivated → User Deactivated
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.salesforce
+class TestContract32PlanningUserDeactivated:
+    """C32: planning.user.deactivated → C22 crm.user.deactivated."""
+
+    @pytest.mark.asyncio
+    async def test_existing_planning_user_deactivated_produces_user_deactivated(
+        self, channel, inbound_exchanges, outbound_exchange, sf_client,
+    ):
+        await _wait_for_receiver_queue("planning.user.created")
+        await _wait_for_receiver_queue("planning.user.deactivated")
+        await _require_salesforce_contact_field(sf_client, "Planning_ID__c")
+
+        email = _unique_email()
+        planning_id = str(uuid.uuid4())
+        deactivated_at = "2026-04-15T16:00:00Z"
+
+        q_confirmed = await _create_temp_queue(channel, outbound_exchange, "crm.user.confirmed")
+        q_deactivated = await _create_temp_queue(channel, outbound_exchange, "crm.user.deactivated")
+        await _drain_queue(q_confirmed)
+        await _drain_queue(q_deactivated)
+
+        create_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<PlanningUserCreated>
+    <id>{planning_id}</id>
+    <email>{email}</email>
+    <firstName>Sofie</firstName>
+    <lastName>Deactivate</lastName>
+    <role>SPEAKER</role>
+    <gdprConsent>true</gdprConsent>
+    <phoneNumber>+32470123456</phoneNumber>
+    <company>Desideriushogeschool</company>
+</PlanningUserCreated>"""
+
+        await _publish(inbound_exchanges["user.topic"], "planning.user.created", create_xml)
+
+        confirmed = await _consume_one(q_confirmed)
+        assert confirmed is not None, "Prerequisite: C30 must produce UserConfirmed first"
+        confirmed_id = confirmed.findtext("id")
+        assert confirmed_id is not None, "UserConfirmed did not contain a CRM UUID"
+
+        await _drain_queue(q_deactivated)
+
+        deactivation_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<PlanningUserDeactivated>
+    <id>{planning_id}</id>
+    <email>{email}</email>
+    <deactivatedAt>{deactivated_at}</deactivatedAt>
+</PlanningUserDeactivated>"""
+
+        await _publish(inbound_exchanges["user.topic"], "planning.user.deactivated", deactivation_xml)
 
         result = await _consume_one(q_deactivated)
 
