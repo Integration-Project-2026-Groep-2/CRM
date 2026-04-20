@@ -4,9 +4,18 @@ CUSTOM FIELDS REFERENCE (must be created in Salesforce Setup):
 - Contact.CRM_ID__c (Text, Unique) — UUID v4 for Contract 13, 18, 22
 - Contact.GDPR_Consent__c (Checkbox) — For Contract 1
 - Contact.Registration_ID__c (Text) — Deduplication key for Contract 1
+- Contact.Paid_At__c (DateTime) — Compatibility timestamp derived from the latest
+  paid session registration for Contracts 16 / 17 legacy consumers
 - Contact.Mailing_ID__c (Text, Unique) — Native Mailing UUID for Contracts 27-29
+- Contact.Planning_ID__c (Text, Unique) — Native Planning UUID for Contracts 30-32
 - Contact.Role__c (Picklist: VISITOR | COMPANY_CONTACT) — For Contract 1, 13, 18
-- Contact.Paid_At__c (DateTime) — Payment timestamp for Contract 16 / Contract 17
+
+- Session_Registration__c.Registration_ID__c (Text, External ID, Unique) —
+  Canonical registration identifier for Contracts 1, 2, 11, 16
+- Session_Registration__c.Session_ID__c (Text) — Planning session identifier
+- Session_Registration__c.Contact__c (Lookup(Contact)) — Canonical Contact link
+- Session_Registration__c.Is_Active__c (Checkbox) — Soft delete flag per registration
+- Session_Registration__c.Paid_At__c (DateTime) — Payment timestamp per registration
 
 - Account.CRM_ID__c (Text, Unique) — UUID v4 for Contract 14, 19, 23
 - Account.VAT_Number__c (Text, External ID, Unique) — For Contract 3, 5a, 5b, 14
@@ -18,6 +27,7 @@ All SF calls are wrapped in asyncio.to_thread() to prevent blocking the event lo
 import asyncio
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from simple_salesforce import Salesforce, SalesforceError
@@ -44,6 +54,22 @@ def _normalize_uuid_v4(value: Any) -> str | None:
     if parsed.version != 4:
         return None
     return str(parsed)
+
+
+def _parse_iso_datetime_utc(value: Any) -> datetime | None:
+    """Parse an ISO-8601 datetime into UTC, or return None when invalid/missing."""
+    normalized = _normalize_optional_field_value(value)
+    if normalized is None:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 async def get_salesforce_client(config: Config) -> Salesforce:
@@ -165,6 +191,8 @@ async def upsert_contact_by_email(
 
 _active_field_cache: str | None = None
 _mailing_id_field_supported_cache: bool | None = None
+_planning_id_field_supported_cache: bool | None = None
+_session_registration_object_supported_cache: bool | None = None
 
 
 def _normalize_optional_field_value(value: Any) -> str | None:
@@ -231,6 +259,356 @@ async def has_contact_mailing_id_field(sf: Salesforce) -> bool:
     available_fields = {field["name"] for field in describe.get("fields", [])}
     _mailing_id_field_supported_cache = "Mailing_ID__c" in available_fields
     return _mailing_id_field_supported_cache
+
+
+async def has_contact_planning_id_field(sf: Salesforce) -> bool:
+    """Return whether the Salesforce org exposes Contact.Planning_ID__c."""
+    global _planning_id_field_supported_cache  # noqa: PLW0603
+    if _planning_id_field_supported_cache is not None:
+        return _planning_id_field_supported_cache
+
+    describe = await asyncio.to_thread(sf.Contact.describe)
+    available_fields = {field["name"] for field in describe.get("fields", [])}
+    _planning_id_field_supported_cache = "Planning_ID__c" in available_fields
+    return _planning_id_field_supported_cache
+
+
+async def has_session_registration_object(sf: Salesforce) -> bool:
+    """Return whether the Salesforce org exposes Session_Registration__c."""
+    global _session_registration_object_supported_cache  # noqa: PLW0603
+    if _session_registration_object_supported_cache is not None:
+        return _session_registration_object_supported_cache
+
+    describe = await asyncio.to_thread(sf.describe)
+    available_objects = {
+        sobject.get("name")
+        for sobject in describe.get("sobjects", [])
+        if isinstance(sobject, dict)
+    }
+    _session_registration_object_supported_cache = "Session_Registration__c" in available_objects
+    return _session_registration_object_supported_cache
+
+
+async def _get_session_registration_by_id(
+    sf: Salesforce, session_registration_id: str
+) -> dict[str, Any]:
+    """Return one Session_Registration__c row by Salesforce record id."""
+    return await asyncio.to_thread(sf.Session_Registration__c.get, session_registration_id)
+
+
+async def get_session_registration_by_registration_id(
+    sf: Salesforce, registration_id: str
+) -> dict[str, Any] | None:
+    """Return one session registration row by registrationId, if it exists."""
+    try:
+        escaped_registration_id = _escape_soql(registration_id)
+        query = (
+            "SELECT Id FROM Session_Registration__c "
+            f"WHERE Registration_ID__c = '{escaped_registration_id}'"
+        )
+        result = await asyncio.to_thread(sf.query, query)
+
+        if result["totalSize"] == 0:
+            return None
+        if result["totalSize"] > 1:
+            logger.warning(
+                "Multiple Session_Registration__c rows found for Registration_ID__c %s",
+                registration_id,
+            )
+            return None
+
+        return await _get_session_registration_by_id(sf, result["records"][0]["Id"])
+    except SalesforceError as e:
+        logger.error(
+            "Failed to get Session_Registration__c by Registration_ID__c %s: %s",
+            registration_id,
+            str(e),
+        )
+        raise
+
+
+async def get_session_registration_by_contact_and_session(
+    sf: Salesforce,
+    *,
+    contact_id: str,
+    session_id: str,
+    active_only: bool = False,
+) -> dict[str, Any] | None:
+    """Return a unique session registration for one contact/session pair."""
+    escaped_contact_id = _escape_soql(contact_id)
+    escaped_session_id = _escape_soql(session_id)
+    query = (
+        "SELECT Id FROM Session_Registration__c "
+        f"WHERE Contact__c = '{escaped_contact_id}' "
+        f"AND Session_ID__c = '{escaped_session_id}'"
+    )
+    if active_only:
+        query += " AND Is_Active__c = true"
+
+    try:
+        result = await asyncio.to_thread(sf.query, query)
+    except SalesforceError as e:
+        logger.error(
+            "Failed to get Session_Registration__c by Contact__c %s and Session_ID__c %s: %s",
+            contact_id,
+            session_id,
+            str(e),
+        )
+        raise
+
+    if result["totalSize"] == 0:
+        return None
+    if result["totalSize"] > 1:
+        logger.warning(
+            "Multiple Session_Registration__c rows found for Contact__c %s and Session_ID__c %s",
+            contact_id,
+            session_id,
+        )
+        return None
+
+    return await _get_session_registration_by_id(sf, result["records"][0]["Id"])
+
+
+async def get_unique_active_session_registration_for_contact(
+    sf: Salesforce, contact_id: str
+) -> dict[str, Any] | None:
+    """Return the unique active session registration for one Contact, if any."""
+    escaped_contact_id = _escape_soql(contact_id)
+    query = (
+        "SELECT Id FROM Session_Registration__c "
+        f"WHERE Contact__c = '{escaped_contact_id}' AND Is_Active__c = true"
+    )
+
+    try:
+        result = await asyncio.to_thread(sf.query, query)
+    except SalesforceError as e:
+        logger.error(
+            "Failed to get active Session_Registration__c for Contact__c %s: %s",
+            contact_id,
+            str(e),
+        )
+        raise
+
+    if result["totalSize"] == 0:
+        logger.warning(
+            "No active Session_Registration__c row found for Contact__c %s",
+            contact_id,
+        )
+        return None
+    if result["totalSize"] > 1:
+        logger.warning(
+            "Multiple active Session_Registration__c rows found for Contact__c %s",
+            contact_id,
+        )
+        return None
+
+    return await _get_session_registration_by_id(sf, result["records"][0]["Id"])
+
+
+async def upsert_session_registration(
+    sf: Salesforce,
+    *,
+    registration_id: str,
+    session_id: str,
+    contact_id: str,
+    paid_at: str | None = None,
+) -> dict[str, Any]:
+    """Create or reactivate a session registration link for one participant."""
+    payload: dict[str, Any] = {
+        "Registration_ID__c": registration_id,
+        "Session_ID__c": session_id,
+        "Contact__c": contact_id,
+        "Is_Active__c": True,
+    }
+    if paid_at is not None:
+        payload["Paid_At__c"] = paid_at
+
+    try:
+        result = await asyncio.to_thread(
+            sf.Session_Registration__c.upsert,
+            f"Registration_ID__c/{registration_id}",
+            payload,
+        )
+
+        session_registration = await get_session_registration_by_registration_id(sf, registration_id)
+        if session_registration is not None:
+            return session_registration
+
+        if isinstance(result, dict) and result.get("id"):
+            return await _get_session_registration_by_id(sf, result["id"])
+
+        raise RuntimeError(
+            "Upsert succeeded but Session_Registration__c row was not retrievable "
+            f"for registrationId {registration_id}"
+        )
+    except SalesforceError as e:
+        logger.error(
+            "Failed to upsert Session_Registration__c for registrationId %s: %s",
+            registration_id,
+            str(e),
+        )
+        raise
+
+
+async def ensure_session_registration_active(
+    sf: Salesforce,
+    *,
+    contact_id: str,
+    session_id: str,
+    registration_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Ensure the session registration exists and is active."""
+    if registration_id:
+        return await upsert_session_registration(
+            sf,
+            registration_id=registration_id,
+            session_id=session_id,
+            contact_id=contact_id,
+        )
+
+    session_registration = await get_session_registration_by_contact_and_session(
+        sf,
+        contact_id=contact_id,
+        session_id=session_id,
+        active_only=False,
+    )
+    if session_registration is None:
+        logger.warning(
+            "Cannot ensure Session_Registration__c without registrationId for Contact__c %s session %s",
+            contact_id,
+            session_id,
+        )
+        return None
+
+    if session_registration.get("Is_Active__c") is True:
+        return session_registration
+
+    session_registration_id = session_registration["Id"]
+    await asyncio.to_thread(
+        sf.Session_Registration__c.update,
+        session_registration_id,
+        {"Is_Active__c": True},
+    )
+    logger.info("Reactivated Session_Registration__c row %s", session_registration_id)
+    return await _get_session_registration_by_id(sf, session_registration_id)
+
+
+async def get_active_session_participants(
+    sf: Salesforce, session_id: str
+) -> list[dict[str, Any]]:
+    """Return active Contacts linked to the given active session registrations."""
+    active_field = await _resolve_contact_active_field_optional(sf)
+    escaped_session_id = _escape_soql(session_id)
+    select_fields = [
+        "Id",
+        "Registration_ID__c",
+        "Session_ID__c",
+        "Contact__c",
+        "Contact__r.Id",
+        "Contact__r.CRM_ID__c",
+        "Contact__r.Email",
+        "Contact__r.FirstName",
+        "Contact__r.LastName",
+    ]
+    if active_field is not None:
+        select_fields.append(f"Contact__r.{active_field}")
+
+    query = (
+        f"SELECT {', '.join(select_fields)} FROM Session_Registration__c "
+        f"WHERE Session_ID__c = '{escaped_session_id}' AND Is_Active__c = true"
+    )
+
+    try:
+        result = await asyncio.to_thread(sf.query_all, query)
+    except SalesforceError as e:
+        logger.error(
+            "Failed to get active Session_Registration__c participants for sessionId %s: %s",
+            session_id,
+            str(e),
+        )
+        raise
+
+    participants: list[dict[str, Any]] = []
+    for record in result.get("records", []):
+        contact = record.get("Contact__r") or {}
+        if record.get("Contact__c") and "Id" not in contact:
+            contact["Id"] = record["Contact__c"]
+
+        if not contact:
+            logger.warning(
+                "Skipping Session_Registration__c row %s without linked Contact__r",
+                record.get("Id"),
+            )
+            continue
+
+        if active_field is not None and contact.get(active_field) is False:
+            continue
+
+        participants.append(contact)
+
+    participants.sort(
+        key=lambda contact: (
+            str(contact.get("LastName") or ""),
+            str(contact.get("FirstName") or ""),
+            str(contact.get("Email") or ""),
+        )
+    )
+    return participants
+
+
+async def deactivate_session_registration(
+    sf: Salesforce,
+    *,
+    registration_id: str | None = None,
+    contact_id: str | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Deactivate one session registration row."""
+    session_registration: dict[str, Any] | None = None
+
+    if registration_id:
+        session_registration = await get_session_registration_by_registration_id(sf, registration_id)
+
+    if session_registration is None and contact_id and session_id:
+        session_registration = await get_session_registration_by_contact_and_session(
+            sf,
+            contact_id=contact_id,
+            session_id=session_id,
+            active_only=True,
+        )
+
+    if session_registration is None:
+        return None
+
+    session_registration_id = session_registration["Id"]
+    await asyncio.to_thread(
+        sf.Session_Registration__c.update,
+        session_registration_id,
+        {"Is_Active__c": False},
+    )
+    logger.info("Deactivated Session_Registration__c row %s", session_registration_id)
+    return await _get_session_registration_by_id(sf, session_registration_id)
+
+
+async def count_active_session_registrations(sf: Salesforce, contact_id: str) -> int:
+    """Return the number of active session registrations for one Contact."""
+    escaped_contact_id = _escape_soql(contact_id)
+    query = (
+        "SELECT Id FROM Session_Registration__c "
+        f"WHERE Contact__c = '{escaped_contact_id}' AND Is_Active__c = true"
+    )
+
+    try:
+        result = await asyncio.to_thread(sf.query, query)
+    except SalesforceError as e:
+        logger.error(
+            "Failed to count active Session_Registration__c rows for Contact %s: %s",
+            contact_id,
+            str(e),
+        )
+        raise
+
+    return int(result["totalSize"])
 
 
 async def get_contact_by_email(
@@ -350,11 +728,35 @@ async def get_contact_match_by_mailing_id(
         raise
 
 
+async def get_contact_match_by_planning_id(
+    sf: Salesforce, planning_id: str
+) -> tuple[Literal["none", "unique", "ambiguous"], dict[str, Any] | None]:
+    """Classify a Planning native-ID lookup as no match, unique match, or ambiguous match."""
+    try:
+        escaped_planning_id = _escape_soql(planning_id)
+        query = f"SELECT Id FROM Contact WHERE Planning_ID__c = '{escaped_planning_id}'"
+        result = await asyncio.to_thread(sf.query, query)
+
+        if result["totalSize"] == 0:
+            return "none", None
+        if result["totalSize"] > 1:
+            return "ambiguous", None
+
+        contact_id = result["records"][0]["Id"]
+        contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        logger.info("Found unique Contact by Planning_ID__c: %s", planning_id)
+        return "unique", contact_record
+    except SalesforceError as e:
+        logger.error("Failed to get contact match by Planning_ID__c %s: %s", planning_id, str(e))
+        raise
+
+
 async def ensure_contact_identifiers(
     sf: Salesforce,
     contact: dict[str, Any],
     registration_id: str | None = None,
     mailing_id: str | None = None,
+    planning_id: str | None = None,
 ) -> dict[str, Any]:
     """Ensure a Contact has the canonical identifiers needed by CRM contracts.
 
@@ -363,6 +765,8 @@ async def ensure_contact_identifiers(
       registration_id is provided.
     - Only set Mailing_ID__c when it is currently empty and an inbound
       mailing_id is provided.
+        - Only set Planning_ID__c when it is currently empty and an inbound
+            planning_id is provided.
     """
     updates: dict[str, Any] = {}
 
@@ -374,6 +778,9 @@ async def ensure_contact_identifiers(
 
     if mailing_id and not contact.get("Mailing_ID__c"):
         updates["Mailing_ID__c"] = mailing_id
+
+    if planning_id and not contact.get("Planning_ID__c"):
+        updates["Planning_ID__c"] = planning_id
 
     if not updates:
         return contact
@@ -445,6 +852,52 @@ async def backfill_mailing_contact_fields(
     return await asyncio.to_thread(sf.Contact.get, contact_id)
 
 
+async def backfill_planning_contact_fields(
+    sf: Salesforce,
+    contact: dict[str, Any],
+    *,
+    first_name: str,
+    last_name: str,
+    role: str,
+    phone_number: str | None = None,
+    gdpr_consent: bool | None = None,
+) -> dict[str, Any]:
+    """Backfill Planning-owned fields on a compatible existing Contact.
+
+    Contract 30 links by native Planning ID, then enriches a matching Contact
+    without overwriting non-empty CRM values.
+    """
+    updates: dict[str, Any] = {}
+
+    if _normalize_optional_field_value(contact.get("FirstName")) is None:
+        updates["FirstName"] = first_name
+
+    if _normalize_optional_field_value(contact.get("LastName")) is None:
+        updates["LastName"] = last_name
+
+    if _normalize_optional_field_value(contact.get("Role__c")) is None:
+        updates["Role__c"] = role
+
+    normalized_phone = _normalize_optional_field_value(phone_number)
+    if normalized_phone is not None and _normalize_optional_field_value(contact.get("Phone")) is None:
+        updates["Phone"] = normalized_phone
+
+    if gdpr_consent is True and contact.get("GDPR_Consent__c") is None:
+        updates["GDPR_Consent__c"] = True
+
+    if not updates:
+        return contact
+
+    contact_id = contact["Id"]
+    await asyncio.to_thread(sf.Contact.update, contact_id, updates)
+    logger.info(
+        "Backfilled Planning Contact %s fields: %s",
+        contact_id,
+        ", ".join(sorted(updates.keys())),
+    )
+    return await asyncio.to_thread(sf.Contact.get, contact_id)
+
+
 async def update_mailing_contact(
     sf: Salesforce,
     contact: dict[str, Any],
@@ -502,26 +955,84 @@ async def update_mailing_contact(
     return await asyncio.to_thread(sf.Contact.get, contact_id)
 
 
+async def update_planning_contact(
+    sf: Salesforce,
+    contact: dict[str, Any],
+    *,
+    email: str,
+    first_name: str,
+    last_name: str,
+    role: str,
+    phone_number: str | None,
+) -> dict[str, Any]:
+    """Authoritatively update Planning-owned fields on an existing Contact.
+
+    Contract 31 sends the full Planning-side user object. CRM therefore
+    overwrites Planning-owned fields to match the payload while preserving
+    unrelated CRM-owned fields.
+    """
+    updates: dict[str, Any] = {}
+
+    if contact.get("Email") != email:
+        updates["Email"] = email
+
+    if _normalize_optional_field_value(contact.get("FirstName")) != _normalize_optional_field_value(first_name):
+        updates["FirstName"] = first_name
+
+    if _normalize_optional_field_value(contact.get("LastName")) != _normalize_optional_field_value(last_name):
+        updates["LastName"] = last_name
+
+    if _normalize_optional_field_value(contact.get("Role__c")) != _normalize_optional_field_value(role):
+        updates["Role__c"] = role
+
+    if _normalize_optional_field_value(contact.get("Phone")) != _normalize_optional_field_value(phone_number):
+        updates["Phone"] = phone_number
+
+    if contact.get("GDPR_Consent__c") is not True:
+        updates["GDPR_Consent__c"] = True
+
+    if not updates:
+        return contact
+
+    contact_id = contact["Id"]
+    await asyncio.to_thread(sf.Contact.update, contact_id, updates)
+    logger.info(
+        "Updated Planning Contact %s fields: %s",
+        contact_id,
+        ", ".join(sorted(updates.keys())),
+    )
+    return await asyncio.to_thread(sf.Contact.get, contact_id)
+
+
 async def get_unpaid_contacts(sf: Salesforce) -> list[dict[str, Any]]:
-    """Return active Contacts without a payment timestamp for Contract 17.
+    """Return active Contacts with at least one unpaid active registration.
 
     Records missing CRM_ID__c or Email are skipped because they cannot be
     serialized into the outbound XML contract safely.
     """
+    if not await has_session_registration_object(sf):
+        raise RuntimeError(
+            "Session_Registration__c is required to resolve unpaid registrations"
+        )
+
     active_field = await _resolve_contact_active_field_optional(sf)
     select_fields = [
-        "CRM_ID__c",
-        "FirstName",
-        "LastName",
-        "Email",
-        "AccountId",
-        "Account.Name",
-        "Paid_At__c",
+        "Id",
+        "Contact__c",
+        "Contact__r.CRM_ID__c",
+        "Contact__r.FirstName",
+        "Contact__r.LastName",
+        "Contact__r.Email",
+        "Contact__r.AccountId",
+        "Contact__r.Account.Name",
     ]
     if active_field is not None:
-        select_fields.append(active_field)
+        select_fields.append(f"Contact__r.{active_field}")
 
-    query = f"SELECT {', '.join(select_fields)} FROM Contact WHERE Paid_At__c = NULL"
+    query = (
+        f"SELECT {', '.join(select_fields)} FROM Session_Registration__c "
+        "WHERE Is_Active__c = true AND Paid_At__c = NULL"
+    )
 
     try:
         result = await asyncio.to_thread(sf.query_all, query)
@@ -529,15 +1040,16 @@ async def get_unpaid_contacts(sf: Salesforce) -> list[dict[str, Any]]:
         logger.error("Failed to get unpaid contacts: %s", str(e))
         raise
 
-    persons: list[dict[str, Any]] = []
+    persons_by_id: dict[str, dict[str, Any]] = {}
     for record in result.get("records", []):
+        contact = record.get("Contact__r") or {}
         # Older contacts may not have the active field populated yet; treat
         # missing values as active to avoid hiding valid unpaid participants.
-        if active_field is not None and record.get(active_field) is False:
+        if active_field is not None and contact.get(active_field) is False:
             continue
 
-        crm_id = record.get("CRM_ID__c")
-        email = record.get("Email")
+        crm_id = contact.get("CRM_ID__c")
+        email = contact.get("Email")
         if not crm_id or not email:
             logger.warning(
                 "Skipping unpaid contact without required fields: CRM_ID__c=%s Email=%s",
@@ -550,13 +1062,16 @@ async def get_unpaid_contacts(sf: Salesforce) -> list[dict[str, Any]]:
             logger.warning("Skipping unpaid contact with invalid CRM_ID__c: %s", crm_id)
             continue
 
-        account = record.get("Account") or {}
-        linked_to_company = bool(record.get("AccountId"))
+        if normalized_crm_id in persons_by_id:
+            continue
+
+        account = contact.get("Account") or {}
+        linked_to_company = bool(contact.get("AccountId"))
 
         person = {
             "id": normalized_crm_id,
-            "firstName": record.get("FirstName") or "",
-            "lastName": record.get("LastName") or "",
+            "firstName": contact.get("FirstName") or "",
+            "lastName": contact.get("LastName") or "",
             "email": email,
             "linkedToCompany": linked_to_company,
         }
@@ -564,8 +1079,9 @@ async def get_unpaid_contacts(sf: Salesforce) -> list[dict[str, Any]]:
             # Company linkage currently comes from the standard Account relation.
             person["companyName"] = account["Name"]
 
-        persons.append(person)
+        persons_by_id[normalized_crm_id] = person
 
+    persons = list(persons_by_id.values())
     persons.sort(key=lambda person: (person["lastName"], person["firstName"], person["email"]))
     return persons
 
@@ -577,13 +1093,33 @@ async def update_payment_status(
     registration_id: str | None,
     paid_at: str,
 ) -> dict[str, Any] | None:
-    """Update a Contact payment timestamp for Contract 16.
+    """Update payment state on the canonical session registration for Contract 16."""
+    if not await has_session_registration_object(sf):
+        raise RuntimeError(
+            "Session_Registration__c is required to update payment state"
+        )
 
-    Lookup order:
-    - If user_id is present, search by CRM_ID__c and do not fall back to email.
-    - Otherwise search by email, but only if it resolves to exactly one Contact.
-    """
-    if user_id:
+    session_registration: dict[str, Any] | None = None
+
+    if registration_id:
+        session_registration = await get_session_registration_by_registration_id(sf, registration_id)
+        if session_registration is None:
+            logger.warning(
+                "PaymentConfirmed ignored — no Session_Registration__c found for registrationId %s",
+                registration_id,
+            )
+            return None
+        if session_registration.get("Is_Active__c") is False:
+            logger.warning(
+                "PaymentConfirmed ignored — Session_Registration__c %s is inactive",
+                session_registration["Id"],
+            )
+            return None
+
+    contact: dict[str, Any] | None
+    if session_registration is not None:
+        contact = await asyncio.to_thread(sf.Contact.get, session_registration["Contact__c"])
+    elif user_id:
         contact = await get_contact_by_crm_id(sf, user_id)
         if contact is None:
             logger.warning("PaymentConfirmed ignored — no Contact found for userId %s", user_id)
@@ -593,22 +1129,80 @@ async def update_payment_status(
         if contact is None:
             return None
 
-    existing_registration_id = contact.get("Registration_ID__c")
-    if registration_id and existing_registration_id and registration_id != existing_registration_id:
+    if user_id and contact.get("CRM_ID__c") != user_id:
         logger.warning(
-            "PaymentConfirmed ignored — registrationId mismatch for %s: incoming=%s existing=%s",
-            contact.get("Email", email),
+            "PaymentConfirmed ignored — userId mismatch for registrationId %s: incoming=%s resolved=%s",
             registration_id,
-            existing_registration_id,
+            user_id,
+            contact.get("CRM_ID__c"),
         )
         return None
 
-    contact_id = contact["Id"]
+    if email and contact.get("Email") and contact.get("Email") != email:
+        logger.warning(
+            "PaymentConfirmed email mismatch — resolved %s but payload contained %s; proceeding with canonical registration match",
+            contact.get("Email"),
+            email,
+        )
+
+    if session_registration is None:
+        session_registration = await get_unique_active_session_registration_for_contact(
+            sf,
+            contact["Id"],
+        )
+        if session_registration is None:
+            return None
+
+    if session_registration.get("Contact__c") and session_registration["Contact__c"] != contact["Id"]:
+        logger.warning(
+            "PaymentConfirmed ignored — Session_Registration__c %s belongs to Contact %s, not %s",
+            session_registration["Id"],
+            session_registration["Contact__c"],
+            contact["Id"],
+        )
+        return None
+
     await asyncio.to_thread(
-        sf.Contact.update, contact_id, {_PAYMENT_TIMESTAMP_FIELD: paid_at}
+        sf.Session_Registration__c.update,
+        session_registration["Id"],
+        {"Paid_At__c": paid_at},
     )
-    logger.info("Updated %s for Contact %s", _PAYMENT_TIMESTAMP_FIELD, contact_id)
-    return await asyncio.to_thread(sf.Contact.get, contact_id)
+    incoming_paid_at = _parse_iso_datetime_utc(paid_at)
+    if incoming_paid_at is None:
+        raise ValueError(f"Invalid paid_at timestamp: {paid_at}")
+
+    existing_contact_paid_at = _parse_iso_datetime_utc(contact.get(_PAYMENT_TIMESTAMP_FIELD))
+    if contact.get(_PAYMENT_TIMESTAMP_FIELD) and existing_contact_paid_at is None:
+        logger.warning(
+            "Contact %s has invalid %s value %r; overwriting with %s",
+            contact["Id"],
+            _PAYMENT_TIMESTAMP_FIELD,
+            contact.get(_PAYMENT_TIMESTAMP_FIELD),
+            paid_at,
+        )
+
+    should_sync_contact_paid_at = (
+        existing_contact_paid_at is None or incoming_paid_at > existing_contact_paid_at
+    )
+    if should_sync_contact_paid_at:
+        await asyncio.to_thread(
+            sf.Contact.update,
+            contact["Id"],
+            {_PAYMENT_TIMESTAMP_FIELD: paid_at},
+        )
+        logger.info(
+            "Updated Session_Registration__c %s payment and advanced Contact %s compatibility timestamp",
+            session_registration["Id"],
+            contact["Id"],
+        )
+    else:
+        logger.info(
+            "Updated Session_Registration__c %s payment without moving Contact %s compatibility timestamp backwards",
+            session_registration["Id"],
+            contact["Id"],
+        )
+
+    return await asyncio.to_thread(sf.Contact.get, contact["Id"])
 
 
 async def deactivate_contact(
@@ -634,7 +1228,29 @@ async def deactivate_contact(
         logger.warning("Cannot deactivate — Contact not found for email: %s", email)
         return None
 
+    return await deactivate_contact_record(sf, contact, log_value=email)
+
+
+async def deactivate_contact_record(
+    sf: Salesforce, contact: dict[str, Any], *, log_value: str | None = None
+) -> dict[str, Any]:
+    """Soft-delete an already resolved Contact by setting its active flag to False.
+
+    NEVER physically delete a Contact — GDPR requires soft delete only.
+
+    Args:
+        sf: Authenticated Salesforce client.
+        contact: The already resolved Salesforce Contact record.
+        log_value: Optional identifier to include in logs.
+
+    Returns:
+        Updated Contact record as dict.
+
+    Raises:
+        SalesforceError: If update fails.
+    """
     contact_id = contact["Id"]
+    log_target = log_value or contact.get("Email") or contact_id
 
     try:
         active_field = await _resolve_contact_active_field(sf)
@@ -642,7 +1258,7 @@ async def deactivate_contact(
         await asyncio.to_thread(
             sf.Contact.update, contact_id, {active_field: False}
         )
-        logger.info("Deactivated Contact %s (email: %s)", contact_id, email)
+        logger.info("Deactivated Contact %s (%s)", contact_id, log_target)
 
         # Re-fetch to get the complete updated record
         updated_record = await asyncio.to_thread(sf.Contact.get, contact_id)
@@ -651,7 +1267,7 @@ async def deactivate_contact(
             updated_record["IsActive__c"] = updated_record.get(active_field, False)
         return updated_record
     except SalesforceError as e:
-        logger.error("Failed to deactivate contact %s: %s", email, str(e))
+        logger.error("Failed to deactivate contact %s: %s", log_target, str(e))
         raise
 
 
