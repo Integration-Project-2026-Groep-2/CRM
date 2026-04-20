@@ -3830,10 +3830,11 @@ class TestRunReceiver:
         queues = {}
         sf_client = MagicMock()
 
-        async def _declare_queue(_channel, queue_name, durable):  # noqa: ARG001
+        async def _declare_queue(_channel, queue_name, durable, *, routing_key=None):  # noqa: ARG001
             queue = queues.get(queue_name)
             if queue is None:
                 queue = AsyncMock(name=f"{queue_name}_queue")
+                queue._routing_key = routing_key or queue_name
                 queues[queue_name] = queue
             return queue
 
@@ -3962,9 +3963,9 @@ class TestRunReceiver:
 
         queues, mock_declare, sf_client = await self._run_receiver()
 
-        self._assert_declared_queue(mock_declare, "mailing.user.updated", durable=True)
+        self._assert_declared_queue(mock_declare, "crm.mailing.user.updated", durable=True)
         self._assert_partial_callback(
-            queues["mailing.user.updated"], handle_mailing_user_updated, sf_client
+            queues["crm.mailing.user.updated"], handle_mailing_user_updated, sf_client
         )
 
     @pytest.mark.asyncio
@@ -3973,9 +3974,9 @@ class TestRunReceiver:
 
         queues, mock_declare, sf_client = await self._run_receiver()
 
-        self._assert_declared_queue(mock_declare, "mailing.user.deactivated", durable=True)
+        self._assert_declared_queue(mock_declare, "crm.mailing.user.deactivated", durable=True)
         self._assert_partial_callback(
-            queues["mailing.user.deactivated"], handle_mailing_user_deactivated, sf_client
+            queues["crm.mailing.user.deactivated"], handle_mailing_user_deactivated, sf_client
         )
 
     @pytest.mark.asyncio
@@ -3999,3 +4000,91 @@ class TestRunReceiver:
         self._assert_partial_callback(
             queues["planning.user.deactivated"], handle_planning_user_deactivated, sf_client
         )
+
+    @pytest.mark.asyncio
+    async def test_contract_28_queue_uses_consumer_prefix_and_producer_routing_key(self):
+        """Consumer-prefixed queue `crm.mailing.user.updated` binds to `mailing.user.updated` routing key."""
+        queues, mock_declare, _sf_client = await self._run_receiver()
+
+        call = next(
+            call for call in mock_declare.call_args_list
+            if call.args[1] == "crm.mailing.user.updated"
+        )
+        assert call.kwargs["routing_key"] == "mailing.user.updated"
+        assert "crm.mailing.user.updated" in queues
+        assert "mailing.user.updated" not in queues
+
+    @pytest.mark.asyncio
+    async def test_contract_29_queue_uses_consumer_prefix_and_producer_routing_key(self):
+        """Consumer-prefixed queue `crm.mailing.user.deactivated` binds to `mailing.user.deactivated` routing key."""
+        queues, mock_declare, _sf_client = await self._run_receiver()
+
+        call = next(
+            call for call in mock_declare.call_args_list
+            if call.args[1] == "crm.mailing.user.deactivated"
+        )
+        assert call.kwargs["routing_key"] == "mailing.user.deactivated"
+        assert "crm.mailing.user.deactivated" in queues
+        assert "mailing.user.deactivated" not in queues
+
+
+class TestHandleProcessingError:
+    """Centralised error handling used by every handler's generic except-block."""
+
+    @pytest.fixture
+    def message(self):
+        msg = MagicMock()
+        msg.body = b"<Placeholder/>"
+        msg.ack = AsyncMock()
+        msg.reject = AsyncMock()
+        msg.headers = {}
+        return msg
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_sleeps_and_drops_without_requeue(self, message):
+        from src.receiver import _handle_processing_error
+
+        exc = Exception("Request refused. Response content: [{'errorCode': 'REQUEST_LIMIT_EXCEEDED'}]")
+        exc.content = [{"errorCode": "REQUEST_LIMIT_EXCEEDED", "message": "TotalRequests Limit exceeded."}]
+
+        with patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await _handle_processing_error("MailingUserCreated", message, exc)
+
+        mock_sleep.assert_awaited_once_with(60)
+        message.reject.assert_awaited_once_with(requeue=False)
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_detected_by_string_fallback(self, message):
+        from src.receiver import _handle_processing_error
+
+        exc = RuntimeError(
+            "Salesforce query failed: REQUEST_LIMIT_EXCEEDED TotalRequests Limit exceeded."
+        )
+
+        with patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await _handle_processing_error("FacturatieUserCreated", message, exc)
+
+        mock_sleep.assert_awaited_once_with(60)
+        message.reject.assert_awaited_once_with(requeue=False)
+
+    @pytest.mark.asyncio
+    async def test_transient_error_requeues(self, message, caplog):
+        from src.receiver import _handle_processing_error
+
+        with caplog.at_level(logging.ERROR):
+            await _handle_processing_error("MailingUserUpdated", message, RuntimeError("boom"))
+
+        message.reject.assert_awaited_once_with(requeue=True)
+        assert "attempt 1" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_max_retry_drops_without_requeue(self, message, caplog):
+        from src.receiver import _handle_processing_error
+
+        message.headers = {"x-death": [{"count": 5, "reason": "rejected"}]}
+
+        with caplog.at_level(logging.ERROR):
+            await _handle_processing_error("MailingUserUpdated", message, RuntimeError("persistent failure"))
+
+        message.reject.assert_awaited_once_with(requeue=False)
+        assert "max retries (5) exceeded" in caplog.text

@@ -241,14 +241,14 @@
 
   <!-- ============================================================
        CONTRACT 28 — Mailing → CRM: user bijwerken
-       Queue: mailing.user.updated | durable: true
+       Queue: crm.mailing.user.updated (routing key: mailing.user.updated) | durable: true
        Volledig object vereist volgens producer-XSD.
   ============================================================ -->
   <xs:element name="MailingUserUpdated" type="MailingUserPayloadType"/>
 
   <!-- ============================================================
        CONTRACT 29 — Mailing → CRM: user deactiveren
-       Queue: mailing.user.deactivated | durable: true
+       Queue: crm.mailing.user.deactivated (routing key: mailing.user.deactivated) | durable: true
   ============================================================ -->
   <xs:element name="MailingUserDeactivated">
     <xs:complexType>

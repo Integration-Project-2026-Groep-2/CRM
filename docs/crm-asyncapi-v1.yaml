@@ -161,11 +161,13 @@ channels:
           durable: true
 
   mailingUserUpdated:
-    address: mailing.user.updated
+    address: crm.mailing.user.updated
     description: >-
       Contract 28 — Mailing → CRM: bestaande Mailing-user bijwerken in
       Salesforce. Het volledige object wordt meegestuurd voor consistentie met
-      de producer-XSD.
+      de producer-XSD. Queue-naam gebruikt consumer-prefix (`crm.`) om collision
+      te voorkomen met Mailing's eigen consumer-queues op contact.topic.
+      Mailing publiceert nog steeds met routing key `mailing.user.updated`.
     messages:
       mailingUserUpdated:
         $ref: "#/components/messages/MailingUserUpdated"
@@ -173,13 +175,22 @@ channels:
       amqp:
         is: queue
         queue:
+          name: crm.mailing.user.updated
           durable: true
+        exchange:
+          name: user.topic
+          type: topic
+          durable: true
+        routingKeys:
+          - mailing.user.updated
 
   mailingUserDeactivated:
-    address: mailing.user.deactivated
+    address: crm.mailing.user.deactivated
     description: >-
       Contract 29 — Mailing → CRM: bestaande Mailing-user soft-deactiveren in
-      Salesforce op basis van GDPR- of annulatiepropagatie.
+      Salesforce op basis van GDPR- of annulatiepropagatie. Queue-naam gebruikt
+      consumer-prefix om collision met Mailing's eigen consumer-queues te
+      vermijden. Routing key blijft `mailing.user.deactivated`.
     messages:
       mailingUserDeactivated:
         $ref: "#/components/messages/MailingUserDeactivated"
@@ -187,7 +198,14 @@ channels:
       amqp:
         is: queue
         queue:
+          name: crm.mailing.user.deactivated
           durable: true
+        exchange:
+          name: user.topic
+          type: topic
+          durable: true
+        routingKeys:
+          - mailing.user.deactivated
 
   # ============================================================
   # PLANNING → CRM (user sync)

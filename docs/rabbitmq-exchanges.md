@@ -69,8 +69,8 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 | `facturatie.user.updated` | `user.topic` | Facturatie | 25 |
 | `facturatie.user.deactivated` | `user.topic` | Facturatie | 26 |
 | `mailing.user.created` | `user.topic` | Mailing | 27 |
-| `mailing.user.updated` | `user.topic` | Mailing | 28 |
-| `mailing.user.deactivated` | `user.topic` | Mailing | 29 |
+| `crm.mailing.user.updated` (rk `mailing.user.updated`) | `user.topic` | Mailing | 28 |
+| `crm.mailing.user.deactivated` (rk `mailing.user.deactivated`) | `user.topic` | Mailing | 29 |
 | `planning.user.created` | `user.topic` | Planning | 30 (Planning ref 21) |
 | `planning.user.updated` | `user.topic` | Planning | 31 (Planning ref 22) |
 | `planning.user.deactivated` | `user.topic` | Planning | 32 (Planning ref 23) |
