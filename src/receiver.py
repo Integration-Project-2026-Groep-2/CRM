@@ -14,6 +14,7 @@ from lxml import etree
 from src import sender, xml_validator
 from src.config import Config
 from src.salesforce_client import (
+    apply_is_active,
     backfill_mailing_contact_fields,
     backfill_planning_contact_fields,
     count_active_session_registrations,
@@ -1021,9 +1022,11 @@ async def handle_mailing_user_created(
 
     Behaviour:
     - Validate XML against schema.
-    - Reject users without GDPR consent.
+    - Mirror Mailing's `isActive` flag to the Contact active field.
     - Create a new Contact when the email and Mailing ID are new.
     - Reuse a unique existing Contact when the Mailing payload is idempotent.
+    - When `isActive=false` reaches an existing Contact, deactivate it and
+      publish crm.user.deactivated instead of crm.user.confirmed.
     - Publish crm.user.conflict when the email already exists with conflicting data.
     - Invalid XML: rejected without requeue.
     - Ambiguous Contacts: ack without retry.
@@ -1039,15 +1042,7 @@ async def handle_mailing_user_created(
     try:
         email = xml.findtext("email") or ""
         mailing_id = xml.findtext("id") or ""
-        gdpr_text = xml.findtext("gdprConsent")
-        if gdpr_text not in ("true", "1"):
-            logger.warning(
-                "MailingUserCreated refused — gdprConsent=%s for email %s",
-                gdpr_text,
-                email,
-            )
-            await message.reject(requeue=False)
-            return
+        is_active = xml.findtext("isActive") in ("true", "1")
 
         if not await has_contact_mailing_id_field(sf):
             logger.error(
@@ -1079,9 +1074,16 @@ async def handle_mailing_user_created(
                 return
 
             if email_match_status == "none":
-                contact = await create_contact(sf, _build_mailing_contact_data(xml))
+                contact_data = _build_mailing_contact_data(xml)
+                if not is_active:
+                    contact_data = await apply_is_active(sf, contact_data, False)
+                contact = await create_contact(sf, contact_data)
                 await sender.publish_user_confirmed(_build_user_data(contact))
-                logger.info("Published crm.user.confirmed for new Mailing user %s", email)
+                logger.info(
+                    "Published crm.user.confirmed for new Mailing user %s (isActive=%s)",
+                    email,
+                    is_active,
+                )
                 await message.ack()
                 return
 
@@ -1175,6 +1177,20 @@ async def handle_mailing_user_created(
             contact,
             **_get_mailing_backfill_kwargs(contact, xml),
         )
+        if not is_active:
+            contact = await deactivate_contact_record(
+                sf, contact, log_value=f"Mailing_ID__c {mailing_id}",
+            )
+            deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            await sender.publish_user_deactivated(
+                _build_user_deactivation_data(contact, deactivated_at),
+            )
+            logger.info(
+                "Published crm.user.deactivated for existing Mailing user %s (isActive=false on create)",
+                email,
+            )
+            await message.ack()
+            return
         await sender.publish_user_confirmed(_build_user_data(contact))
         logger.info("Published crm.user.confirmed for existing Mailing user %s", email)
         await message.ack()
@@ -1192,13 +1208,13 @@ async def handle_mailing_user_updated(
 
     Behaviour:
     - Validate XML against schema.
-    - Reject users without GDPR consent.
     - Resolve the Contact strictly by Mailing_ID__c.
     - Requeue unknown Mailing identities so out-of-order create/update can recover.
     - Ack ambiguous Mailing identities without retry.
     - Publish crm.user.conflict on email collisions.
-    - Update Mailing-owned fields authoritatively in Salesforce.
-    - Publish crm.user.updated after a successful update.
+    - If `isActive=false`, soft-delete the Contact and publish crm.user.deactivated.
+    - Otherwise update Mailing-owned fields authoritatively in Salesforce,
+      reactivate when needed, and publish crm.user.updated.
     - Invalid XML: rejected without requeue.
     - Other errors: requeued.
     """
@@ -1212,15 +1228,7 @@ async def handle_mailing_user_updated(
     try:
         email = xml.findtext("email") or ""
         mailing_id = xml.findtext("id") or ""
-        gdpr_text = xml.findtext("gdprConsent")
-        if gdpr_text not in ("true", "1"):
-            logger.warning(
-                "MailingUserUpdated refused — gdprConsent=%s for email %s",
-                gdpr_text,
-                email,
-            )
-            await message.reject(requeue=False)
-            return
+        is_active = xml.findtext("isActive") in ("true", "1")
 
         if not await has_contact_mailing_id_field(sf):
             logger.error(
@@ -1274,6 +1282,21 @@ async def handle_mailing_user_updated(
             existing_contact,
             mailing_id=mailing_id,
         )
+        if not is_active:
+            contact = await deactivate_contact_record(
+                sf, contact, log_value=f"Mailing_ID__c {mailing_id}",
+            )
+            deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            await sender.publish_user_deactivated(
+                _build_user_deactivation_data(contact, deactivated_at),
+            )
+            logger.info(
+                "Published crm.user.deactivated for Mailing user %s (isActive=false on update)",
+                email,
+            )
+            await message.ack()
+            return
+
         contact = await update_mailing_contact(
             sf,
             contact,
@@ -1282,6 +1305,17 @@ async def handle_mailing_user_updated(
             last_name=_get_mailing_last_name_for_contact(xml),
             company_id=_normalize_optional_text(xml.findtext("companyId")),
         )
+        if not _get_contact_is_active(contact):
+            reactivation_update = await apply_is_active(sf, {}, True)
+            if reactivation_update:
+                contact_id = contact["Id"]
+                await asyncio.to_thread(sf.Contact.update, contact_id, reactivation_update)
+                contact = await asyncio.to_thread(sf.Contact.get, contact_id)
+                logger.info(
+                    "Reactivated Contact %s for Mailing user %s (isActive=true on update)",
+                    contact_id,
+                    email,
+                )
         await sender.publish_user_updated(_build_updated_user_data(contact))
         logger.info("Published crm.user.updated for Mailing user %s", email)
         await message.ack()
@@ -1384,9 +1418,11 @@ async def handle_facturatie_user_created(
 
     Behaviour:
     - Validate XML against schema.
-    - Reject users without GDPR consent.
-    - Reuse an existing unique Contact after ensuring canonical identifiers.
-    - Create a new Contact when no Contact exists yet.
+    - Mirror Facturatie's `isActive` flag to the Contact active field on create.
+    - Reuse an existing unique Contact after ensuring canonical identifiers;
+      deactivate it when `isActive=false` arrives for an existing Contact.
+    - Create a new Contact when no Contact exists yet (inactive if
+      `isActive=false`).
     - Do not publish crm.mail.requested for this flow.
     - Invalid XML: rejected without requeue.
     - Ambiguous Contacts: ack without retry.
@@ -1401,15 +1437,7 @@ async def handle_facturatie_user_created(
 
     try:
         email = xml.findtext("email") or ""
-        gdpr_text = xml.findtext("gdprConsent")
-        if gdpr_text not in ("true", "1"):
-            logger.warning(
-                "FacturatieUserCreated refused — gdprConsent=%s for email %s",
-                gdpr_text,
-                email,
-            )
-            await message.reject(requeue=False)
-            return
+        is_active = xml.findtext("isActive") in ("true", "1")
 
         registration_id = xml.findtext("registrationId")
         match_status, existing_contact = await get_contact_match_by_email(sf, email)
@@ -1419,6 +1447,20 @@ async def handle_facturatie_user_created(
                 existing_contact,
                 registration_id=registration_id,
             )
+            if not is_active:
+                contact = await deactivate_contact_record(
+                    sf, contact, log_value=email,
+                )
+                deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                await sender.publish_user_deactivated(
+                    _build_user_deactivation_data(contact, deactivated_at),
+                )
+                logger.info(
+                    "Published crm.user.deactivated for existing Facturatie user %s (isActive=false)",
+                    email,
+                )
+                await message.ack()
+                return
             await sender.publish_user_confirmed(_build_user_data(contact))
             logger.info("Published crm.user.confirmed for existing Facturatie user %s", email)
             await message.ack()
@@ -1450,9 +1492,15 @@ async def handle_facturatie_user_created(
         if company_id:
             contact_data["Company_ID__c"] = company_id
 
+        if not is_active:
+            contact_data = await apply_is_active(sf, contact_data, False)
         contact = await create_contact(sf, contact_data)
         await sender.publish_user_confirmed(_build_user_data(contact))
-        logger.info("Published crm.user.confirmed for new Facturatie user %s", email)
+        logger.info(
+            "Published crm.user.confirmed for new Facturatie user %s (isActive=%s)",
+            email,
+            is_active,
+        )
         await message.ack()
     except Exception as exc:  # noqa: BLE001
         logger.error("FacturatieUserCreated — error processing message: %s", exc)

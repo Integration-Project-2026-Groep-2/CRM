@@ -140,7 +140,7 @@ channels:
     description: >-
       Contract 27 — Mailing → CRM: nieuwe Mailing-user synchroniseren naar
       Salesforce. Payload volgt de Mailing XSD met verplichte velden id, email
-      en gdprConsent. CRM bewaart id als native Mailing-identiteit
+      en isActive. CRM bewaart id als native Mailing-identiteit
       (`Mailing_ID__c`) naast de eigen CRM UUID. Ontbreekt `lastName`, dan
       normaliseert CRM dit voor Salesforce naar het emailadres. Een
       company-linkage mag alleen een bestaand blank/VISITOR/COMPANY_CONTACT-contact
@@ -1205,7 +1205,7 @@ components:
               <email>els.peeters@example.com</email>
               <phone>+32470111222</phone>
               <role>COMPANY_CONTACT</role>
-              <gdprConsent>true</gdprConsent>
+              <isActive>true</isActive>
               <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
               <createdAt>2026-04-15T09:30:00Z</createdAt>
             </UserCreated>
@@ -1289,7 +1289,7 @@ components:
               <email>els.peeters@example.com</email>
               <firstName>Els</firstName>
               <lastName>Peeters</lastName>
-              <gdprConsent>true</gdprConsent>
+              <isActive>true</isActive>
               <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
             </MailingUserCreated>
 
@@ -1314,7 +1314,7 @@ components:
               <email>els.peeters@example.com</email>
               <firstName>Elise</firstName>
               <lastName>Peeters</lastName>
-              <gdprConsent>true</gdprConsent>
+              <isActive>true</isActive>
               <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
             </MailingUserUpdated>
 
@@ -2222,7 +2222,7 @@ components:
         - lastName
         - email
         - role
-        - gdprConsent
+        - isActive
         - createdAt
       description: >-
         Facturatie meldt een handmatig aangemaakte klant zodat CRM een Contact
@@ -2256,9 +2256,9 @@ components:
             - CASHIER
             - BAR_STAFF
             - ADMIN
-        gdprConsent:
+        isActive:
           type: boolean
-          description: Verplicht — CRM mag deze flow alleen verwerken met expliciete toestemming.
+          description: Verplicht — Facturatie-side state. CRM mirrors dit naar de Contact active-flag in Salesforce.
         companyId:
           type: string
           format: uuid
@@ -2357,7 +2357,7 @@ components:
       required:
         - id
         - email
-        - gdprConsent
+        - isActive
       description: >-
         Mailing synchroniseert een user uit de eigen datastore naar CRM. Deze
         payload volgt de producer-XSD en bevat bewust alleen de velden die
@@ -2376,9 +2376,9 @@ components:
         lastName:
           type: string
           description: Optioneel — mag in de producer-XSD ook expliciet nil zijn.
-        gdprConsent:
+        isActive:
           type: boolean
-          description: Verplicht — CRM verwerkt create/update alleen met expliciete toestemming.
+          description: Verplicht — Mailing-side state. CRM mirrors dit naar de Contact active-flag in Salesforce.
         companyId:
           type: string
           format: uuid
@@ -2390,7 +2390,7 @@ components:
       required:
         - id
         - email
-        - gdprConsent
+        - isActive
       description: >-
         Mailing stuurt steeds het volledige gekende user-object om partial
         merge-ambiguiteit bij CRM te vermijden.
@@ -2408,8 +2408,9 @@ components:
         lastName:
           type: string
           description: Optioneel — mag in de producer-XSD ook expliciet nil zijn.
-        gdprConsent:
+        isActive:
           type: boolean
+          description: Wanneer false publiceert CRM crm.user.deactivated in plaats van crm.user.updated.
         companyId:
           type: string
           format: uuid
