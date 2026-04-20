@@ -73,7 +73,9 @@ _INBOUND_EXCHANGE: dict[str, str] = {
 }
 
 _MAX_REQUEUE_ATTEMPTS = 5
+_MAX_DEFERRAL_ATTEMPTS = 10
 _RATE_LIMIT_SLEEP_SECONDS = 60
+_BACKOFF_CAP_SECONDS = 30
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:
@@ -100,6 +102,16 @@ def _delivery_attempt_count(message: aio_pika.IncomingMessage) -> int:
     return 0
 
 
+def _exponential_backoff_seconds(attempt: int, cap: int = _BACKOFF_CAP_SECONDS) -> float:
+    """Exponential backoff doubling on each attempt, capped.
+
+    attempt 0 → 1s, 1 → 2s, 2 → 4s, 3 → 8s, 4 → 16s, 5+ → cap (30s by default).
+    """
+    if attempt < 0:
+        attempt = 0
+    return float(min(2 ** attempt, cap))
+
+
 async def _handle_processing_error(
     contract: str, message: aio_pika.IncomingMessage, exc: Exception,
 ) -> None:
@@ -107,7 +119,7 @@ async def _handle_processing_error(
 
     - Salesforce rate-limit → sleep then drop (no requeue, no self-DOS).
     - Max retries exceeded → drop without requeue.
-    - Otherwise: requeue for another attempt.
+    - Otherwise: exponential backoff, then requeue for another attempt.
     """
     if _is_rate_limit_error(exc):
         logger.error(
@@ -125,10 +137,47 @@ async def _handle_processing_error(
         )
         await message.reject(requeue=False)
         return
+    sleep_s = _exponential_backoff_seconds(attempts)
     logger.error(
-        "%s — error processing message (attempt %d): %s",
-        contract, attempts + 1, exc,
+        "%s — error (attempt %d/%d); sleeping %ss before requeue: %s",
+        contract, attempts + 1, _MAX_REQUEUE_ATTEMPTS, sleep_s, exc,
     )
+    await asyncio.sleep(sleep_s)
+    await message.reject(requeue=True)
+
+
+async def _handle_out_of_order_deferral(
+    contract: str,
+    message: aio_pika.IncomingMessage,
+    *,
+    identifier_label: str,
+    identifier_value: str,
+) -> None:
+    """Requeue with exponential backoff for create/update ordering races.
+
+    When an update/deactivate arrives before the matching create is processed,
+    we retry with increasing delays instead of tight-looping. This gives the
+    create-handler breathing room and prevents burning Salesforce API quota
+    on queries that will keep returning empty results.
+
+    Drops the message after _MAX_DEFERRAL_ATTEMPTS retries — at that point the
+    create almost certainly never arrived and further retries are pointless.
+    """
+    attempts = _delivery_attempt_count(message)
+    if attempts >= _MAX_DEFERRAL_ATTEMPTS:
+        logger.warning(
+            "%s — deferred %d times for %s=%s; dropping (upstream create never arrived)",
+            contract, attempts, identifier_label, identifier_value,
+        )
+        await message.reject(requeue=False)
+        return
+    sleep_s = _exponential_backoff_seconds(attempts)
+    logger.warning(
+        "%s deferred (attempt %d/%d) — no match for %s=%s; sleeping %ss before requeue",
+        contract, attempts + 1, _MAX_DEFERRAL_ATTEMPTS,
+        identifier_label, identifier_value, sleep_s,
+    )
+    await asyncio.sleep(sleep_s)
     await message.reject(requeue=True)
 
 
@@ -951,11 +1000,12 @@ async def handle_planning_user_updated(
 
         planning_match_status, existing_contact = await get_contact_match_by_planning_id(sf, planning_id)
         if planning_match_status == "none":
-            logger.warning(
-                "PlanningUserUpdated deferred — no Contact found for Planning_ID__c %s; retrying for possible out-of-order create/update",
-                planning_id,
+            await _handle_out_of_order_deferral(
+                "PlanningUserUpdated",
+                message,
+                identifier_label="Planning_ID__c",
+                identifier_value=planning_id,
             )
-            await message.reject(requeue=True)
             return
 
         if planning_match_status == "ambiguous":
@@ -1049,11 +1099,12 @@ async def handle_planning_user_deactivated(
 
         planning_match_status, existing_contact = await get_contact_match_by_planning_id(sf, planning_id)
         if planning_match_status == "none":
-            logger.warning(
-                "PlanningUserDeactivated deferred — no Contact found for Planning_ID__c %s; retrying for possible out-of-order create/deactivate",
-                planning_id,
+            await _handle_out_of_order_deferral(
+                "PlanningUserDeactivated",
+                message,
+                identifier_label="Planning_ID__c",
+                identifier_value=planning_id,
             )
-            await message.reject(requeue=True)
             return
 
         if planning_match_status == "ambiguous":
@@ -1319,11 +1370,12 @@ async def handle_mailing_user_updated(
 
         mailing_match_status, existing_contact = await get_contact_match_by_mailing_id(sf, mailing_id)
         if mailing_match_status == "none":
-            logger.warning(
-                "MailingUserUpdated deferred — no Contact found for Mailing_ID__c %s; retrying for possible out-of-order create/update",
-                mailing_id,
+            await _handle_out_of_order_deferral(
+                "MailingUserUpdated",
+                message,
+                identifier_label="Mailing_ID__c",
+                identifier_value=mailing_id,
             )
-            await message.reject(requeue=True)
             return
 
         if mailing_match_status == "ambiguous":
@@ -1442,11 +1494,12 @@ async def handle_mailing_user_deactivated(
 
         mailing_match_status, existing_contact = await get_contact_match_by_mailing_id(sf, mailing_id)
         if mailing_match_status == "none":
-            logger.warning(
-                "MailingUserDeactivated deferred — no Contact found for Mailing_ID__c %s; retrying for possible out-of-order create/deactivate",
-                mailing_id,
+            await _handle_out_of_order_deferral(
+                "MailingUserDeactivated",
+                message,
+                identifier_label="Mailing_ID__c",
+                identifier_value=mailing_id,
             )
-            await message.reject(requeue=True)
             return
 
         if mailing_match_status == "ambiguous":
