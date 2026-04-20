@@ -146,7 +146,7 @@ async def ensure_local_e2e_stack():
     await _wait_for_local_rabbitmq()
     await _wait_for_receiver_queue("frontend.registration.created")
     await _wait_for_receiver_queue("mailing.user.created")
-    await _wait_for_receiver_queue("mailing.user.deactivated")
+    await _wait_for_receiver_queue("crm.mailing.user.deactivated")
 
 
 @pytest.fixture
@@ -632,7 +632,7 @@ class TestContract28MailingUserUpdated:
         self, channel, inbound_exchanges, outbound_exchange, sf_client,
     ):
         await _wait_for_receiver_queue("mailing.user.created")
-        await _wait_for_receiver_queue("mailing.user.updated")
+        await _wait_for_receiver_queue("crm.mailing.user.updated")
         await _require_salesforce_contact_field(sf_client, "Mailing_ID__c")
 
         email = _unique_email()
@@ -701,7 +701,7 @@ class TestContract29MailingUserDeactivated:
         self, channel, inbound_exchanges, outbound_exchange, sf_client,
     ):
         await _wait_for_receiver_queue("mailing.user.created")
-        await _wait_for_receiver_queue("mailing.user.deactivated")
+        await _wait_for_receiver_queue("crm.mailing.user.deactivated")
         await _require_salesforce_contact_field(sf_client, "Mailing_ID__c")
 
         email = _unique_email()

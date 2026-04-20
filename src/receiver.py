@@ -46,15 +46,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Queue → topic exchange mapping (Infra-beheerd, zie docs/rabbitmq-exchanges.md)
+# Queue → topic exchange mapping (Infra-beheerd, zie docs/rabbitmq-exchanges.md).
+# Queue-namen volgen consumer-prefix conventie (`crm.<producer>.<event>`) wanneer
+# de naam anders zou botsen met een consumer-queue van een ander team op een
+# andere exchange. De routing keys blijven de producer-eventnamen — zie de
+# run_receiver calls waar routing_key expliciet meegegeven wordt.
 _INBOUND_EXCHANGE: dict[str, str] = {
     "frontend.registration.created": "user.topic",
     "frontend.registration.updated": "user.topic",
     "frontend.company.created": "user.topic",
     "facturatie.user.created": "user.topic",
     "mailing.user.created": "user.topic",
-    "mailing.user.updated": "user.topic",
-    "mailing.user.deactivated": "user.topic",
+    "crm.mailing.user.updated": "user.topic",
+    "crm.mailing.user.deactivated": "user.topic",
     "planning.user.created": "user.topic",
     "planning.user.updated": "user.topic",
     "planning.user.deactivated": "user.topic",
@@ -68,18 +72,88 @@ _INBOUND_EXCHANGE: dict[str, str] = {
     "mailing.bounce.reported": "mail.topic",
 }
 
+_MAX_REQUEUE_ATTEMPTS = 5
+_RATE_LIMIT_SLEEP_SECONDS = 60
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """Detect Salesforce REQUEST_LIMIT_EXCEEDED via content attribute or message."""
+    content = getattr(exc, "content", None)
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("errorCode") == "REQUEST_LIMIT_EXCEEDED":
+                return True
+    return "REQUEST_LIMIT_EXCEEDED" in str(exc)
+
+
+def _delivery_attempt_count(message: aio_pika.IncomingMessage) -> int:
+    """Return how often RabbitMQ has re-delivered this message (x-death header)."""
+    headers = message.headers or {}
+    x_death = headers.get("x-death")
+    if isinstance(x_death, list) and x_death:
+        first = x_death[0]
+        if isinstance(first, dict):
+            try:
+                return int(first.get("count", 0))
+            except (TypeError, ValueError):
+                return 0
+    return 0
+
+
+async def _handle_processing_error(
+    contract: str, message: aio_pika.IncomingMessage, exc: Exception,
+) -> None:
+    """Centralised transient-error handling for receiver handlers.
+
+    - Salesforce rate-limit → sleep then drop (no requeue, no self-DOS).
+    - Max retries exceeded → drop without requeue.
+    - Otherwise: requeue for another attempt.
+    """
+    if _is_rate_limit_error(exc):
+        logger.error(
+            "%s — Salesforce rate limit hit; sleeping %ss then dropping: %s",
+            contract, _RATE_LIMIT_SLEEP_SECONDS, exc,
+        )
+        await asyncio.sleep(_RATE_LIMIT_SLEEP_SECONDS)
+        await message.reject(requeue=False)
+        return
+    attempts = _delivery_attempt_count(message)
+    if attempts >= _MAX_REQUEUE_ATTEMPTS:
+        logger.error(
+            "%s — max retries (%d) exceeded; dropping: %s",
+            contract, _MAX_REQUEUE_ATTEMPTS, exc,
+        )
+        await message.reject(requeue=False)
+        return
+    logger.error(
+        "%s — error processing message (attempt %d): %s",
+        contract, attempts + 1, exc,
+    )
+    await message.reject(requeue=True)
+
 
 async def _declare_and_bind(
-    channel: AbstractChannel, queue_name: str, durable: bool,
+    channel: AbstractChannel,
+    queue_name: str,
+    durable: bool,
+    *,
+    routing_key: str | None = None,
 ) -> aio_pika.abc.AbstractQueue:
-    """Declare a queue and bind it to the mapped topic exchange."""
+    """Declare a queue and bind it to the mapped topic exchange.
+
+    When `routing_key` is omitted, the queue-name is reused as routing key
+    (point-to-point queues where the name matches the producer event). Passing
+    an explicit routing_key is required when the queue-name is consumer-prefixed
+    to avoid collisions while still binding to the producer's event.
+    """
     queue = await channel.declare_queue(queue_name, durable=durable)
     exchange_name = _INBOUND_EXCHANGE.get(queue_name)
     if exchange_name:
         exchange = await channel.declare_exchange(
             exchange_name, type=ExchangeType.TOPIC, durable=True,
         )
-        await queue.bind(exchange, routing_key=queue_name)
+        effective_routing_key = routing_key or queue_name
+        await queue.bind(exchange, routing_key=effective_routing_key)
     return queue
 
 
@@ -118,13 +192,26 @@ async def run_receiver(connection: AbstractRobustConnection, config: Config) -> 
     await queue_mailing_user_created.consume(partial(handle_mailing_user_created, sf=sf_client))
 
     # Contract 28 — Mailing → CRM: update existing Mailing user sync
-    # Queue: mailing.user.updated | Exchange: user.topic | durable: true
-    queue_mailing_user_updated = await _declare_and_bind(channel, "mailing.user.updated", durable=True)
+    # Queue: crm.mailing.user.updated (routing key: mailing.user.updated)
+    # Exchange: user.topic | durable: true. Consumer-prefixed queue voorkomt
+    # collision met Mailing's eigen consumer-queue op contact.topic.
+    queue_mailing_user_updated = await _declare_and_bind(
+        channel,
+        "crm.mailing.user.updated",
+        durable=True,
+        routing_key="mailing.user.updated",
+    )
     await queue_mailing_user_updated.consume(partial(handle_mailing_user_updated, sf=sf_client))
 
     # Contract 29 — Mailing → CRM: deactivate existing Mailing user sync
-    # Queue: mailing.user.deactivated | Exchange: user.topic | durable: true
-    queue_mailing_user_deactivated = await _declare_and_bind(channel, "mailing.user.deactivated", durable=True)
+    # Queue: crm.mailing.user.deactivated (routing key: mailing.user.deactivated)
+    # Exchange: user.topic | durable: true.
+    queue_mailing_user_deactivated = await _declare_and_bind(
+        channel,
+        "crm.mailing.user.deactivated",
+        durable=True,
+        routing_key="mailing.user.deactivated",
+    )
     await queue_mailing_user_deactivated.consume(partial(handle_mailing_user_deactivated, sf=sf_client))
 
     # Contract 30 — Planning → CRM: new Planning user sync
@@ -243,8 +330,7 @@ async def handle_payment_confirmed(
         logger.info("Processed payment confirmation for %s", contact.get("Email", email))
         await message.ack()
     except Exception as exc:  # noqa: BLE001
-        logger.error("PaymentConfirmed — error processing message: %s", exc)
-        await message.reject(requeue=True)
+        await _handle_processing_error("PaymentConfirmed", message, exc)
 
 
 async def handle_unpaid_requested(
@@ -275,8 +361,7 @@ async def handle_unpaid_requested(
         logger.info("Processed unpaid request %s with %d unpaid contacts", request_id, len(persons))
         await message.ack()
     except Exception as exc:  # noqa: BLE001
-        logger.error("UnpaidRequest — error processing message: %s", exc)
-        await message.reject(requeue=True)
+        await _handle_processing_error("UnpaidRequest", message, exc)
 
 
 async def handle_session_updated(
@@ -351,8 +436,7 @@ async def handle_session_updated(
         )
         await message.ack()
     except Exception as exc:  # noqa: BLE001
-        logger.error("SessionUpdate — error processing message: %s", exc)
-        await message.reject(requeue=True)
+        await _handle_processing_error("SessionUpdate", message, exc)
 
 
 def _get_contact_is_active(contact: dict) -> bool:
@@ -816,8 +900,7 @@ async def handle_planning_user_created(
         logger.info("Published crm.user.confirmed for linked Planning user %s", email)
         await message.ack()
     except Exception as exc:  # noqa: BLE001
-        logger.error("PlanningUserCreated — error processing message: %s", exc)
-        await message.reject(requeue=True)
+        await _handle_processing_error("PlanningUserCreated", message, exc)
 
 
 async def handle_planning_user_updated(
@@ -924,8 +1007,7 @@ async def handle_planning_user_updated(
         logger.info("Published crm.user.updated for Planning user %s", email)
         await message.ack()
     except Exception as exc:  # noqa: BLE001
-        logger.error("PlanningUserUpdated — error processing message: %s", exc)
-        await message.reject(requeue=True)
+        await _handle_processing_error("PlanningUserUpdated", message, exc)
 
 
 async def handle_planning_user_deactivated(
@@ -1009,8 +1091,7 @@ async def handle_planning_user_deactivated(
         logger.info("Published crm.user.deactivated for Planning_ID__c %s", planning_id)
         await message.ack()
     except Exception as exc:  # noqa: BLE001
-        logger.error("PlanningUserDeactivated — error processing message: %s", exc)
-        await message.reject(requeue=True)
+        await _handle_processing_error("PlanningUserDeactivated", message, exc)
 
 
 async def handle_mailing_user_created(
@@ -1195,8 +1276,7 @@ async def handle_mailing_user_created(
         logger.info("Published crm.user.confirmed for existing Mailing user %s", email)
         await message.ack()
     except Exception as exc:  # noqa: BLE001
-        logger.error("MailingUserCreated — error processing message: %s", exc)
-        await message.reject(requeue=True)
+        await _handle_processing_error("MailingUserCreated", message, exc)
 
 
 async def handle_mailing_user_updated(
@@ -1204,7 +1284,7 @@ async def handle_mailing_user_updated(
 ) -> None:
     """Contract 28 — Mailing -> CRM: update an existing Mailing-linked user.
 
-    Queue: mailing.user.updated | durable: true
+    Queue: crm.mailing.user.updated (routing key: mailing.user.updated) | durable: true
 
     Behaviour:
     - Validate XML against schema.
@@ -1320,8 +1400,7 @@ async def handle_mailing_user_updated(
         logger.info("Published crm.user.updated for Mailing user %s", email)
         await message.ack()
     except Exception as exc:  # noqa: BLE001
-        logger.error("MailingUserUpdated — error processing message: %s", exc)
-        await message.reject(requeue=True)
+        await _handle_processing_error("MailingUserUpdated", message, exc)
 
 
 async def handle_mailing_user_deactivated(
@@ -1329,7 +1408,7 @@ async def handle_mailing_user_deactivated(
 ) -> None:
     """Contract 29 — Mailing -> CRM: deactivate an existing Mailing-linked user.
 
-    Queue: mailing.user.deactivated | durable: true
+    Queue: crm.mailing.user.deactivated (routing key: mailing.user.deactivated) | durable: true
 
     Behaviour:
     - Validate XML against schema.
@@ -1405,8 +1484,7 @@ async def handle_mailing_user_deactivated(
         logger.info("Published crm.user.deactivated for Mailing_ID__c %s", mailing_id)
         await message.ack()
     except Exception as exc:  # noqa: BLE001
-        logger.error("MailingUserDeactivated — error processing message: %s", exc)
-        await message.reject(requeue=True)
+        await _handle_processing_error("MailingUserDeactivated", message, exc)
 
 
 async def handle_facturatie_user_created(
@@ -1503,8 +1581,7 @@ async def handle_facturatie_user_created(
         )
         await message.ack()
     except Exception as exc:  # noqa: BLE001
-        logger.error("FacturatieUserCreated — error processing message: %s", exc)
-        await message.reject(requeue=True)
+        await _handle_processing_error("FacturatieUserCreated", message, exc)
 
 
 async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
@@ -1672,8 +1749,7 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
         await message.ack()
 
     except Exception as exc:  # noqa: BLE001
-        logger.error("Registration — error processing message: %s", exc)
-        await message.reject(requeue=True)
+        await _handle_processing_error("Registration", message, exc)
 
 
 def _build_updated_user_data(contact: dict) -> dict:
@@ -1760,8 +1836,7 @@ async def handle_registration_updated(message: aio_pika.IncomingMessage, sf: "Sa
             await message.reject(requeue=False)
 
     except Exception as exc:  # noqa: BLE001
-        logger.error("RegistrationChange — error processing message: %s", exc)
-        await message.reject(requeue=True)
+        await _handle_processing_error("RegistrationChange", message, exc)
 
 
 async def _handle_update(
