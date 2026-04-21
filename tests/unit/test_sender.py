@@ -722,3 +722,172 @@ class TestPublishUserDeactivated:
         assert xml.findtext("id") == "550e8400-e29b-41d4-a716-446655440000"
         assert xml.findtext("email") == "jan@example.com"
         assert xml.findtext("deactivatedAt") == "2026-04-15T14:00:00Z"
+
+
+# ---------------------------------------------------------------------------
+# Contract 19 — publish_company_updated
+# ---------------------------------------------------------------------------
+
+class TestPublishCompanyUpdated:
+
+    BASE_DATA = {
+        "id": "660e8400-e29b-41d4-a716-446655440002",
+        "vatNumber": "BE0123456789",
+        "name": "Acme NV",
+        "isActive": True,
+        "updatedAt": "2026-04-21T12:00:00Z",
+    }
+
+    FULL_DATA = {
+        **BASE_DATA,
+        "email": "info@acme.be",
+        "phone": "+32 2 123 45 67",
+        "street": "Main Street",
+        "houseNumber": "42",
+        "postalCode": "1000",
+        "city": "Brussels",
+        "country": "BE",
+    }
+
+    @pytest.mark.asyncio
+    async def test_publishes_to_correct_queue(self, setup_sender):
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_company_updated(self.BASE_DATA)
+        assert _get_routing_key(setup_sender) == "crm.company.updated"
+
+    @pytest.mark.asyncio
+    async def test_message_is_persistent(self, setup_sender):
+        from aio_pika import DeliveryMode
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_company_updated(self.BASE_DATA)
+        assert _get_delivery_mode(setup_sender) == DeliveryMode.PERSISTENT
+
+    @pytest.mark.asyncio
+    async def test_root_element_is_company_updated(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_company_updated(self.BASE_DATA)
+        assert _get_published_xml(setup_sender).tag == "CompanyUpdated"
+
+    @pytest.mark.asyncio
+    async def test_required_fields_present(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_company_updated(self.BASE_DATA)
+        xml = _get_published_xml(setup_sender)
+        for field in ["id", "vatNumber", "name", "isActive", "updatedAt"]:
+            assert xml.find(field) is not None, f"Required field '{field}' missing"
+
+    @pytest.mark.asyncio
+    async def test_optional_fields_omitted_when_absent(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_company_updated(self.BASE_DATA)
+        xml = _get_published_xml(setup_sender)
+        for field in ["email", "phone", "street", "houseNumber", "postalCode", "city", "country"]:
+            assert xml.find(field) is None, f"Optional field '{field}' should be absent"
+
+    @pytest.mark.asyncio
+    async def test_optional_fields_included_when_present(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_company_updated(self.FULL_DATA)
+        xml = _get_published_xml(setup_sender)
+        assert xml.findtext("email") == "info@acme.be"
+        assert xml.findtext("phone") == "+32 2 123 45 67"
+        assert xml.findtext("street") == "Main Street"
+        assert xml.findtext("houseNumber") == "42"
+        assert xml.findtext("postalCode") == "1000"
+        assert xml.findtext("city") == "Brussels"
+        assert xml.findtext("country") == "BE"
+
+    @pytest.mark.asyncio
+    async def test_xsd_field_order(self, setup_sender):
+        """XSD xs:sequence: id, vatNumber, name, [email, phone, street, houseNumber, postalCode, city, country], isActive, updatedAt."""
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_company_updated(self.FULL_DATA)
+        tags = [child.tag for child in _get_published_xml(setup_sender)]
+        expected = [
+            "id", "vatNumber", "name",
+            "email", "phone", "street", "houseNumber", "postalCode", "city", "country",
+            "isActive", "updatedAt",
+        ]
+        assert tags == expected
+
+    @pytest.mark.asyncio
+    async def test_is_active_serialized_as_lowercase(self, setup_sender):
+        data = {**self.BASE_DATA, "isActive": False}
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_company_updated(data)
+        xml = _get_published_xml(setup_sender)
+        assert xml.findtext("isActive") == "false"
+
+    @pytest.mark.asyncio
+    async def test_xml_is_xsd_valid(self, setup_sender):
+        """Real XSD validation via the project schema — end-to-end contract test."""
+        from src import xml_validator
+        await sender.publish_company_updated(self.FULL_DATA)
+        xml = _get_published_xml(setup_sender)
+        xml_validator.validate(etree.tostring(xml))
+
+
+# ---------------------------------------------------------------------------
+# Contract 23 — publish_company_deactivated
+# ---------------------------------------------------------------------------
+
+class TestPublishCompanyDeactivated:
+
+    BASE_DATA = {
+        "id": "660e8400-e29b-41d4-a716-446655440003",
+        "vatNumber": "BE0123456789",
+        "deactivatedAt": "2026-04-21T12:00:00Z",
+    }
+
+    @pytest.mark.asyncio
+    async def test_publishes_to_correct_queue(self, setup_sender):
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_company_deactivated(self.BASE_DATA)
+        assert _get_routing_key(setup_sender) == "crm.company.deactivated"
+
+    @pytest.mark.asyncio
+    async def test_message_is_persistent(self, setup_sender):
+        from aio_pika import DeliveryMode
+        with patch("src.xml_validator.validate", return_value=MagicMock()):
+            await sender.publish_company_deactivated(self.BASE_DATA)
+        assert _get_delivery_mode(setup_sender) == DeliveryMode.PERSISTENT
+
+    @pytest.mark.asyncio
+    async def test_root_element_is_company_deactivated(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_company_deactivated(self.BASE_DATA)
+        assert _get_published_xml(setup_sender).tag == "CompanyDeactivated"
+
+    @pytest.mark.asyncio
+    async def test_xsd_field_order(self, setup_sender):
+        """XSD xs:sequence: id, vatNumber, deactivatedAt."""
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_company_deactivated(self.BASE_DATA)
+        tags = [child.tag for child in _get_published_xml(setup_sender)]
+        assert tags == ["id", "vatNumber", "deactivatedAt"]
+
+    @pytest.mark.asyncio
+    async def test_field_values_match_input(self, setup_sender):
+        with patch("src.xml_validator.validate") as v:
+            v.side_effect = lambda b: etree.fromstring(b)
+            await sender.publish_company_deactivated(self.BASE_DATA)
+        xml = _get_published_xml(setup_sender)
+        assert xml.findtext("id") == "660e8400-e29b-41d4-a716-446655440003"
+        assert xml.findtext("vatNumber") == "BE0123456789"
+        assert xml.findtext("deactivatedAt") == "2026-04-21T12:00:00Z"
+
+    @pytest.mark.asyncio
+    async def test_xml_is_xsd_valid(self, setup_sender):
+        """Real XSD validation via the project schema — end-to-end contract test."""
+        from src import xml_validator
+        await sender.publish_company_deactivated(self.BASE_DATA)
+        xml = _get_published_xml(setup_sender)
+        xml_validator.validate(etree.tostring(xml))
