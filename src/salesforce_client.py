@@ -48,9 +48,60 @@ _SF_STARTUP_MAX_DELAY: float = 60.0
 _TRANSIENT_SF_AUTH_CODES = frozenset({"SERVER_UNAVAILABLE", "SERVICE_UNAVAILABLE"})
 
 
-def _escape_soql(value: str) -> str:
+def escape_soql(value: str) -> str:
     """Escape single quotes for SOQL to prevent injection attacks."""
     return value.replace("'", "''")
+
+
+# Backwards-compatibility alias — existing callers in this module use the
+# private form; remove once everyone has migrated.
+_escape_soql = escape_soql
+
+
+def coerce_is_active(raw_value: Any) -> bool:
+    """Normalize an active-flag value from Salesforce into a bool.
+
+    Salesforce custom active fields come in multiple forms across orgs:
+    - Boolean (`IsActive__c` / `Is_Active__c`) → True / False / None
+    - Picklist (`Active__c`) → "Yes" / "No"
+    - Text → "true" / "false" / empty string
+
+    Python's `bool()` treats any non-empty string as True, so `bool("No")`
+    is True — exactly the opposite of what we want for a picklist field.
+    Callers should always route active-field values through this helper.
+
+    Missing (`None`) defaults to True: records without a flag are treated as
+    active. This mirrors the receiver's legacy behaviour.
+    """
+    if raw_value is None:
+        return True
+    if isinstance(raw_value, bool):
+        return raw_value
+    if isinstance(raw_value, (int, float)):
+        return bool(raw_value)
+    text = str(raw_value).strip().lower()
+    if text in ("yes", "true", "1", "y"):
+        return True
+    if text in ("no", "false", "0", "n", ""):
+        return False
+    # Unknown non-empty string → best-effort fall-through.
+    return bool(raw_value)
+
+
+def is_rate_limit_error(exc: Exception) -> bool:
+    """Detect Salesforce REQUEST_LIMIT_EXCEEDED via content attribute or message.
+
+    Shared between the receiver (drop-and-sleep on rate limit) and the polling
+    task (skip cycle on rate limit). The Salesforce REST API surfaces the error
+    both as a structured `content` attribute on SalesforceError subclasses and
+    occasionally as a plain message, hence both checks.
+    """
+    content = getattr(exc, "content", None)
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("errorCode") == "REQUEST_LIMIT_EXCEEDED":
+                return True
+    return "REQUEST_LIMIT_EXCEEDED" in str(exc)
 
 
 def _normalize_uuid_v4(value: Any) -> str | None:

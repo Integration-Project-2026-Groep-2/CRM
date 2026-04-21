@@ -1,12 +1,14 @@
 """CRM integration service entrypoint.
 
-Runs 3 asyncio tasks concurrently:
+Runs 4 asyncio tasks concurrently:
 - heartbeat: XML heartbeat every second (Contract 7)
 - status: CPU/mem/disk status to Controlroom (Contract 8)
 - receiver: listens on the configured inbound RabbitMQ queues
+- polling: detects out-of-band Salesforce UI edits, publishes
+  crm.user.* / crm.company.* contracts so other teams stay in sync
 
-The sender module is a utility library (not a task) — receiver handlers
-call sender.publish_*() functions to publish outbound messages.
+The sender module is a utility library (not a task) — receiver and polling
+handlers call sender.publish_*() functions to publish outbound messages.
 """
 
 import asyncio
@@ -20,6 +22,7 @@ from src import sender
 from src.config import load_config, setup_logging
 from src.connection import get_rabbitmq_connection
 from src.heartbeat import run_heartbeat
+from src.polling import run_polling
 from src.receiver import run_receiver
 from src.status import run_status
 
@@ -65,11 +68,15 @@ async def main() -> None:
     channel = await connection.channel()
     await sender.init(channel)
 
-    # Keep references to background tasks so we can cancel them during shutdown.
+    # Polling creates its OWN Salesforce client inside run_polling (same pattern
+    # as run_receiver). Doing the SF login here would block heartbeat/status
+    # startup while we wait for SF, which defeats the point of having those
+    # liveness signals.
     tasks = [
         asyncio.create_task(_supervised_task("heartbeat", lambda: run_heartbeat(connection, config))),
         asyncio.create_task(_supervised_task("status", lambda: run_status(connection, config))),
         asyncio.create_task(_supervised_task("receiver", lambda: run_receiver(connection, config, shutdown_event))),
+        asyncio.create_task(_supervised_task("polling", lambda: run_polling(config, shutdown_event))),
     ]
     try:
         await shutdown_event.wait()  # Wait until shutdown signal is received
