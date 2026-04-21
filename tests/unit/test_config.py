@@ -45,3 +45,31 @@ class TestLoadConfig:
 
         assert config.heartbeat_interval_seconds == 5
         assert config.log_level == "DEBUG"
+
+    def test_polling_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Polling interval defaults to 60s and state path to /tmp/..."""
+        monkeypatch.setenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
+        monkeypatch.setenv("SALESFORCE_USERNAME", "test@example.com")
+        monkeypatch.setenv("SALESFORCE_PASSWORD", "secret")
+        monkeypatch.setenv("SALESFORCE_SECURITY_TOKEN", "token123")
+        monkeypatch.delenv("POLLING_INTERVAL_SECONDS", raising=False)
+        monkeypatch.delenv("POLLING_STATE_PATH", raising=False)
+
+        config = load_config()
+
+        assert config.polling_interval_seconds == 60
+        assert config.polling_state_path == "/tmp/polling_checkpoint.json"
+
+    def test_polling_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Polling interval and state path are overridable via env."""
+        monkeypatch.setenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
+        monkeypatch.setenv("SALESFORCE_USERNAME", "test@example.com")
+        monkeypatch.setenv("SALESFORCE_PASSWORD", "secret")
+        monkeypatch.setenv("SALESFORCE_SECURITY_TOKEN", "token123")
+        monkeypatch.setenv("POLLING_INTERVAL_SECONDS", "120")
+        monkeypatch.setenv("POLLING_STATE_PATH", "/var/lib/crm/polling.json")
+
+        config = load_config()
+
+        assert config.polling_interval_seconds == 120
+        assert config.polling_state_path == "/var/lib/crm/polling.json"

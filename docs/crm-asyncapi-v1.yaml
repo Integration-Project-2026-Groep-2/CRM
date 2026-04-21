@@ -140,7 +140,7 @@ channels:
     description: >-
       Contract 27 — Mailing → CRM: nieuwe Mailing-user synchroniseren naar
       Salesforce. Payload volgt de Mailing XSD met verplichte velden id, email
-      en gdprConsent. CRM bewaart id als native Mailing-identiteit
+      en isActive. CRM bewaart id als native Mailing-identiteit
       (`Mailing_ID__c`) naast de eigen CRM UUID. Ontbreekt `lastName`, dan
       normaliseert CRM dit voor Salesforce naar het emailadres. Een
       company-linkage mag alleen een bestaand blank/VISITOR/COMPANY_CONTACT-contact
@@ -161,11 +161,13 @@ channels:
           durable: true
 
   mailingUserUpdated:
-    address: mailing.user.updated
+    address: crm.mailing.user.updated
     description: >-
       Contract 28 — Mailing → CRM: bestaande Mailing-user bijwerken in
       Salesforce. Het volledige object wordt meegestuurd voor consistentie met
-      de producer-XSD.
+      de producer-XSD. Queue-naam gebruikt consumer-prefix (`crm.`) om collision
+      te voorkomen met Mailing's eigen consumer-queues op contact.topic.
+      Mailing publiceert nog steeds met routing key `mailing.user.updated`.
     messages:
       mailingUserUpdated:
         $ref: "#/components/messages/MailingUserUpdated"
@@ -173,13 +175,22 @@ channels:
       amqp:
         is: queue
         queue:
+          name: crm.mailing.user.updated
           durable: true
+        exchange:
+          name: user.topic
+          type: topic
+          durable: true
+        routingKeys:
+          - mailing.user.updated
 
   mailingUserDeactivated:
-    address: mailing.user.deactivated
+    address: crm.mailing.user.deactivated
     description: >-
       Contract 29 — Mailing → CRM: bestaande Mailing-user soft-deactiveren in
-      Salesforce op basis van GDPR- of annulatiepropagatie.
+      Salesforce op basis van GDPR- of annulatiepropagatie. Queue-naam gebruikt
+      consumer-prefix om collision met Mailing's eigen consumer-queues te
+      vermijden. Routing key blijft `mailing.user.deactivated`.
     messages:
       mailingUserDeactivated:
         $ref: "#/components/messages/MailingUserDeactivated"
@@ -187,7 +198,14 @@ channels:
       amqp:
         is: queue
         queue:
+          name: crm.mailing.user.deactivated
           durable: true
+        exchange:
+          name: user.topic
+          type: topic
+          durable: true
+        routingKeys:
+          - mailing.user.deactivated
 
   # ============================================================
   # PLANNING → CRM (user sync)
@@ -491,8 +509,10 @@ channels:
     address: kassa.payment.confirmed
     description: >-
       Contract 16 — Kassa → CRM: betaling bevestigd aan de inkom (US-08, US-21 |
-      R1). CRM werkt betalingsstatus bij op Contact in Salesforce. Zonder dit
-      contract weet CRM nooit dat een deelnemer betaald heeft.
+      R1). CRM werkt betalingsstatus bij op de juiste sessie-inschrijving in
+      Salesforce en synchroniseert Contact.Paid_At__c als compatibiliteitsveld
+      zonder die waarde achteruit te laten gaan bij out-of-order events.
+      Zonder dit contract weet CRM nooit dat een deelnemer betaald heeft.
     messages:
       paymentConfirmed:
         $ref: "#/components/messages/PaymentConfirmed"
@@ -664,7 +684,8 @@ operations:
     messages:
       - $ref: "#/channels/frontendRegistrationCreated/messages/registrationCreated"
     summary: >-
-      Ontvang nieuwe inschrijving van Frontend en sla op als Contact in
+      Ontvang nieuwe inschrijving van Frontend, dedupliceer op e-mail naar één
+      canoniek Contact en bewaar daarnaast een sessie-inschrijving in
       Salesforce. Na bevestiging: publiceer crm.user.confirmed.
     tags:
       - name: frontend
@@ -677,8 +698,11 @@ operations:
     messages:
       - $ref: "#/channels/frontendRegistrationUpdated/messages/registrationChanged"
     summary: >-
-      Ontvang inschrijvingswijziging of annulering van Frontend. Na verwerking:
-      publiceer crm.user.updated of crm.user.deactivated (bij cancelled).
+      Ontvang inschrijvingswijziging of annulering van Frontend. Updated werkt
+      het Contact en de sessie-inschrijving bij; cancelled deactiveert eerst de
+      sessie-inschrijving en valt voor legacy contacten zonder matchende
+      sessierij alleen terug op Contact-deactivatie wanneer er ook geen andere
+      actieve sessie-inschrijvingen of native producer-identiteit meer zijn.
     tags:
       - name: frontend
       - name: release-1
@@ -907,7 +931,8 @@ operations:
       - $ref: "#/channels/planningSessionUpdated/messages/sessionUpdate"
     summary: >-
       Ontvang sessiewijziging van Planning en notificeer betrokken deelnemers
-      via Mailing (US-23). Sprekernotificaties (US-38) zijn buiten scope voor CRM.
+      via Mailing (US-23) op basis van actieve sessie-inschrijvingen in
+      Salesforce. Sprekernotificaties (US-38) zijn buiten scope voor CRM.
     tags:
       - name: planning
       - name: release-1
@@ -979,8 +1004,10 @@ operations:
     messages:
       - $ref: "#/channels/kassaPaymentConfirmed/messages/paymentConfirmed"
     summary: >-
-      Ontvang betalingsbevestiging van Kassa en werk betalingsstatus bij op
-      Contact in Salesforce (US-08, US-21).
+      Ontvang betalingsbevestiging van Kassa en werk betalingsstatus bij op de
+      juiste sessie-inschrijving in Salesforce; Contact.Paid_At__c blijft een
+      compatibiliteitsafleiding die alleen naar de recentste betaalde timestamp
+      mag vooruitgaan.
     tags:
       - name: kassa
       - name: release-1
@@ -993,7 +1020,8 @@ operations:
       - $ref: "#/channels/kassaUnpaidRequested/messages/unpaidRequest"
     summary: >-
       Ontvang verzoek voor lijst niet-betaalde deelnemers en stuur response
-      terug (US-07).
+      terug (US-07), gededupliceerd per canoniek Contact over actieve
+      sessie-inschrijvingen heen.
     reply:
       channel:
         $ref: "#/channels/crmUnpaidResponded"
@@ -1195,8 +1223,8 @@ components:
               <email>els.peeters@example.com</email>
               <phone>+32470111222</phone>
               <role>COMPANY_CONTACT</role>
-              <gdprConsent>true</gdprConsent>
               <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
+              <isActive>true</isActive>
               <createdAt>2026-04-15T09:30:00Z</createdAt>
             </UserCreated>
 
@@ -1230,7 +1258,6 @@ components:
               <role>COMPANY_CONTACT</role>
               <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
               <isActive>true</isActive>
-              <gdprConsent>true</gdprConsent>
               <updatedAt>2026-04-15T10:15:00Z</updatedAt>
             </UserUpdated>
 
@@ -1279,7 +1306,7 @@ components:
               <email>els.peeters@example.com</email>
               <firstName>Els</firstName>
               <lastName>Peeters</lastName>
-              <gdprConsent>true</gdprConsent>
+              <isActive>true</isActive>
               <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
             </MailingUserCreated>
 
@@ -1288,7 +1315,9 @@ components:
       title: Mailing user bijgewerkt
       summary: >-
         Mailing stuurt een volledig update-object voor een user die al in CRM
-        gekend is of gekoppeld moet blijven aan dezelfde UUID.
+        gekend is. Het `<id>`-veld bevat de CRM master UUID die Mailing in
+        `crm.user.confirmed` heeft ontvangen (Option 2 UUID-strategie); CRM
+        zoekt het Contact strict op `CRM_ID__c`.
       contentType: application/xml
       tags:
         - name: mailing
@@ -1304,7 +1333,7 @@ components:
               <email>els.peeters@example.com</email>
               <firstName>Elise</firstName>
               <lastName>Peeters</lastName>
-              <gdprConsent>true</gdprConsent>
+              <isActive>true</isActive>
               <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
             </MailingUserUpdated>
 
@@ -1313,7 +1342,10 @@ components:
       title: Mailing user gedeactiveerd
       summary: >-
         Mailing vraagt CRM om een bestaande user soft te deactiveren zodat de
-        CRM master data en mailinglijsten GDPR-consistent blijven.
+        CRM master data en mailinglijsten GDPR-consistent blijven. Het
+        `<id>`-veld bevat de CRM master UUID die Mailing in `crm.user.confirmed`
+        heeft ontvangen (Option 2 UUID-strategie); CRM zoekt het Contact
+        strict op `CRM_ID__c`.
       contentType: application/xml
       tags:
         - name: mailing
@@ -1893,7 +1925,7 @@ components:
       title: Betaling bevestigd door Kassa
       summary: >-
         Kassa meldt dat een deelnemer betaald heeft aan de inkom. CRM werkt
-        betalingsstatus bij op Contact in Salesforce.
+        betalingsstatus bij op de juiste sessie-inschrijving in Salesforce.
       contentType: application/xml
       tags:
         - name: US-08
@@ -2108,7 +2140,8 @@ components:
           type: string
           description: >-
             Uniek ID per inschrijving — gegenereerd door Frontend. Gebruikt door
-            CRM-receiver voor idempotentie (duplicaat op queue = negeren).
+            CRM-receiver voor idempotentie en als externe sleutel voor de
+            sessie-inschrijving in Salesforce.
         firstName:
           type: string
         lastName:
@@ -2122,6 +2155,9 @@ components:
           description: Optioneel — internationaal formaat (+32...)
         sessionId:
           type: string
+          description: >-
+            Planning-sessie-id. CRM bewaart dit op de sessie-inschrijving, niet
+            op het canonieke Contact.
         role:
           type: string
           enum:
@@ -2149,8 +2185,14 @@ components:
         - sessionId
         - changeType
       description: >
-        Bij cancelled: Contact deactiveren — geen verwijdering (US-55 GDPR R3).
-        Na verwerking publiceert CRM crm.user.updated of crm.user.deactivated.
+        Bij updated: Contact en bijhorende sessie-inschrijving bijwerken.
+        Bij cancelled: eerst de sessie-inschrijving deactiveren; alleen als er
+        geen actieve sessie-inschrijvingen meer overblijven voor dat Contact
+        publiceert CRM crm.user.deactivated. Als een legacy Contact nog geen
+        matchende sessie-inschrijving heeft, valt CRM alleen terug op
+        Contactniveau wanneer er geen andere actieve sessie-inschrijvingen en
+        geen native Planning/Mailing-identiteit meer zijn, zodat cancelled
+        downstream nog steeds een veilige soft delete kan triggeren.
         US-46 (offline buffering R3): zelfde queue, lokale buffer in receiver.
         US-34/US-35 (R2): bij conflicterende data crm.user.conflict publiceren.
       properties:
@@ -2158,7 +2200,10 @@ components:
           type: string
           description: >-
             Optioneel — aanbevolen. Correleert met registrationId uit
-            RegistrationCreated.
+            RegistrationCreated en identificeert de sessie-inschrijving
+            eenduidig wanneer één Contact meerdere sessies heeft. Een replay van
+            RegistrationCreated mag alleen als pure retry behandeld worden
+            wanneer deze sessie-inschrijving nog actief is.
         email:
           type: string
           format: email
@@ -2199,7 +2244,7 @@ components:
         - lastName
         - email
         - role
-        - gdprConsent
+        - isActive
         - createdAt
       description: >-
         Facturatie meldt een handmatig aangemaakte klant zodat CRM een Contact
@@ -2215,8 +2260,12 @@ components:
           description: Optioneel — doorgegeven als er al een registratiereferentie bestaat.
         firstName:
           type: string
+          minLength: 1
+          description: Verplicht niet-leeg (NonEmptyStringType sinds 2026-04-21).
         lastName:
           type: string
+          minLength: 1
+          description: Verplicht niet-leeg (NonEmptyStringType sinds 2026-04-21).
         email:
           type: string
           format: email
@@ -2233,14 +2282,14 @@ components:
             - CASHIER
             - BAR_STAFF
             - ADMIN
-        gdprConsent:
-          type: boolean
-          description: Verplicht — CRM mag deze flow alleen verwerken met expliciete toestemming.
         companyId:
           type: string
           format: uuid
           pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
           description: Optioneel — UUID v4 van gekoppeld bedrijf indien al gekend in Facturatie.
+        isActive:
+          type: boolean
+          description: Verplicht — Facturatie-side state. CRM mirrors dit naar de Contact active-flag in Salesforce.
         createdAt:
           type: string
           format: date-time
@@ -2254,12 +2303,15 @@ components:
         - lastName
         - role
         - isActive
-        - gdprConsent
         - updatedAt
       description: >-
         Facturatie stuurt een volledig update-object voor een user die al een
-        CRM UUID heeft. Routing key en richting onderscheiden dit contract van
-        het outbound CRM event met dezelfde XML-root.
+        CRM UUID heeft. XML-root `<UserUpdated>` (gedeeld met C18 outbound;
+        het onderscheid tussen inbound en outbound semantiek gebeurt via
+        queue + handler). Facturatie kent `gdprConsent` en `badgeCode` niet;
+        die velden zijn op XSD-niveau optional. CRM leest `GDPR_Consent__c`
+        en `Badge_Code__c` uit Salesforce bij het opstellen van de outbound
+        C18 payload.
       properties:
         id:
           type: string
@@ -2270,8 +2322,12 @@ components:
           format: email
         firstName:
           type: string
+          minLength: 1
+          description: Verplicht niet-leeg (NonEmptyStringType sinds 2026-04-21).
         lastName:
           type: string
+          minLength: 1
+          description: Verplicht niet-leeg (NonEmptyStringType sinds 2026-04-21).
         phone:
           type: string
           description: Optioneel — internationaal formaat (+32...)
@@ -2302,8 +2358,6 @@ components:
           pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
         isActive:
           type: boolean
-        gdprConsent:
-          type: boolean
         updatedAt:
           type: string
           format: date-time
@@ -2316,7 +2370,8 @@ components:
         - deactivatedAt
       description: >-
         Facturatie vraagt CRM om een bestaande CRM-linked user soft te
-        deactiveren.
+        deactiveren. XML-root `<UserDeactivated>` (gedeeld met C22 outbound;
+        velden zijn identiek tussen C22 en C26).
       properties:
         id:
           type: string
@@ -2334,7 +2389,7 @@ components:
       required:
         - id
         - email
-        - gdprConsent
+        - isActive
       description: >-
         Mailing synchroniseert een user uit de eigen datastore naar CRM. Deze
         payload volgt de producer-XSD en bevat bewust alleen de velden die
@@ -2353,9 +2408,9 @@ components:
         lastName:
           type: string
           description: Optioneel — mag in de producer-XSD ook expliciet nil zijn.
-        gdprConsent:
+        isActive:
           type: boolean
-          description: Verplicht — CRM verwerkt create/update alleen met expliciete toestemming.
+          description: Verplicht — Mailing-side state. CRM mirrors dit naar de Contact active-flag in Salesforce.
         companyId:
           type: string
           format: uuid
@@ -2367,7 +2422,7 @@ components:
       required:
         - id
         - email
-        - gdprConsent
+        - isActive
       description: >-
         Mailing stuurt steeds het volledige gekende user-object om partial
         merge-ambiguiteit bij CRM te vermijden.
@@ -2376,6 +2431,11 @@ components:
           type: string
           format: uuid
           pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          description: >-
+            CRM master UUID (Option 2 UUID-strategie) die Mailing in
+            `crm.user.confirmed` heeft ontvangen. CRM resolvet strict op
+            `CRM_ID__c`; `Mailing_ID__c` blijft als provenance-veld bewaard
+            maar wordt niet gebruikt voor lookup.
         email:
           type: string
           format: email
@@ -2385,8 +2445,9 @@ components:
         lastName:
           type: string
           description: Optioneel — mag in de producer-XSD ook expliciet nil zijn.
-        gdprConsent:
+        isActive:
           type: boolean
+          description: Wanneer false publiceert CRM crm.user.deactivated in plaats van crm.user.updated.
         companyId:
           type: string
           format: uuid
@@ -2407,6 +2468,10 @@ components:
           type: string
           format: uuid
           pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          description: >-
+            CRM master UUID (Option 2 UUID-strategie) die Mailing in
+            `crm.user.confirmed` heeft ontvangen. CRM resolvet strict op
+            `CRM_ID__c`.
         email:
           type: string
           format: email
@@ -2706,7 +2771,9 @@ components:
             session_time:
               type: string
               format: date-time
-              description: Verplicht voor alle mailTypes behalve bulk_event
+              description: >-
+                Aanwezig wanneer de flow een concreet tijdstip heeft.
+                Geannuleerde session_change-mails mogen dit veld weglaten.
             session_location:
               type: string
 
@@ -2854,6 +2921,7 @@ components:
             - rescheduled
             - cancelled
             - updated
+          description: CRM behandelt updated downstream als een generieke session_change-mail.
         newLocation:
           type: string
       if:
@@ -3051,6 +3119,10 @@ components:
         paidAt:
           type: string
           format: date-time
+          description: >-
+            Betalingstijdstip voor de sessie-inschrijving. CRM houdt
+            Contact.Paid_At__c alleen bij als monotone compatibiliteitswaarde:
+            een ouder event mag die afgeleide niet terugzetten.
 
     UnpaidRequest:
       type: object
