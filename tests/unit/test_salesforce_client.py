@@ -1,8 +1,10 @@
+import asyncio
 import logging
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from simple_salesforce import SalesforceError
+from simple_salesforce.exceptions import SalesforceAuthenticationFailed
 
 import src.salesforce_client as salesforce_client_module
 from src.salesforce_client import (
@@ -22,6 +24,7 @@ from src.salesforce_client import (
     get_contact_by_email,
     get_contact_match_by_email,
     get_contact_match_by_planning_id,
+    get_salesforce_client,
     get_session_registration_by_registration_id,
     get_unique_active_session_registration_for_contact,
     get_unpaid_contacts,
@@ -1761,3 +1764,192 @@ async def test_update_payment_status_does_not_fallback_to_email_when_user_id_mis
 
     assert result is None
     sf.Contact.update.assert_not_called()
+
+
+# ===========================================================================
+# get_salesforce_client — startup retry
+# ===========================================================================
+
+
+@pytest.fixture
+def sleep_mock(monkeypatch):
+    """Replace asyncio.sleep with a no-op so retry tests do not actually wait."""
+    sleep = AsyncMock()
+    monkeypatch.setattr(salesforce_client_module.asyncio, "sleep", sleep)
+    return sleep
+
+
+@pytest.mark.asyncio
+async def test_get_salesforce_client_returns_authenticated_client(config, monkeypatch):
+    client_stub = MagicMock(name="SalesforceClient")
+    sf_constructor = MagicMock(return_value=client_stub)
+    monkeypatch.setattr(salesforce_client_module, "Salesforce", sf_constructor)
+
+    result = await get_salesforce_client(config)
+
+    assert result is client_stub
+    sf_constructor.assert_called_once_with(
+        username=config.salesforce_username,
+        password=config.salesforce_password,
+        security_token=config.salesforce_security_token,
+        domain=config.salesforce_domain,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_salesforce_client_retries_on_transient_server_unavailable(
+    config, monkeypatch, sleep_mock,
+):
+    client_stub = MagicMock(name="SalesforceClient")
+    sf_constructor = MagicMock(
+        side_effect=[
+            SalesforceAuthenticationFailed("SERVER_UNAVAILABLE", "transient 1"),
+            SalesforceAuthenticationFailed("SERVER_UNAVAILABLE", "transient 2"),
+            client_stub,
+        ],
+    )
+    monkeypatch.setattr(salesforce_client_module, "Salesforce", sf_constructor)
+
+    result = await get_salesforce_client(config)
+
+    assert result is client_stub
+    assert sf_constructor.call_count == 3
+    # Backoff sequence on 2 failures before success: 1.0s, then 2.0s.
+    assert [call.args[0] for call in sleep_mock.await_args_list] == [1.0, 2.0]
+
+
+@pytest.mark.asyncio
+async def test_get_salesforce_client_retries_on_service_unavailable(
+    config, monkeypatch, sleep_mock,
+):
+    client_stub = MagicMock(name="SalesforceClient")
+    sf_constructor = MagicMock(
+        side_effect=[
+            SalesforceAuthenticationFailed("SERVICE_UNAVAILABLE", "transient"),
+            client_stub,
+        ],
+    )
+    monkeypatch.setattr(salesforce_client_module, "Salesforce", sf_constructor)
+
+    result = await get_salesforce_client(config)
+
+    assert result is client_stub
+    assert sf_constructor.call_count == 2
+    sleep_mock.assert_awaited_once_with(1.0)
+
+
+@pytest.mark.asyncio
+async def test_get_salesforce_client_retries_on_generic_network_error(
+    config, monkeypatch, sleep_mock,
+):
+    client_stub = MagicMock(name="SalesforceClient")
+    sf_constructor = MagicMock(
+        side_effect=[
+            ConnectionError("DNS failure"),
+            client_stub,
+        ],
+    )
+    monkeypatch.setattr(salesforce_client_module, "Salesforce", sf_constructor)
+
+    result = await get_salesforce_client(config)
+
+    assert result is client_stub
+    assert sf_constructor.call_count == 2
+    sleep_mock.assert_awaited_once_with(1.0)
+
+
+@pytest.mark.asyncio
+async def test_get_salesforce_client_fails_fast_on_invalid_login(
+    config, monkeypatch, sleep_mock,
+):
+    sf_constructor = MagicMock(
+        side_effect=SalesforceAuthenticationFailed(
+            "INVALID_LOGIN", "invalid username or password",
+        ),
+    )
+    monkeypatch.setattr(salesforce_client_module, "Salesforce", sf_constructor)
+
+    with pytest.raises(SalesforceAuthenticationFailed) as exc_info:
+        await get_salesforce_client(config)
+
+    assert exc_info.value.code == "INVALID_LOGIN"
+    assert sf_constructor.call_count == 1
+    sleep_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_salesforce_client_fails_fast_on_password_lockout(
+    config, monkeypatch, sleep_mock,
+):
+    sf_constructor = MagicMock(
+        side_effect=SalesforceAuthenticationFailed(
+            "PASSWORD_LOCKOUT", "account locked",
+        ),
+    )
+    monkeypatch.setattr(salesforce_client_module, "Salesforce", sf_constructor)
+
+    with pytest.raises(SalesforceAuthenticationFailed) as exc_info:
+        await get_salesforce_client(config)
+
+    assert exc_info.value.code == "PASSWORD_LOCKOUT"
+    assert sf_constructor.call_count == 1
+    sleep_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_salesforce_client_aborts_when_shutdown_set_before_first_attempt(
+    config, monkeypatch,
+):
+    sf_constructor = MagicMock()
+    monkeypatch.setattr(salesforce_client_module, "Salesforce", sf_constructor)
+
+    shutdown_event = asyncio.Event()
+    shutdown_event.set()
+
+    with pytest.raises(RuntimeError, match="cancelled by shutdown"):
+        await get_salesforce_client(config, shutdown_event=shutdown_event)
+
+    sf_constructor.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_salesforce_client_aborts_when_shutdown_set_during_backoff(
+    config, monkeypatch,
+):
+    shutdown_event = asyncio.Event()
+
+    def fail_and_signal_shutdown(**_kwargs):
+        shutdown_event.set()
+        raise SalesforceAuthenticationFailed("SERVER_UNAVAILABLE", "transient")
+
+    sf_constructor = MagicMock(side_effect=fail_and_signal_shutdown)
+    monkeypatch.setattr(salesforce_client_module, "Salesforce", sf_constructor)
+
+    with pytest.raises(RuntimeError, match="cancelled by shutdown"):
+        await get_salesforce_client(config, shutdown_event=shutdown_event)
+
+    assert sf_constructor.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_salesforce_client_backoff_caps_at_max_delay(
+    config, monkeypatch, sleep_mock,
+):
+    # 7 consecutive transient failures, then success. Expected backoff:
+    # 1, 2, 4, 8, 16, 32, 60 (capped) — 7 sleeps before the 8th attempt succeeds.
+    client_stub = MagicMock(name="SalesforceClient")
+    sf_constructor = MagicMock(
+        side_effect=[
+            SalesforceAuthenticationFailed("SERVER_UNAVAILABLE", f"fail {i}")
+            for i in range(7)
+        ] + [client_stub],
+    )
+    monkeypatch.setattr(salesforce_client_module, "Salesforce", sf_constructor)
+
+    result = await get_salesforce_client(config)
+
+    assert result is client_stub
+    assert sf_constructor.call_count == 8
+    assert [call.args[0] for call in sleep_mock.await_args_list] == [
+        1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 60.0,
+    ]
