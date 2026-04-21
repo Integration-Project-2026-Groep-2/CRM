@@ -42,6 +42,15 @@
     </xs:restriction>
   </xs:simpleType>
 
+  <!-- Niet-lege string — spiegelt Facturatie's NonEmptyStringType (2026-04-21).
+       Gebruikt voor verplichte naamvelden zodat lege elementen (bv. <lastName></lastName>)
+       door XSD-validatie worden geweigerd in plaats van pas door Salesforce. -->
+  <xs:simpleType name="NonEmptyStringType">
+    <xs:restriction base="xs:string">
+      <xs:minLength value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
   <xs:simpleType name="BelgianVatNumberType">
     <xs:restriction base="xs:string">
       <xs:pattern value="BE[0-9]{10}"/>
@@ -221,8 +230,8 @@
       <xs:sequence>
         <xs:element name="facturatieCustomerId" type="xs:string"/>
         <xs:element name="registrationId"       type="xs:string" minOccurs="0"/>
-        <xs:element name="firstName"            type="xs:string"/>
-        <xs:element name="lastName"             type="xs:string"/>
+        <xs:element name="firstName"            type="NonEmptyStringType"/>
+        <xs:element name="lastName"             type="NonEmptyStringType"/>
         <xs:element name="email"                type="EmailType"/>
         <xs:element name="phone"                type="xs:string" minOccurs="0" nillable="true"/>
         <xs:element name="role"                 type="FacturatieUserRoleType"/>
@@ -740,8 +749,8 @@
       <xs:all>
         <xs:element name="id"          type="UUIDType"/>
         <xs:element name="email"       type="EmailType"/>
-        <xs:element name="firstName"   type="xs:string"/>
-        <xs:element name="lastName"    type="xs:string"/>
+        <xs:element name="firstName"   type="NonEmptyStringType"/>
+        <xs:element name="lastName"    type="NonEmptyStringType"/>
         <xs:element name="phone"       type="xs:string"       minOccurs="0" nillable="true"/>
         <xs:element name="street"      type="xs:string"       minOccurs="0" nillable="true"/>
         <xs:element name="houseNumber" type="xs:string"       minOccurs="0" nillable="true"/>
