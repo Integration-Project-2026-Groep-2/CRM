@@ -189,6 +189,21 @@ async def _ensure_contact_active(sf: Salesforce, data: dict[str, Any]) -> dict[s
     return data
 
 
+async def apply_is_active(
+    sf: Salesforce,
+    data: dict[str, Any],
+    is_active: bool,
+) -> dict[str, Any]:
+    """Return a copy of data with the org-specific active flag set."""
+    updated = {**data}
+    active_field = await _resolve_contact_active_field_optional(sf)
+    if active_field is None:
+        return updated
+
+    updated[active_field] = is_active
+    return updated
+
+
 async def _resolve_contact_active_field_optional(sf: Salesforce) -> str | None:
     """Resolve the optional Contact active field without requiring the migration."""
     global _active_field_cache  # noqa: PLW0603
@@ -324,6 +339,29 @@ async def get_contact_match_by_email(
         return "unique", contact_record
     except SalesforceError as e:
         logger.error("Failed to get contact match by email %s: %s", email, str(e))
+        raise
+
+
+async def get_contact_match_by_crm_id(
+    sf: Salesforce, crm_id: str
+) -> tuple[Literal["none", "unique", "ambiguous"], dict[str, Any] | None]:
+    """Classify a CRM_ID__c lookup as no match, unique match, or ambiguous match."""
+    try:
+        escaped_crm_id = _escape_soql(crm_id)
+        query = f"SELECT Id FROM Contact WHERE CRM_ID__c = '{escaped_crm_id}'"
+        result = await asyncio.to_thread(sf.query, query)
+
+        if result["totalSize"] == 0:
+            return "none", None
+        if result["totalSize"] > 1:
+            return "ambiguous", None
+
+        contact_id = result["records"][0]["Id"]
+        contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        logger.info("Found unique Contact by CRM_ID__c: %s", crm_id)
+        return "unique", contact_record
+    except SalesforceError as e:
+        logger.error("Failed to get contact match by CRM_ID__c %s: %s", crm_id, str(e))
         raise
 
 

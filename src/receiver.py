@@ -14,6 +14,7 @@ from lxml import etree
 from src import sender, xml_validator
 from src.config import Config
 from src.salesforce_client import (
+    apply_is_active,
     backfill_mailing_contact_fields,
     create_contact,
     deactivate_contact,
@@ -21,6 +22,7 @@ from src.salesforce_client import (
     ensure_contact_identifiers,
     get_contact_by_crm_id,
     get_contact_by_email,
+    get_contact_match_by_crm_id,
     get_contact_match_by_email,
     get_contact_match_by_mailing_id,
     get_salesforce_client,
@@ -42,6 +44,8 @@ _INBOUND_EXCHANGE: dict[str, str] = {
     "frontend.registration.updated": "user.topic",
     "frontend.company.created": "user.topic",
     "facturatie.user.created": "user.topic",
+    "facturatie.user.updated": "user.topic",
+    "facturatie.user.deactivated": "user.topic",
     "mailing.user.created": "user.topic",
     "mailing.user.updated": "user.topic",
     "mailing.user.deactivated": "user.topic",
@@ -265,6 +269,33 @@ def _get_contact_is_active(contact: dict) -> bool:
         if active_field in contact:
             return bool(contact[active_field])
     return True
+
+
+async def _handle_out_of_order_deferral(
+    contract_name: str,
+    message: aio_pika.IncomingMessage,
+    *,
+    identifier_label: str,
+    identifier_value: str,
+) -> None:
+    """Requeue out-of-order events so eventual create/update ordering can recover."""
+    logger.warning(
+        "%s deferred — no Contact found for %s %s; retrying for possible out-of-order delivery",
+        contract_name,
+        identifier_label,
+        identifier_value,
+    )
+    await message.reject(requeue=True)
+
+
+async def _handle_processing_error(
+    contract_name: str,
+    message: aio_pika.IncomingMessage,
+    exc: Exception,
+) -> None:
+    """Handle processing errors consistently by logging and requeueing."""
+    logger.error("%s — error processing message: %s", contract_name, exc)
+    await message.reject(requeue=True)
 
 
 def _build_user_data(contact: dict) -> dict:
@@ -994,8 +1025,22 @@ async def handle_facturatie_user_updated(
         return
 
     try:
+        crm_id = xml.findtext("id") or ""
         email = xml.findtext("email") or ""
+        first_name = xml.findtext("firstName")
+        last_name = xml.findtext("lastName")
+        phone = xml.findtext("phone")
+        street = xml.findtext("street")
+        house_number = xml.findtext("houseNumber")
+        postal_code = xml.findtext("postalCode")
+        city = xml.findtext("city")
+        country = xml.findtext("country")
+        role = xml.findtext("role")
+        company_id = xml.findtext("companyId")
+        badge_code = xml.findtext("badgeCode")
+        is_active_text = xml.findtext("isActive")
         gdpr_text = xml.findtext("gdprConsent")
+
         if gdpr_text not in ("true", "1"):
             logger.warning(
                 "FacturatieUserUpdated refused — gdprConsent=%s for email %s",
@@ -1005,26 +1050,74 @@ async def handle_facturatie_user_updated(
             await message.reject(requeue=False)
             return
 
-        update_data: dict = {}
-        field_mapping = {
-            "firstName": "FirstName",
-            "lastName": "LastName",
-            "phone": "Phone",
-            "role": "Role__c",
-            "companyId": "Company_ID__c",
-        }
-        for xml_field, sf_field in field_mapping.items():
-            value = xml.findtext(xml_field)
-            if value is not None:
-                update_data[sf_field] = value
+        match_status, contact = await get_contact_match_by_crm_id(sf, crm_id)
+        if match_status == "none":
+            await _handle_out_of_order_deferral(
+                "FacturatieUserUpdated",
+                message,
+                identifier_label="CRM_ID__c",
+                identifier_value=crm_id,
+            )
+            return
 
-        contact = await upsert_contact_by_email(sf, email, update_data)
+        if match_status == "ambiguous":
+            logger.warning(
+                "FacturatieUserUpdated ignored — ambiguous CRM_ID__c %s in Salesforce",
+                crm_id,
+            )
+            await message.ack()
+            return
+
+        requested_is_active = True
+        if is_active_text is not None:
+            requested_is_active = is_active_text.strip().lower() in ("true", "1")
+
+        if not requested_is_active:
+            deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            contact = await deactivate_contact_record(
+                sf,
+                contact,
+                log_value=f"CRM_ID__c {crm_id}",
+            )
+            await sender.publish_user_deactivated(
+                _build_user_deactivation_data(contact, deactivated_at)
+            )
+            logger.info("Published crm.user.deactivated for CRM_ID__c %s", crm_id)
+            await message.ack()
+            return
+
+        update_payload: dict[str, str] = {}
+        field_mapping = {
+            "FirstName": first_name,
+            "LastName": last_name,
+            "Phone": phone,
+            "Email": email,
+            "MailingStreet": street,
+            "House_Number__c": house_number,
+            "MailingPostalCode": postal_code,
+            "MailingCity": city,
+            "MailingCountry": country,
+            "Role__c": role,
+            "Company_ID__c": company_id,
+            "Badge_Code__c": badge_code,
+        }
+        for sf_field, xml_value in field_mapping.items():
+            if xml_value is not None:
+                update_payload[sf_field] = xml_value
+
+        await asyncio.to_thread(sf.Contact.update, contact["Id"], update_payload)
+        contact = await asyncio.to_thread(sf.Contact.get, contact["Id"])
+
+        if not _get_contact_is_active(contact):
+            active_payload = await apply_is_active(sf, {}, True)
+            await asyncio.to_thread(sf.Contact.update, contact["Id"], active_payload)
+            contact = await asyncio.to_thread(sf.Contact.get, contact["Id"])
+
         await sender.publish_user_updated(_build_updated_user_data(contact))
-        logger.info("Published crm.user.updated for Facturatie user %s", email)
+        logger.info("Published crm.user.updated for Facturatie user CRM_ID__c %s", crm_id)
         await message.ack()
     except Exception as exc:  # noqa: BLE001
-        logger.error("FacturatieUserUpdated — error processing message: %s", exc)
-        await message.reject(requeue=True)
+        await _handle_processing_error("FacturatieUserUpdated", message, exc)
 
 
 async def handle_facturatie_user_deactivated(
