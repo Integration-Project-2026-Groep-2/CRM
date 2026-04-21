@@ -22,14 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-          cache: pip
-
-      - name: Install dependencies
-        run: pip install -r requirements-dev.txt
+      - uses: ./.github/actions/setup-python-env
 
       - name: Lint
         run: ruff check src/ tests/
@@ -45,14 +38,50 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-          cache: pip
-
-      - name: Install dependencies
-        run: pip install -r requirements-dev.txt
+      - uses: ./.github/actions/setup-python-env
 
       - name: Run unit tests
         run: pytest tests/unit/ -v
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      rabbitmq:
+        image: rabbitmq:3.13-alpine
+        ports:
+          - 5675:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      CRM_TEST_RABBITMQ_URL: amqp://guest:guest@localhost:5675/
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-python-env
+
+      - name: Verify RabbitMQ reachability (fail fast, no silent skip)
+        run: |
+          python - <<'PY'
+          import socket, sys
+          s = socket.socket()
+          s.settimeout(5)
+          try:
+              s.connect(("localhost", 5675))
+              print("RabbitMQ reachable on localhost:5675")
+          except OSError as e:
+              print(f"RabbitMQ NOT reachable: {e}", file=sys.stderr)
+              sys.exit(1)
+          finally:
+              s.close()
+          PY
+
+      - name: Run integration tests
+        run: pytest tests/integration/ -v
