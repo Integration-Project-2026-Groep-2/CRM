@@ -1953,3 +1953,80 @@ async def test_get_salesforce_client_backoff_caps_at_max_delay(
     assert [call.args[0] for call in sleep_mock.await_args_list] == [
         1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 60.0,
     ]
+
+
+# ---------------------------------------------------------------------------
+# is_rate_limit_error — shared detector for REQUEST_LIMIT_EXCEEDED
+# ---------------------------------------------------------------------------
+
+class TestIsRateLimitError:
+    """Shared between receiver and polling task — detects SF daily API cap."""
+
+    def test_detects_errorcode_in_content_list(self):
+        from src.salesforce_client import is_rate_limit_error
+
+        exc = Exception("refused")
+        exc.content = [{"errorCode": "REQUEST_LIMIT_EXCEEDED", "message": "limit"}]
+        assert is_rate_limit_error(exc) is True
+
+    def test_detects_in_message_string(self):
+        from src.salesforce_client import is_rate_limit_error
+
+        exc = RuntimeError("Salesforce query failed: REQUEST_LIMIT_EXCEEDED TotalRequests Limit exceeded.")
+        assert is_rate_limit_error(exc) is True
+
+    def test_returns_false_for_unrelated_error(self):
+        from src.salesforce_client import is_rate_limit_error
+
+        assert is_rate_limit_error(ValueError("bad value")) is False
+
+    def test_returns_false_for_content_without_errorcode(self):
+        from src.salesforce_client import is_rate_limit_error
+
+        exc = Exception("other")
+        exc.content = [{"errorCode": "INVALID_FIELD"}]
+        assert is_rate_limit_error(exc) is False
+
+    def test_handles_non_list_content_attribute(self):
+        from src.salesforce_client import is_rate_limit_error
+
+        exc = Exception("other")
+        exc.content = "not a list"
+        assert is_rate_limit_error(exc) is False
+
+
+# ---------------------------------------------------------------------------
+# coerce_is_active — shared active-flag normalization (P3 fix)
+# ---------------------------------------------------------------------------
+
+class TestCoerceIsActive:
+    """Regression for live-org bug: bool('No') is True but 'No' means inactive."""
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            (True, True),
+            (False, False),
+            (None, True),  # missing defaults to active
+            ("Yes", True),
+            ("No", False),
+            ("yes", True),
+            ("no", False),
+            ("Y", True),
+            ("N", False),
+            ("true", True),
+            ("false", False),
+            ("True", True),
+            ("False", False),
+            ("1", True),
+            ("0", False),
+            ("", False),
+            ("  yes  ", True),
+            (1, True),
+            (0, False),
+        ],
+    )
+    def test_covers_all_variants(self, raw, expected):
+        from src.salesforce_client import coerce_is_active
+
+        assert coerce_is_active(raw) is expected

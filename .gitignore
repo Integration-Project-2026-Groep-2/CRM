@@ -20,6 +20,8 @@ venv/
 # Environment
 .env
 .env.local
+.env.back*
+.env.backup*
 
 # IDE
 .vscode/
@@ -28,3 +30,7 @@ venv/
 
 # Docker
 *.log
+
+# Polling checkpoint (runtime state, not source)
+state/
+polling_checkpoint.json

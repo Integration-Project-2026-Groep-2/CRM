@@ -36,6 +36,8 @@ from src.salesforce_client import (
     has_contact_mailing_id_field,
     has_contact_planning_id_field,
     has_session_registration_object,
+    coerce_is_active,
+    is_rate_limit_error,
     update_mailing_contact,
     update_payment_status,
     update_planning_contact,
@@ -78,16 +80,6 @@ _MAX_REQUEUE_ATTEMPTS = 5
 _MAX_DEFERRAL_ATTEMPTS = 10
 _RATE_LIMIT_SLEEP_SECONDS = 60
 _BACKOFF_CAP_SECONDS = 30
-
-
-def _is_rate_limit_error(exc: Exception) -> bool:
-    """Detect Salesforce REQUEST_LIMIT_EXCEEDED via content attribute or message."""
-    content = getattr(exc, "content", None)
-    if isinstance(content, list):
-        for item in content:
-            if isinstance(item, dict) and item.get("errorCode") == "REQUEST_LIMIT_EXCEEDED":
-                return True
-    return "REQUEST_LIMIT_EXCEEDED" in str(exc)
 
 
 def _delivery_attempt_count(message: aio_pika.IncomingMessage) -> int:
@@ -168,7 +160,7 @@ async def _handle_processing_error(
     - Otherwise: exponential backoff, then republish with incremented retry
       count so the next attempt reads the correct counter.
     """
-    if _is_rate_limit_error(exc):
+    if is_rate_limit_error(exc):
         logger.error(
             "%s — Salesforce rate limit hit; sleeping %ss then dropping: %s",
             contract, _RATE_LIMIT_SLEEP_SECONDS, exc,
@@ -547,10 +539,14 @@ async def handle_session_updated(
 
 
 def _get_contact_is_active(contact: dict) -> bool:
-    """Return the normalized active flag across supported Salesforce field names."""
+    """Return the normalized active flag across supported Salesforce field names.
+
+    Delegates to `coerce_is_active` so picklist values ("No"/"Yes") aren't
+    misinterpreted by Python truthiness (bool('No') == True).
+    """
     for active_field in ("IsActive__c", "Active__c", "Is_Active__c"):
         if active_field in contact:
-            return bool(contact[active_field])
+            return coerce_is_active(contact[active_field])
     return True
 
 

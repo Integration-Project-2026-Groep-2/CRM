@@ -25,6 +25,9 @@ def config() -> Config:
         heartbeat_interval_seconds=0,  # 0 for fast tests
         system_name="CRM",
         status_check_interval_seconds=30,
+        polling_interval_seconds=0,  # 0 for fast tests
+        polling_state_path="/tmp/polling_checkpoint_test.json",
+        polling_integration_user_id=None,
         log_level="INFO",
     )
 
