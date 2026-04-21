@@ -26,6 +26,7 @@ from src.salesforce_client import (
     ensure_session_registration_active,
     get_active_session_participants,
     get_contact_by_email,
+    get_contact_match_by_crm_id,
     get_contact_match_by_email,
     get_contact_match_by_mailing_id,
     get_contact_match_by_planning_id,
@@ -1386,11 +1387,16 @@ async def handle_mailing_user_updated(
 
     Queue: crm.mailing.user.updated (routing key: mailing.user.updated) | durable: true
 
+    The `<id>` field carries the CRM master UUID (received by Mailing in
+    crm.user.confirmed), not the original native Mailing ID. CRM resolves the
+    Contact by `CRM_ID__c`; Mailing_ID__c remains on the Contact as a
+    provenance record from the create flow.
+
     Behaviour:
     - Validate XML against schema.
-    - Resolve the Contact strictly by Mailing_ID__c.
-    - Requeue unknown Mailing identities so out-of-order create/update can recover.
-    - Ack ambiguous Mailing identities without retry.
+    - Resolve the Contact strictly by CRM_ID__c.
+    - Requeue unknown CRM identities so out-of-order create/update can recover.
+    - Ack ambiguous CRM identities without retry.
     - Publish crm.user.conflict on email collisions.
     - If `isActive=false`, soft-delete the Contact and publish crm.user.deactivated.
     - Otherwise update Mailing-owned fields authoritatively in Salesforce,
@@ -1407,30 +1413,23 @@ async def handle_mailing_user_updated(
 
     try:
         email = xml.findtext("email") or ""
-        mailing_id = xml.findtext("id") or ""
+        crm_id = xml.findtext("id") or ""
         is_active = xml.findtext("isActive") in ("true", "1")
 
-        if not await has_contact_mailing_id_field(sf):
-            logger.error(
-                "MailingUserUpdated rejected — Salesforce Contact field Mailing_ID__c is missing",
-            )
-            await message.reject(requeue=False)
-            return
-
-        mailing_match_status, existing_contact = await get_contact_match_by_mailing_id(sf, mailing_id)
-        if mailing_match_status == "none":
+        crm_match_status, existing_contact = await get_contact_match_by_crm_id(sf, crm_id)
+        if crm_match_status == "none":
             await _handle_out_of_order_deferral(
                 "MailingUserUpdated",
                 message,
-                identifier_label="Mailing_ID__c",
-                identifier_value=mailing_id,
+                identifier_label="CRM_ID__c",
+                identifier_value=crm_id,
             )
             return
 
-        if mailing_match_status == "ambiguous":
+        if crm_match_status == "ambiguous":
             logger.warning(
-                "MailingUserUpdated ignored — ambiguous Mailing_ID__c %s in Salesforce",
-                mailing_id,
+                "MailingUserUpdated ignored — ambiguous CRM_ID__c %s in Salesforce",
+                crm_id,
             )
             await message.ack()
             return
@@ -1458,14 +1457,10 @@ async def handle_mailing_user_updated(
             await message.ack()
             return
 
-        contact = await ensure_contact_identifiers(
-            sf,
-            existing_contact,
-            mailing_id=mailing_id,
-        )
+        contact = existing_contact
         if not is_active:
             contact = await deactivate_contact_record(
-                sf, contact, log_value=f"Mailing_ID__c {mailing_id}",
+                sf, contact, log_value=f"CRM_ID__c {crm_id}",
             )
             deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             await sender.publish_user_deactivated(
@@ -1511,13 +1506,16 @@ async def handle_mailing_user_deactivated(
 
     Queue: crm.mailing.user.deactivated (routing key: mailing.user.deactivated) | durable: true
 
+    The `<id>` field carries the CRM master UUID (received by Mailing in
+    crm.user.confirmed), not the original native Mailing ID. CRM resolves the
+    Contact by `CRM_ID__c`.
+
     Behaviour:
     - Validate XML against schema.
-    - Require Salesforce support for Mailing_ID__c.
-    - Resolve the Contact strictly by Mailing_ID__c.
-    - Requeue unknown Mailing identities so out-of-order create/deactivate can recover.
-    - Ack ambiguous Mailing identities without retry.
-    - Trust Mailing_ID__c over a stale payload email, but log the mismatch.
+    - Resolve the Contact strictly by CRM_ID__c.
+    - Requeue unknown CRM identities so out-of-order create/deactivate can recover.
+    - Ack ambiguous CRM identities without retry.
+    - Trust CRM_ID__c over a stale payload email, but log the mismatch.
     - Perform a soft delete only and publish crm.user.deactivated.
     - Invalid XML: rejected without requeue.
     - Other errors: requeued.
@@ -1531,46 +1529,35 @@ async def handle_mailing_user_deactivated(
 
     try:
         email = xml.findtext("email") or ""
-        mailing_id = xml.findtext("id") or ""
+        crm_id = xml.findtext("id") or ""
         deactivated_at = xml.findtext("deactivatedAt") or ""
 
-        if not await has_contact_mailing_id_field(sf):
-            logger.error(
-                "MailingUserDeactivated rejected — Salesforce Contact field Mailing_ID__c is missing",
-            )
-            await message.reject(requeue=False)
-            return
-
-        mailing_match_status, existing_contact = await get_contact_match_by_mailing_id(sf, mailing_id)
-        if mailing_match_status == "none":
+        crm_match_status, existing_contact = await get_contact_match_by_crm_id(sf, crm_id)
+        if crm_match_status == "none":
             await _handle_out_of_order_deferral(
                 "MailingUserDeactivated",
                 message,
-                identifier_label="Mailing_ID__c",
-                identifier_value=mailing_id,
+                identifier_label="CRM_ID__c",
+                identifier_value=crm_id,
             )
             return
 
-        if mailing_match_status == "ambiguous":
+        if crm_match_status == "ambiguous":
             logger.warning(
-                "MailingUserDeactivated ignored — ambiguous Mailing_ID__c %s in Salesforce",
-                mailing_id,
+                "MailingUserDeactivated ignored — ambiguous CRM_ID__c %s in Salesforce",
+                crm_id,
             )
             await message.ack()
             return
 
-        contact = await ensure_contact_identifiers(
-            sf,
-            existing_contact,
-            mailing_id=mailing_id,
-        )
+        contact = existing_contact
 
         existing_email = _normalize_email_for_compare(contact.get("Email"))
         incoming_email = _normalize_email_for_compare(email)
         if existing_email is not None and incoming_email is not None and existing_email != incoming_email:
             logger.warning(
-                "MailingUserDeactivated email mismatch — Mailing_ID__c %s resolved to %s but payload contained %s; proceeding with soft delete",
-                mailing_id,
+                "MailingUserDeactivated email mismatch — CRM_ID__c %s resolved to %s but payload contained %s; proceeding with soft delete",
+                crm_id,
                 contact.get("Email"),
                 email,
             )
@@ -1578,12 +1565,12 @@ async def handle_mailing_user_deactivated(
         contact = await deactivate_contact_record(
             sf,
             contact,
-            log_value=f"Mailing_ID__c {mailing_id}",
+            log_value=f"CRM_ID__c {crm_id}",
         )
         await sender.publish_user_deactivated(
             _build_user_deactivation_data(contact, deactivated_at)
         )
-        logger.info("Published crm.user.deactivated for Mailing_ID__c %s", mailing_id)
+        logger.info("Published crm.user.deactivated for CRM_ID__c %s", crm_id)
         await message.ack()
     except Exception as exc:  # noqa: BLE001
         await _handle_processing_error("MailingUserDeactivated", message, exc)
