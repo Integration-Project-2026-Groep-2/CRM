@@ -1978,15 +1978,10 @@ class TestHandleMailingUserUpdated:
         existing_contact = {
             **MAILING_CONTACT_RETURN,
         }
-        normalized_contact = {
-            **existing_contact,
-        }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
             patch("src.receiver.update_mailing_contact", return_value=MAILING_UPDATED_CONTACT_RETURN) as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
@@ -1996,14 +1991,9 @@ class TestHandleMailingUserUpdated:
             msg = _make_message(VALID_MAILING_USER_UPDATED_XML)
             await handle_mailing_user_updated(msg, sf_mock)
 
-            mock_ensure.assert_called_once_with(
-                sf_mock,
-                existing_contact,
-                mailing_id="323e4567-e89b-42d3-a456-426614174027",
-            )
             mock_update.assert_called_once_with(
                 sf_mock,
-                normalized_contact,
+                existing_contact,
                 email="mia.updated@example.com",
                 first_name="Mila",
                 last_name="Updated",
@@ -2027,15 +2017,10 @@ class TestHandleMailingUserUpdated:
         existing_contact = {
             **MAILING_CONTACT_RETURN,
         }
-        normalized_contact = {
-            **existing_contact,
-        }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact),
             patch(
                 "src.receiver.update_mailing_contact",
                 return_value=MAILING_UPDATED_MINIMAL_CONTACT_RETURN,
@@ -2049,7 +2034,7 @@ class TestHandleMailingUserUpdated:
 
             mock_update.assert_called_once_with(
                 sf_mock,
-                normalized_contact,
+                existing_contact,
                 email="mia.updated@example.com",
                 first_name=None,
                 last_name="mia.updated@example.com",
@@ -2069,9 +2054,6 @@ class TestHandleMailingUserUpdated:
             "Role__c": "ADMIN",
             "Company_ID__c": "old-company-id",
         }
-        normalized_contact = {
-            **existing_contact,
-        }
         updated_contact = {
             **existing_contact,
             "FirstName": "Mia",
@@ -2080,10 +2062,8 @@ class TestHandleMailingUserUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact),
             patch("src.receiver.update_mailing_contact", return_value=updated_contact) as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
@@ -2094,7 +2074,7 @@ class TestHandleMailingUserUpdated:
 
             mock_update.assert_called_once_with(
                 sf_mock,
-                normalized_contact,
+                existing_contact,
                 email="mia.updated@example.com",
                 first_name=None,
                 last_name="mia.updated@example.com",
@@ -2107,28 +2087,11 @@ class TestHandleMailingUserUpdated:
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_missing_mailing_id_field_rejects_without_requeue(self, sf_mock, caplog):
+    async def test_unknown_crm_id_is_requeued_without_publish(self, sf_mock, caplog):
         parsed_xml = etree.fromstring(VALID_MAILING_USER_UPDATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=False),
-            caplog.at_level(logging.ERROR),
-        ):
-            from src.receiver import handle_mailing_user_updated
-
-            msg = _make_message(VALID_MAILING_USER_UPDATED_XML)
-            await handle_mailing_user_updated(msg, sf_mock)
-
-            msg.reject.assert_called_once_with(requeue=False)
-            assert "Mailing_ID__c is missing" in caplog.text
-
-    @pytest.mark.asyncio
-    async def test_unknown_mailing_id_is_requeued_without_publish(self, sf_mock, caplog):
-        parsed_xml = etree.fromstring(VALID_MAILING_USER_UPDATED_XML)
-        with (
-            patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.receiver.get_contact_match_by_crm_id", return_value=("none", None)),
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
             patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.sender.publish_user_updated") as mock_publish,
@@ -2145,15 +2108,14 @@ class TestHandleMailingUserUpdated:
             mock_republish.assert_awaited_once_with(msg, 1)
             msg.reject.assert_not_called()
             assert "MailingUserUpdated deferred" in caplog.text
-            assert "Mailing_ID__c" in caplog.text
+            assert "CRM_ID__c" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_ambiguous_mailing_id_is_acked_without_publish(self, sf_mock, caplog):
+    async def test_ambiguous_crm_id_is_acked_without_publish(self, sf_mock, caplog):
         parsed_xml = etree.fromstring(VALID_MAILING_USER_UPDATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("ambiguous", None)),
+            patch("src.receiver.get_contact_match_by_crm_id", return_value=("ambiguous", None)),
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
             caplog.at_level(logging.WARNING),
@@ -2166,7 +2128,7 @@ class TestHandleMailingUserUpdated:
             mock_publish.assert_not_called()
             mock_conflict.assert_not_called()
             msg.ack.assert_called_once()
-            assert "ambiguous Mailing_ID__c" in caplog.text
+            assert "ambiguous CRM_ID__c" in caplog.text
 
     @pytest.mark.asyncio
     async def test_conflicting_existing_email_publishes_user_conflict(self, sf_mock):
@@ -2183,10 +2145,8 @@ class TestHandleMailingUserUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.receiver.get_contact_match_by_email", return_value=("unique", conflicting_contact)),
-            patch("src.receiver.ensure_contact_identifiers") as mock_ensure,
             patch("src.receiver.update_mailing_contact") as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
@@ -2196,7 +2156,6 @@ class TestHandleMailingUserUpdated:
             msg = _make_message(VALID_MAILING_USER_UPDATED_XML)
             await handle_mailing_user_updated(msg, sf_mock)
 
-            mock_ensure.assert_not_called()
             mock_update.assert_not_called()
             mock_publish.assert_not_called()
             mock_conflict.assert_called_once()
@@ -2214,10 +2173,8 @@ class TestHandleMailingUserUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.receiver.get_contact_match_by_email", return_value=("ambiguous", None)),
-            patch("src.receiver.ensure_contact_identifiers") as mock_ensure,
             patch("src.receiver.update_mailing_contact") as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
@@ -2228,7 +2185,6 @@ class TestHandleMailingUserUpdated:
             msg = _make_message(VALID_MAILING_USER_UPDATED_XML)
             await handle_mailing_user_updated(msg, sf_mock)
 
-            mock_ensure.assert_not_called()
             mock_update.assert_not_called()
             mock_publish.assert_not_called()
             mock_conflict.assert_called_once()
@@ -2246,10 +2202,8 @@ class TestHandleMailingUserUpdated:
         deactivated_contact = {**existing_contact, "IsActive__c": False}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact),
             patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
             patch("src.receiver.update_mailing_contact") as mock_update,
             patch("src.sender.publish_user_deactivated") as mock_deactivated_publish,
@@ -2276,10 +2230,8 @@ class TestHandleMailingUserUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact),
             patch("src.receiver.update_mailing_contact", return_value=MAILING_UPDATED_CONTACT_RETURN),
             patch("src.sender.publish_user_updated", side_effect=Exception("publish failed")),
         ):
@@ -2801,18 +2753,13 @@ class TestHandleMailingUserDeactivated:
             **MAILING_CONTACT_RETURN,
             "Email": "mia.mail@example.com",
         }
-        normalized_contact = {
-            **existing_contact,
-        }
         deactivated_contact = {
-            **normalized_contact,
+            **existing_contact,
             "IsActive__c": False,
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
             patch("src.sender.publish_user_deactivated") as mock_publish,
         ):
@@ -2821,15 +2768,10 @@ class TestHandleMailingUserDeactivated:
             msg = _make_message(VALID_MAILING_USER_DEACTIVATED_XML)
             await handle_mailing_user_deactivated(msg, sf_mock)
 
-            mock_ensure.assert_called_once_with(
-                sf_mock,
-                existing_contact,
-                mailing_id="323e4567-e89b-42d3-a456-426614174027",
-            )
             mock_deactivate.assert_called_once_with(
                 sf_mock,
-                normalized_contact,
-                log_value="Mailing_ID__c 323e4567-e89b-42d3-a456-426614174027",
+                existing_contact,
+                log_value="CRM_ID__c 323e4567-e89b-42d3-a456-426614174027",
             )
             mock_publish.assert_called_once()
             payload = mock_publish.call_args.args[0]
@@ -2839,28 +2781,11 @@ class TestHandleMailingUserDeactivated:
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_missing_mailing_id_field_rejects_without_requeue(self, sf_mock, caplog):
+    async def test_unknown_crm_id_is_requeued_without_publish(self, sf_mock, caplog):
         parsed_xml = etree.fromstring(VALID_MAILING_USER_DEACTIVATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=False),
-            caplog.at_level(logging.ERROR),
-        ):
-            from src.receiver import handle_mailing_user_deactivated
-
-            msg = _make_message(VALID_MAILING_USER_DEACTIVATED_XML)
-            await handle_mailing_user_deactivated(msg, sf_mock)
-
-            msg.reject.assert_called_once_with(requeue=False)
-            assert "Mailing_ID__c is missing" in caplog.text
-
-    @pytest.mark.asyncio
-    async def test_unknown_mailing_id_is_requeued_without_publish(self, sf_mock, caplog):
-        parsed_xml = etree.fromstring(VALID_MAILING_USER_DEACTIVATED_XML)
-        with (
-            patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.receiver.get_contact_match_by_crm_id", return_value=("none", None)),
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
             patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.sender.publish_user_deactivated") as mock_publish,
@@ -2875,15 +2800,14 @@ class TestHandleMailingUserDeactivated:
             mock_republish.assert_awaited_once_with(msg, 1)
             msg.reject.assert_not_called()
             assert "MailingUserDeactivated deferred" in caplog.text
-            assert "Mailing_ID__c" in caplog.text
+            assert "CRM_ID__c" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_ambiguous_mailing_id_is_acked_without_publish(self, sf_mock, caplog):
+    async def test_ambiguous_crm_id_is_acked_without_publish(self, sf_mock, caplog):
         parsed_xml = etree.fromstring(VALID_MAILING_USER_DEACTIVATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("ambiguous", None)),
+            patch("src.receiver.get_contact_match_by_crm_id", return_value=("ambiguous", None)),
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -2894,7 +2818,7 @@ class TestHandleMailingUserDeactivated:
 
             mock_publish.assert_not_called()
             msg.ack.assert_called_once()
-            assert "ambiguous Mailing_ID__c" in caplog.text
+            assert "ambiguous CRM_ID__c" in caplog.text
 
     @pytest.mark.asyncio
     async def test_email_mismatch_logs_warning_but_deactivates(self, sf_mock, caplog):
@@ -2903,18 +2827,13 @@ class TestHandleMailingUserDeactivated:
             **MAILING_CONTACT_RETURN,
             "Email": "other@example.com",
         }
-        normalized_contact = {
-            **existing_contact,
-        }
         deactivated_contact = {
-            **normalized_contact,
+            **existing_contact,
             "IsActive__c": False,
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact),
+            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact),
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
@@ -2928,48 +2847,6 @@ class TestHandleMailingUserDeactivated:
             assert payload["email"] == "other@example.com"
             msg.ack.assert_called_once()
             assert "email mismatch" in caplog.text
-
-    @pytest.mark.asyncio
-    async def test_missing_crm_id_is_backfilled_before_deactivation(self, sf_mock):
-        parsed_xml = etree.fromstring(VALID_MAILING_USER_DEACTIVATED_XML)
-        legacy_contact = {
-            **MAILING_CONTACT_RETURN,
-            "CRM_ID__c": None,
-        }
-        normalized_contact = {
-            **legacy_contact,
-            "CRM_ID__c": "423e4567-e89b-42d3-a456-426614174130",
-        }
-        deactivated_contact = {
-            **normalized_contact,
-            "IsActive__c": False,
-        }
-        with (
-            patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", legacy_contact)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
-            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
-            patch("src.sender.publish_user_deactivated") as mock_publish,
-        ):
-            from src.receiver import handle_mailing_user_deactivated
-
-            msg = _make_message(VALID_MAILING_USER_DEACTIVATED_XML)
-            await handle_mailing_user_deactivated(msg, sf_mock)
-
-            mock_ensure.assert_called_once_with(
-                sf_mock,
-                legacy_contact,
-                mailing_id="323e4567-e89b-42d3-a456-426614174027",
-            )
-            mock_deactivate.assert_called_once_with(
-                sf_mock,
-                normalized_contact,
-                log_value="Mailing_ID__c 323e4567-e89b-42d3-a456-426614174027",
-            )
-            payload = mock_publish.call_args.args[0]
-            assert payload["id"] == "423e4567-e89b-42d3-a456-426614174130"
-            msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_invalid_xml_rejected_without_requeue(self, sf_mock):
@@ -2989,8 +2866,7 @@ class TestHandleMailingUserDeactivated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.receiver.deactivate_contact_record", side_effect=Exception("SF Down")),
             patch("src.sender.publish_user_deactivated") as mock_publish,
         ):
@@ -3017,8 +2893,7 @@ class TestHandleMailingUserDeactivated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact),
             patch("src.sender.publish_user_deactivated", side_effect=Exception("publish failed")),
         ):
