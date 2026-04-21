@@ -31,12 +31,21 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from simple_salesforce import Salesforce, SalesforceError
+from simple_salesforce.exceptions import SalesforceAuthenticationFailed
 
 from src.config import Config
 
 logger = logging.getLogger(__name__)
 
 _PAYMENT_TIMESTAMP_FIELD = "Paid_At__c"
+
+# Startup retry configuration for Salesforce login. Mirrors the RabbitMQ
+# connect retry pattern in src/connection.py so a transient Salesforce
+# outage (SERVER_UNAVAILABLE / network blip) does not leave the receiver
+# task silently dead while heartbeat keeps the container "alive".
+_SF_STARTUP_DELAY: float = 1.0
+_SF_STARTUP_MAX_DELAY: float = 60.0
+_TRANSIENT_SF_AUTH_CODES = frozenset({"SERVER_UNAVAILABLE", "SERVICE_UNAVAILABLE"})
 
 
 def _escape_soql(value: str) -> str:
@@ -72,25 +81,99 @@ def _parse_iso_datetime_utc(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-async def get_salesforce_client(config: Config) -> Salesforce:
-    """Create an authenticated Salesforce client.
+async def _wait_retry_or_shutdown(
+    delay: float, shutdown_event: asyncio.Event | None = None,
+) -> bool:
+    """Sleep for `delay` seconds unless shutdown fires first.
+
+    Returns True when shutdown was requested during the wait, False otherwise.
+    Mirrors the helper in src/connection.py so both retry loops behave the
+    same way (see plan: feature/sf-startup-retry).
+    """
+    if shutdown_event is None:
+        await asyncio.sleep(delay)
+        return False
+
+    try:
+        await asyncio.wait_for(shutdown_event.wait(), timeout=delay)
+        return True
+    except asyncio.TimeoutError:
+        return False
+
+
+async def get_salesforce_client(
+    config: Config, shutdown_event: asyncio.Event | None = None,
+) -> Salesforce:
+    """Create an authenticated Salesforce client, retrying transient failures.
+
+    Retries with exponential backoff (1s → 60s cap) on transient Salesforce
+    auth codes (SERVER_UNAVAILABLE, SERVICE_UNAVAILABLE) and on generic
+    network errors. Honours `shutdown_event` so a graceful shutdown during
+    the retry backoff does not hang the container.
+
+    Permanent authentication errors (INVALID_LOGIN, PASSWORD_LOCKOUT, bad
+    security token) are re-raised immediately so the receiver task crashes
+    visibly and the operator can tell the difference between "Salesforce is
+    flaky" and "credentials are wrong".
 
     Args:
         config: Application configuration with SF credentials.
+        shutdown_event: Optional event that aborts the retry loop when set.
 
     Returns:
         Authenticated Salesforce instance.
+
+    Raises:
+        SalesforceAuthenticationFailed: Permanent auth failure (bad creds).
+        RuntimeError: Shutdown fired during the retry backoff.
     """
-    logger.info("Connecting to Salesforce as %s...", config.salesforce_username)
-    sf = await asyncio.to_thread(
-        Salesforce,
-        username=config.salesforce_username,
-        password=config.salesforce_password,
-        security_token=config.salesforce_security_token,
-        domain=config.salesforce_domain,
-    )
-    logger.info("Connected to Salesforce.")
-    return sf
+    delay = _SF_STARTUP_DELAY
+    while True:
+        if shutdown_event is not None and shutdown_event.is_set():
+            raise RuntimeError(
+                "Salesforce connection cancelled by shutdown signal",
+            )
+
+        try:
+            logger.info(
+                "Connecting to Salesforce as %s...", config.salesforce_username,
+            )
+            sf = await asyncio.to_thread(
+                Salesforce,
+                username=config.salesforce_username,
+                password=config.salesforce_password,
+                security_token=config.salesforce_security_token,
+                domain=config.salesforce_domain,
+            )
+            logger.info("Connected to Salesforce.")
+            return sf
+        except SalesforceAuthenticationFailed as exc:
+            if exc.code not in _TRANSIENT_SF_AUTH_CODES:
+                logger.error(
+                    "Salesforce authentication failed permanently "
+                    "(code=%s): %s",
+                    exc.code, exc,
+                )
+                raise
+            logger.warning(
+                "Salesforce transient auth failure (code=%s); "
+                "retrying in %.1fs",
+                exc.code, delay,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Salesforce connection failed (%s); retrying in %.1fs",
+                exc, delay,
+            )
+
+        shutdown_requested = await _wait_retry_or_shutdown(
+            delay, shutdown_event,
+        )
+        if shutdown_requested:
+            raise RuntimeError(
+                "Salesforce connection cancelled by shutdown signal",
+            )
+        delay = min(delay * 2, _SF_STARTUP_MAX_DELAY)
 
 
 async def create_contact(sf: Salesforce, data: dict[str, Any]) -> dict[str, Any]:

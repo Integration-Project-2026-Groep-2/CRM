@@ -69,7 +69,7 @@ async def main() -> None:
     tasks = [
         asyncio.create_task(_supervised_task("heartbeat", lambda: run_heartbeat(connection, config))),
         asyncio.create_task(_supervised_task("status", lambda: run_status(connection, config))),
-        asyncio.create_task(_supervised_task("receiver", lambda: run_receiver(connection, config))),
+        asyncio.create_task(_supervised_task("receiver", lambda: run_receiver(connection, config, shutdown_event))),
     ]
     try:
         await shutdown_event.wait()  # Wait until shutdown signal is received
