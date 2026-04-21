@@ -1316,7 +1316,9 @@ components:
       title: Mailing user bijgewerkt
       summary: >-
         Mailing stuurt een volledig update-object voor een user die al in CRM
-        gekend is of gekoppeld moet blijven aan dezelfde UUID.
+        gekend is. Het `<id>`-veld bevat de CRM master UUID die Mailing in
+        `crm.user.confirmed` heeft ontvangen (Option 2 UUID-strategie); CRM
+        zoekt het Contact strict op `CRM_ID__c`.
       contentType: application/xml
       tags:
         - name: mailing
@@ -1341,7 +1343,10 @@ components:
       title: Mailing user gedeactiveerd
       summary: >-
         Mailing vraagt CRM om een bestaande user soft te deactiveren zodat de
-        CRM master data en mailinglijsten GDPR-consistent blijven.
+        CRM master data en mailinglijsten GDPR-consistent blijven. Het
+        `<id>`-veld bevat de CRM master UUID die Mailing in `crm.user.confirmed`
+        heeft ontvangen (Option 2 UUID-strategie); CRM zoekt het Contact
+        strict op `CRM_ID__c`.
       contentType: application/xml
       tags:
         - name: mailing
@@ -2417,6 +2422,11 @@ components:
           type: string
           format: uuid
           pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          description: >-
+            CRM master UUID (Option 2 UUID-strategie) die Mailing in
+            `crm.user.confirmed` heeft ontvangen. CRM resolvet strict op
+            `CRM_ID__c`; `Mailing_ID__c` blijft als provenance-veld bewaard
+            maar wordt niet gebruikt voor lookup.
         email:
           type: string
           format: email
@@ -2449,6 +2459,10 @@ components:
           type: string
           format: uuid
           pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          description: >-
+            CRM master UUID (Option 2 UUID-strategie) die Mailing in
+            `crm.user.confirmed` heeft ontvangen. CRM resolvet strict op
+            `CRM_ID__c`.
         email:
           type: string
           format: email
