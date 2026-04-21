@@ -141,8 +141,8 @@ VALID_FACTURATIE_USER_CREATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <email>els.peeters@example.com</email>
     <phone>+32470111222</phone>
     <role>COMPANY_CONTACT</role>
-    <isActive>true</isActive>
     <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
+    <isActive>true</isActive>
     <createdAt>2026-04-15T09:30:00Z</createdAt>
 </UserCreated>"""
 
