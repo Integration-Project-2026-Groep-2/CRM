@@ -117,3 +117,75 @@ class TestValidate:
         doc = validate(xml)
 
         assert doc.tag == "FacturatieUserDeactivated"
+
+    def test_rejects_user_created_with_empty_last_name(self) -> None:
+        """Contract 24 — lastName must be non-empty (NonEmptyStringType, 2026-04-21).
+
+        Reproduces the 2026-04-21 production bug where Facturatie sent
+        `<lastName></lastName>` which passed `xs:string` validation but hit
+        Salesforce as REQUIRED_FIELD_MISSING and cycled five retries.
+        """
+        invalid_xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<UserCreated>
+    <facturatieCustomerId>FB-2042</facturatieCustomerId>
+    <firstName>Els</firstName>
+    <lastName></lastName>
+    <email>els.peeters@example.com</email>
+    <role>COMPANY_CONTACT</role>
+    <isActive>true</isActive>
+    <createdAt>2026-04-21T09:00:00Z</createdAt>
+</UserCreated>"""
+
+        with pytest.raises(ValueError, match="XML validation failed"):
+            validate(invalid_xml)
+
+    def test_rejects_user_created_with_empty_first_name(self) -> None:
+        """Contract 24 — firstName must be non-empty (NonEmptyStringType)."""
+        invalid_xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<UserCreated>
+    <facturatieCustomerId>FB-2042</facturatieCustomerId>
+    <firstName></firstName>
+    <lastName>Peeters</lastName>
+    <email>els.peeters@example.com</email>
+    <role>COMPANY_CONTACT</role>
+    <isActive>true</isActive>
+    <createdAt>2026-04-21T09:00:00Z</createdAt>
+</UserCreated>"""
+
+        with pytest.raises(ValueError, match="XML validation failed"):
+            validate(invalid_xml)
+
+    def test_rejects_facturatie_user_updated_with_empty_last_name(self) -> None:
+        """Contract 25 — lastName must be non-empty (NonEmptyStringType)."""
+        invalid_xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<FacturatieUserUpdated>
+    <id>223e4567-e89b-42d3-a456-426614174024</id>
+    <email>els.updated@example.com</email>
+    <firstName>Els</firstName>
+    <lastName></lastName>
+    <role>COMPANY_CONTACT</role>
+    <isActive>true</isActive>
+    <updatedAt>2026-04-21T10:00:00Z</updatedAt>
+</FacturatieUserUpdated>"""
+
+        with pytest.raises(ValueError, match="XML validation failed"):
+            validate(invalid_xml)
+
+    def test_accepts_user_created_with_valid_names(self) -> None:
+        """Contract 24 — positive control: non-empty firstName and lastName are accepted."""
+        xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<UserCreated>
+    <facturatieCustomerId>FB-2042</facturatieCustomerId>
+    <firstName>Els</firstName>
+    <lastName>Peeters</lastName>
+    <email>els.peeters@example.com</email>
+    <role>COMPANY_CONTACT</role>
+    <isActive>true</isActive>
+    <createdAt>2026-04-21T09:00:00Z</createdAt>
+</UserCreated>"""
+
+        doc = validate(xml)
+
+        assert doc.tag == "UserCreated"
+        assert doc.findtext("firstName") == "Els"
+        assert doc.findtext("lastName") == "Peeters"

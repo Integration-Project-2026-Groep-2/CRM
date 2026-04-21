@@ -2260,8 +2260,12 @@ components:
           description: Optioneel — doorgegeven als er al een registratiereferentie bestaat.
         firstName:
           type: string
+          minLength: 1
+          description: Verplicht niet-leeg (NonEmptyStringType sinds 2026-04-21).
         lastName:
           type: string
+          minLength: 1
+          description: Verplicht niet-leeg (NonEmptyStringType sinds 2026-04-21).
         email:
           type: string
           format: email
@@ -2318,8 +2322,12 @@ components:
           format: email
         firstName:
           type: string
+          minLength: 1
+          description: Verplicht niet-leeg (NonEmptyStringType sinds 2026-04-21).
         lastName:
           type: string
+          minLength: 1
+          description: Verplicht niet-leeg (NonEmptyStringType sinds 2026-04-21).
         phone:
           type: string
           description: Optioneel — internationaal formaat (+32...)
