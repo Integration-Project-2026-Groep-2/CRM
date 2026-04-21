@@ -38,6 +38,7 @@ from src.salesforce_client import (
     has_contact_planning_id_field,
     has_session_registration_object,
     is_rate_limit_error,
+    update_facturatie_contact,
     update_mailing_contact,
     update_payment_status,
     update_planning_contact,
@@ -60,6 +61,8 @@ _INBOUND_EXCHANGE: dict[str, str] = {
     "frontend.registration.updated": "user.topic",
     "frontend.company.created": "user.topic",
     "facturatie.user.created": "user.topic",
+    "facturatie.user.updated": "user.topic",
+    "facturatie.user.deactivated": "user.topic",
     "mailing.user.created": "user.topic",
     "crm.mailing.user.updated": "user.topic",
     "crm.mailing.user.deactivated": "user.topic",
@@ -284,6 +287,16 @@ async def run_receiver(
     # Queue: facturatie.user.created | Exchange: user.topic | durable: true
     queue_facturatie_user_created = await _declare_and_bind(channel, "facturatie.user.created", durable=True)
     await queue_facturatie_user_created.consume(partial(handle_facturatie_user_created, sf=sf_client))
+
+    # Contract 25 — Facturatie → CRM: update existing CRM-linked user
+    # Queue: facturatie.user.updated | Exchange: user.topic | durable: true
+    queue_facturatie_user_updated = await _declare_and_bind(channel, "facturatie.user.updated", durable=True)
+    await queue_facturatie_user_updated.consume(partial(handle_facturatie_user_updated, sf=sf_client))
+
+    # Contract 26 — Facturatie → CRM: deactivate existing CRM-linked user
+    # Queue: facturatie.user.deactivated | Exchange: user.topic | durable: true
+    queue_facturatie_user_deactivated = await _declare_and_bind(channel, "facturatie.user.deactivated", durable=True)
+    await queue_facturatie_user_deactivated.consume(partial(handle_facturatie_user_deactivated, sf=sf_client))
 
     # Contract 27 — Mailing → CRM: new Mailing user sync
     # Queue: mailing.user.created | Exchange: user.topic | durable: true
@@ -717,6 +730,24 @@ def _build_conflict_value(
 
 def _build_mailing_user_conflict_data(email: str, contact: dict, xml: etree._Element) -> dict:
     """Build a Contract 15 payload from an existing Contact and incoming Mailing payload."""
+    return {
+        "email": email,
+        "existingValue": _build_conflict_value(
+            contact.get("FirstName"),
+            contact.get("LastName"),
+            contact.get("Company_ID__c"),
+        ),
+        "incomingValue": _build_conflict_value(
+            xml.findtext("firstName"),
+            xml.findtext("lastName"),
+            xml.findtext("companyId"),
+        ),
+        "detectedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+def _build_facturatie_user_conflict_data(email: str, contact: dict, xml: etree._Element) -> dict:
+    """Build a Contract 15 payload from an existing Contact and incoming Facturatie payload."""
     return {
         "email": email,
         "existingValue": _build_conflict_value(
@@ -1675,6 +1706,209 @@ async def handle_facturatie_user_created(
         await message.ack()
     except Exception as exc:  # noqa: BLE001
         await _handle_processing_error("FacturatieUserCreated", message, exc)
+
+
+async def handle_facturatie_user_updated(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 25 — Facturatie -> CRM: update an existing CRM-linked user.
+
+    Queue: facturatie.user.updated | durable: true
+
+    The `<id>` field carries the CRM master UUID (received by Facturatie in
+    crm.user.confirmed, Option 2 UUID strategy). CRM resolves the Contact by
+    `CRM_ID__c`.
+
+    Behaviour:
+    - Validate XML against schema.
+    - Resolve the Contact strictly by CRM_ID__c.
+    - Requeue unknown CRM identities so out-of-order create/update can recover.
+    - Ack ambiguous CRM identities without retry.
+    - Publish crm.user.conflict on email collisions.
+    - If `isActive=false`, soft-delete the Contact and publish crm.user.deactivated.
+    - Otherwise update Facturatie-owned fields authoritatively in Salesforce,
+      reactivate when needed, and publish crm.user.updated.
+    - Specialized existing roles (ADMIN/SPEAKER/EVENT_MANAGER/CASHIER/BAR_STAFF)
+      protect Role__c and Company_ID__c from Facturatie-side overwrites.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("FacturatieUserUpdated — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        email = xml.findtext("email") or ""
+        crm_id = xml.findtext("id") or ""
+        is_active = xml.findtext("isActive") in ("true", "1")
+
+        crm_match_status, existing_contact = await get_contact_match_by_crm_id(sf, crm_id)
+        if crm_match_status == "none":
+            await _handle_out_of_order_deferral(
+                "FacturatieUserUpdated",
+                message,
+                identifier_label="CRM_ID__c",
+                identifier_value=crm_id,
+            )
+            return
+
+        if crm_match_status == "ambiguous":
+            logger.warning(
+                "FacturatieUserUpdated ignored — ambiguous CRM_ID__c %s in Salesforce",
+                crm_id,
+            )
+            await message.ack()
+            return
+
+        email_match_status, existing_by_email = await get_contact_match_by_email(sf, email)
+        if email_match_status == "ambiguous":
+            logger.warning(
+                "FacturatieUserUpdated conflict — email %s is ambiguous in Salesforce",
+                email,
+            )
+            await sender.publish_user_conflict(
+                _build_facturatie_user_conflict_data(email, existing_contact, xml)
+            )
+            await message.ack()
+            return
+
+        if email_match_status == "unique" and existing_by_email["Id"] != existing_contact["Id"]:
+            logger.warning(
+                "FacturatieUserUpdated conflict — email %s already linked to another Contact",
+                email,
+            )
+            await sender.publish_user_conflict(
+                _build_facturatie_user_conflict_data(email, existing_by_email, xml)
+            )
+            await message.ack()
+            return
+
+        contact = existing_contact
+        if not is_active:
+            contact = await deactivate_contact_record(
+                sf, contact, log_value=f"CRM_ID__c {crm_id}",
+            )
+            deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            await sender.publish_user_deactivated(
+                _build_user_deactivation_data(contact, deactivated_at),
+            )
+            logger.info(
+                "Published crm.user.deactivated for Facturatie user %s (isActive=false on update)",
+                email,
+            )
+            await message.ack()
+            return
+
+        contact = await update_facturatie_contact(
+            sf,
+            contact,
+            email=email,
+            first_name=xml.findtext("firstName") or "",
+            last_name=xml.findtext("lastName") or "",
+            phone=_normalize_optional_text(xml.findtext("phone")),
+            street=_normalize_optional_text(xml.findtext("street")),
+            house_number=_normalize_optional_text(xml.findtext("houseNumber")),
+            postal_code=_normalize_optional_text(xml.findtext("postalCode")),
+            city=_normalize_optional_text(xml.findtext("city")),
+            country=_normalize_optional_text(xml.findtext("country")),
+            role=xml.findtext("role") or "",
+            company_id=_normalize_optional_text(xml.findtext("companyId")),
+        )
+        if not _get_contact_is_active(contact):
+            reactivation_update = await apply_is_active(sf, {}, True)
+            if reactivation_update:
+                contact_id = contact["Id"]
+                await asyncio.to_thread(sf.Contact.update, contact_id, reactivation_update)
+                contact = await asyncio.to_thread(sf.Contact.get, contact_id)
+                logger.info(
+                    "Reactivated Contact %s for Facturatie user %s (isActive=true on update)",
+                    contact_id,
+                    email,
+                )
+        await sender.publish_user_updated(_build_updated_user_data(contact))
+        logger.info("Published crm.user.updated for Facturatie user %s", email)
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        await _handle_processing_error("FacturatieUserUpdated", message, exc)
+
+
+async def handle_facturatie_user_deactivated(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 26 — Facturatie -> CRM: deactivate an existing CRM-linked user.
+
+    Queue: facturatie.user.deactivated | durable: true
+
+    The `<id>` field carries the CRM master UUID. CRM resolves the Contact by
+    `CRM_ID__c` and performs a soft delete only (GDPR audit trail).
+
+    Behaviour:
+    - Validate XML against schema.
+    - Resolve strictly by CRM_ID__c.
+    - Requeue unknown identities (create may still be in flight).
+    - Ack ambiguous identities without retry.
+    - Trust CRM_ID__c over a stale payload email, but log the mismatch.
+    - Soft delete and publish crm.user.deactivated.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("FacturatieUserDeactivated — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        email = xml.findtext("email") or ""
+        crm_id = xml.findtext("id") or ""
+        deactivated_at = xml.findtext("deactivatedAt") or ""
+
+        crm_match_status, existing_contact = await get_contact_match_by_crm_id(sf, crm_id)
+        if crm_match_status == "none":
+            await _handle_out_of_order_deferral(
+                "FacturatieUserDeactivated",
+                message,
+                identifier_label="CRM_ID__c",
+                identifier_value=crm_id,
+            )
+            return
+
+        if crm_match_status == "ambiguous":
+            logger.warning(
+                "FacturatieUserDeactivated ignored — ambiguous CRM_ID__c %s in Salesforce",
+                crm_id,
+            )
+            await message.ack()
+            return
+
+        contact = existing_contact
+
+        existing_email = _normalize_email_for_compare(contact.get("Email"))
+        incoming_email = _normalize_email_for_compare(email)
+        if existing_email is not None and incoming_email is not None and existing_email != incoming_email:
+            logger.warning(
+                "FacturatieUserDeactivated email mismatch — CRM_ID__c %s resolved to %s but payload contained %s; proceeding with soft delete",
+                crm_id,
+                contact.get("Email"),
+                email,
+            )
+
+        contact = await deactivate_contact_record(
+            sf,
+            contact,
+            log_value=f"CRM_ID__c {crm_id}",
+        )
+        await sender.publish_user_deactivated(
+            _build_user_deactivation_data(contact, deactivated_at)
+        )
+        logger.info("Published crm.user.deactivated for Facturatie CRM_ID__c %s", crm_id)
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        await _handle_processing_error("FacturatieUserDeactivated", message, exc)
 
 
 async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
