@@ -701,9 +701,9 @@
 
   <!-- ============================================================
        CONTRACT 18 — CRM → consumers: user updated
-       CONTRACT 25 — Facturatie → CRM: user updated
-       Queue: crm.user.updated / facturatie.user.updated | durable: true
-       Noot: gedeelde root met order-onafhankelijke veldvalidatie.
+       Queue: crm.user.updated | durable: true
+       Noot: order-onafhankelijke veldvalidatie (<xs:all>). CRM is
+       producer, bevat daarom badgeCode en gdprConsent (uit Salesforce).
   ============================================================ -->
   <xs:element name="UserUpdated">
     <xs:complexType>
@@ -723,6 +723,34 @@
         <xs:element name="badgeCode"   type="xs:string"       minOccurs="0" nillable="true"/>
         <xs:element name="isActive"    type="xs:boolean"/>
         <xs:element name="gdprConsent" type="xs:boolean"/>
+        <xs:element name="updatedAt"   type="ISO8601DateTimeType"/>
+      </xs:all>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 25 — Facturatie → CRM: user bijwerken
+       Queue: facturatie.user.updated | durable: true
+       Noot: aparte root zonder gdprConsent/badgeCode — Facturatie
+       kent die velden niet. Outbound crm.user.updated (C18) gebruikt
+       de bredere UserUpdated root en haalt gdprConsent uit Salesforce.
+  ============================================================ -->
+  <xs:element name="FacturatieUserUpdated">
+    <xs:complexType>
+      <xs:all>
+        <xs:element name="id"          type="UUIDType"/>
+        <xs:element name="email"       type="EmailType"/>
+        <xs:element name="firstName"   type="xs:string"/>
+        <xs:element name="lastName"    type="xs:string"/>
+        <xs:element name="phone"       type="xs:string"       minOccurs="0" nillable="true"/>
+        <xs:element name="street"      type="xs:string"       minOccurs="0" nillable="true"/>
+        <xs:element name="houseNumber" type="xs:string"       minOccurs="0" nillable="true"/>
+        <xs:element name="postalCode"  type="xs:string"       minOccurs="0" nillable="true"/>
+        <xs:element name="city"        type="xs:string"       minOccurs="0" nillable="true"/>
+        <xs:element name="country"     type="CountryCodeType" minOccurs="0" nillable="true"/>
+        <xs:element name="role"        type="FacturatieUserRoleType"/>
+        <xs:element name="companyId"   type="UUIDType"        minOccurs="0" nillable="true"/>
+        <xs:element name="isActive"    type="xs:boolean"/>
         <xs:element name="updatedAt"   type="ISO8601DateTimeType"/>
       </xs:all>
     </xs:complexType>
@@ -796,10 +824,25 @@
 
   <!-- ============================================================
        CONTRACT 22 — CRM → consumers: user deactivated (GDPR)
-       CONTRACT 26 — Facturatie → CRM: user deactivated
-       Queue: crm.user.deactivated / facturatie.user.deactivated | durable: true
+       Queue: crm.user.deactivated | durable: true
   ============================================================ -->
   <xs:element name="UserDeactivated">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="id"            type="UUIDType"/>
+        <xs:element name="email"         type="EmailType"/>
+        <xs:element name="deactivatedAt" type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 26 — Facturatie → CRM: user deactiveren
+       Queue: facturatie.user.deactivated | durable: true
+       Noot: identieke velden als C22; aparte root om inbound en
+       outbound semantiek gescheiden te houden.
+  ============================================================ -->
+  <xs:element name="FacturatieUserDeactivated">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="id"            type="UUIDType"/>
