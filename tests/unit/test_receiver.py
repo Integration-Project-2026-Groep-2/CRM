@@ -162,7 +162,7 @@ FACTURATIE_CONTACT_RETURN = {
 }
 
 VALID_FACTURATIE_USER_UPDATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
-<FacturatieUserUpdated>
+<UserUpdated>
     <id>223e4567-e89b-12d3-a456-426614174024</id>
     <email>els.updated@example.com</email>
     <firstName>Els</firstName>
@@ -177,10 +177,10 @@ VALID_FACTURATIE_USER_UPDATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <companyId>f4e5d6c7-b8a9-4012-8f34-ab5678cd9012</companyId>
     <isActive>true</isActive>
     <updatedAt>2026-04-21T10:00:00Z</updatedAt>
-</FacturatieUserUpdated>"""
+</UserUpdated>"""
 
 VALID_FACTURATIE_USER_UPDATED_MINIMAL_XML = b"""<?xml version='1.0' encoding='utf-8'?>
-<FacturatieUserUpdated>
+<UserUpdated>
     <id>223e4567-e89b-12d3-a456-426614174024</id>
     <email>els.updated@example.com</email>
     <firstName>Els</firstName>
@@ -188,14 +188,14 @@ VALID_FACTURATIE_USER_UPDATED_MINIMAL_XML = b"""<?xml version='1.0' encoding='ut
     <role>VISITOR</role>
     <isActive>true</isActive>
     <updatedAt>2026-04-21T10:00:00Z</updatedAt>
-</FacturatieUserUpdated>"""
+</UserUpdated>"""
 
 VALID_FACTURATIE_USER_DEACTIVATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
-<FacturatieUserDeactivated>
+<UserDeactivated>
     <id>223e4567-e89b-12d3-a456-426614174024</id>
     <email>els.peeters@example.com</email>
     <deactivatedAt>2026-04-21T16:00:00Z</deactivatedAt>
-</FacturatieUserDeactivated>"""
+</UserDeactivated>"""
 
 FACTURATIE_UPDATED_CONTACT_RETURN = {
     "Id": "003000000000024",

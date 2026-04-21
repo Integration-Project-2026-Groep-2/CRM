@@ -736,7 +736,7 @@ class TestContract25FacturatieUserUpdated:
 
         new_company_id = str(uuid.uuid4())
         update_xml = f"""<?xml version='1.0' encoding='utf-8'?>
-<FacturatieUserUpdated>
+<UserUpdated>
     <id>{confirmed_id}</id>
     <email>{email}</email>
     <firstName>After</firstName>
@@ -751,7 +751,7 @@ class TestContract25FacturatieUserUpdated:
     <companyId>{new_company_id}</companyId>
     <isActive>true</isActive>
     <updatedAt>2026-04-21T10:00:00Z</updatedAt>
-</FacturatieUserUpdated>"""
+</UserUpdated>"""
 
         await _publish(inbound_exchanges["user.topic"], "facturatie.user.updated", update_xml)
 
@@ -820,11 +820,11 @@ class TestContract26FacturatieUserDeactivated:
         await _drain_queue(q_deactivated)
 
         deactivation_xml = f"""<?xml version='1.0' encoding='utf-8'?>
-<FacturatieUserDeactivated>
+<UserDeactivated>
     <id>{confirmed_id}</id>
     <email>{email}</email>
     <deactivatedAt>{deactivated_at}</deactivatedAt>
-</FacturatieUserDeactivated>"""
+</UserDeactivated>"""
 
         await _publish(inbound_exchanges["user.topic"], "facturatie.user.deactivated", deactivation_xml)
 
