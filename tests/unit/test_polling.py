@@ -16,7 +16,6 @@ import pytest
 from src import polling, sender
 from src.config import Config
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -457,8 +456,6 @@ class TestSkipDoesNotAdvanceCheckpoint:
             SystemModstamp="2026-04-21T11:00:00.000+0000",
         )
         sf = make_sf_mock(contact_query_records=[failing, succeeding])
-
-        original_publish = sender_init["user_confirmed"]
 
         async def raise_only_for_fail(user_data):
             if user_data.get("email") == "fail@example.com":
