@@ -42,12 +42,11 @@ E2E_AUTO_START_LOCAL_STACK=1 pytest tests/e2e -v
 
 ## Architectuur
 
-Eén Docker container → één Python process → 3 asyncio tasks + sender utility:
+Eén Docker container → één Python process → 2 asyncio tasks + sender utility:
 
 | Module | Verantwoordelijkheid |
 |---|---|
 | `heartbeat.py` | XML heartbeat elke seconde → `heartbeat.direct` exchange (Contract 7) |
-| `status.py` | CPU/mem/disk → `crm.status.checked` (Contract 8) |
 | `receiver.py` | Luistert op 11 queues van andere teams |
 | `sender.py` | Utility module — receiver handlers roepen publish functies aan |
 

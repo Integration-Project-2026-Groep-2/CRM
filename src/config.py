@@ -16,7 +16,6 @@ class Config:
     salesforce_domain: str
     heartbeat_interval_seconds: int
     system_name: str
-    status_check_interval_seconds: int
     log_level: str
 
 
@@ -45,7 +44,6 @@ def load_config() -> Config:
         salesforce_domain=os.getenv("SALESFORCE_DOMAIN", "login"),
         heartbeat_interval_seconds=int(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "1")),
         system_name=os.getenv("SYSTEM_NAME", "CRM"),
-        status_check_interval_seconds=int(os.getenv("STATUS_CHECK_INTERVAL_SECONDS", "30")),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
     )
 

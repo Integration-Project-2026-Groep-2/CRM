@@ -24,7 +24,6 @@ def config() -> Config:
         salesforce_domain="login",
         heartbeat_interval_seconds=0,  # 0 for fast tests
         system_name="CRM",
-        status_check_interval_seconds=30,
         log_level="INFO",
     )
 

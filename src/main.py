@@ -1,8 +1,7 @@
 """CRM integration service entrypoint.
 
-Runs 3 asyncio tasks concurrently:
+Runs 2 asyncio tasks concurrently:
 - heartbeat: XML heartbeat every second (Contract 7)
-- status: CPU/mem/disk status to Controlroom (Contract 8)
 - receiver: listens on the configured inbound RabbitMQ queues
 
 The sender module is a utility library (not a task) — receiver handlers
@@ -21,7 +20,6 @@ from src.config import load_config, setup_logging
 from src.connection import get_rabbitmq_connection
 from src.heartbeat import run_heartbeat
 from src.receiver import run_receiver
-from src.status import run_status
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +66,6 @@ async def main() -> None:
     # Keep references to background tasks so we can cancel them during shutdown.
     tasks = [
         asyncio.create_task(_supervised_task("heartbeat", lambda: run_heartbeat(connection, config))),
-        asyncio.create_task(_supervised_task("status", lambda: run_status(connection, config))),
         asyncio.create_task(_supervised_task("receiver", lambda: run_receiver(connection, config))),
     ]
     try:
