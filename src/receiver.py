@@ -256,14 +256,22 @@ async def _declare_and_bind(
     return queue
 
 
-async def run_receiver(connection: AbstractRobustConnection, config: Config) -> None:
+async def run_receiver(
+    connection: AbstractRobustConnection,
+    config: Config,
+    shutdown_event: asyncio.Event | None = None,
+) -> None:
     """Consume configured inbound messages, validate XML, process in Salesforce.
 
     Contract 9 is the first implemented handler and establishes the base structure
     for all future contract handlers.
+
+    `shutdown_event` is forwarded to the Salesforce login retry loop so a
+    graceful shutdown during a transient Salesforce outage does not hang the
+    container.
     """
     channel = await connection.channel()
-    sf_client = await get_salesforce_client(config)
+    sf_client = await get_salesforce_client(config, shutdown_event=shutdown_event)
 
     # Contract 9 — Controlroom → CRM: system warning
     # Queue: controlroom.warning.issued | Exchange: planning.topic | durable: false | US-26
