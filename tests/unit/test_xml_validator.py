@@ -51,3 +51,69 @@ class TestValidate:
 
         with pytest.raises(ValueError, match="XML validation failed"):
             validate(invalid_xml)
+
+    def test_accepts_facturatie_user_updated_without_gdpr_or_badge(self) -> None:
+        """Contract 25 — Facturatie root has no gdprConsent or badgeCode fields."""
+        xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<FacturatieUserUpdated>
+    <id>223e4567-e89b-42d3-a456-426614174024</id>
+    <email>els.updated@example.com</email>
+    <firstName>Els</firstName>
+    <lastName>Updated</lastName>
+    <role>COMPANY_CONTACT</role>
+    <companyId>f4e5d6c7-b8a9-4012-8f34-ab5678cd9012</companyId>
+    <isActive>true</isActive>
+    <updatedAt>2026-04-21T10:00:00Z</updatedAt>
+</FacturatieUserUpdated>"""
+
+        doc = validate(xml)
+
+        assert doc.tag == "FacturatieUserUpdated"
+
+    def test_rejects_facturatie_user_updated_with_badge_code(self) -> None:
+        """Contract 25 — badgeCode is not a valid field on FacturatieUserUpdated."""
+        invalid_xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<FacturatieUserUpdated>
+    <id>223e4567-e89b-42d3-a456-426614174024</id>
+    <email>els.updated@example.com</email>
+    <firstName>Els</firstName>
+    <lastName>Updated</lastName>
+    <role>COMPANY_CONTACT</role>
+    <badgeCode>BADGE-123</badgeCode>
+    <isActive>true</isActive>
+    <updatedAt>2026-04-21T10:00:00Z</updatedAt>
+</FacturatieUserUpdated>"""
+
+        with pytest.raises(ValueError, match="XML validation failed"):
+            validate(invalid_xml)
+
+    def test_accepts_contract_18_user_updated_with_badge_and_gdpr(self) -> None:
+        """Contract 18 — outbound UserUpdated still carries badgeCode and gdprConsent."""
+        xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<UserUpdated>
+    <id>223e4567-e89b-42d3-a456-426614174024</id>
+    <email>els.updated@example.com</email>
+    <firstName>Els</firstName>
+    <lastName>Updated</lastName>
+    <role>COMPANY_CONTACT</role>
+    <badgeCode>BADGE-123</badgeCode>
+    <isActive>true</isActive>
+    <gdprConsent>true</gdprConsent>
+    <updatedAt>2026-04-21T10:00:00Z</updatedAt>
+</UserUpdated>"""
+
+        doc = validate(xml)
+
+        assert doc.tag == "UserUpdated"
+
+    def test_accepts_facturatie_user_deactivated(self) -> None:
+        xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<FacturatieUserDeactivated>
+    <id>223e4567-e89b-42d3-a456-426614174024</id>
+    <email>els.peeters@example.com</email>
+    <deactivatedAt>2026-04-21T16:00:00Z</deactivatedAt>
+</FacturatieUserDeactivated>"""
+
+        doc = validate(xml)
+
+        assert doc.tag == "FacturatieUserDeactivated"

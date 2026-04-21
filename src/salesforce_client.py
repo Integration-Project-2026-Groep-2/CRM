@@ -1181,6 +1181,102 @@ async def update_planning_contact(
     return await asyncio.to_thread(sf.Contact.get, contact_id)
 
 
+_SPECIALIZED_ROLES = frozenset(
+    {"ADMIN", "SPEAKER", "EVENT_MANAGER", "CASHIER", "BAR_STAFF"}
+)
+
+
+async def update_facturatie_contact(
+    sf: Salesforce,
+    contact: dict[str, Any],
+    *,
+    email: str,
+    first_name: str,
+    last_name: str,
+    phone: str | None,
+    street: str | None,
+    house_number: str | None,
+    postal_code: str | None,
+    city: str | None,
+    country: str | None,
+    role: str,
+    company_id: str | None,
+) -> dict[str, Any]:
+    """Authoritatively update Facturatie-owned fields on an existing Contact.
+
+    Contract 25 sends the full Facturatie-side user object. CRM overwrites the
+    Facturatie-owned fields to match, while preserving CRM-owned identifiers
+    and GDPR state. A specialized existing role (ADMIN/SPEAKER/EVENT_MANAGER/
+    CASHIER/BAR_STAFF) protects both Role__c and Company_ID__c from being
+    overwritten — Facturatie should not demote admins or unlink specialized
+    users from their companies.
+    """
+    updates: dict[str, Any] = {}
+    existing_role = _normalize_optional_field_value(contact.get("Role__c"))
+    can_manage_role_and_company = existing_role not in _SPECIALIZED_ROLES
+
+    if contact.get("Email") != email:
+        updates["Email"] = email
+
+    if _normalize_optional_field_value(contact.get("FirstName")) != _normalize_optional_field_value(first_name):
+        updates["FirstName"] = first_name
+
+    if _normalize_optional_field_value(contact.get("LastName")) != _normalize_optional_field_value(last_name):
+        updates["LastName"] = last_name
+
+    if _normalize_optional_field_value(contact.get("Phone")) != _normalize_optional_field_value(phone):
+        updates["Phone"] = phone
+
+    if _normalize_optional_field_value(contact.get("MailingStreet")) != _normalize_optional_field_value(street):
+        updates["MailingStreet"] = street
+
+    if _normalize_optional_field_value(contact.get("House_Number__c")) != _normalize_optional_field_value(house_number):
+        updates["House_Number__c"] = house_number
+
+    if _normalize_optional_field_value(contact.get("MailingPostalCode")) != _normalize_optional_field_value(postal_code):
+        updates["MailingPostalCode"] = postal_code
+
+    if _normalize_optional_field_value(contact.get("MailingCity")) != _normalize_optional_field_value(city):
+        updates["MailingCity"] = city
+
+    if _normalize_optional_field_value(contact.get("MailingCountry")) != _normalize_optional_field_value(country):
+        updates["MailingCountry"] = country
+
+    if can_manage_role_and_company:
+        if _normalize_optional_field_value(contact.get("Role__c")) != _normalize_optional_field_value(role):
+            updates["Role__c"] = role
+        if (
+            _normalize_optional_field_value(contact.get("Company_ID__c"))
+            != _normalize_optional_field_value(company_id)
+        ):
+            updates["Company_ID__c"] = company_id
+    elif existing_role != _normalize_optional_field_value(role) or (
+        _normalize_optional_field_value(contact.get("Company_ID__c"))
+        != _normalize_optional_field_value(company_id)
+    ):
+        logger.warning(
+            "Facturatie update skipped Role__c/Company_ID__c overwrite on Contact %s "
+            "(existing role=%s, incoming role=%s, incoming company=%s); specialized "
+            "roles are protected from Facturatie changes",
+            contact.get("Id"),
+            existing_role,
+            role,
+            company_id,
+        )
+
+    if not updates:
+        return contact
+
+    contact_id = contact["Id"]
+    await asyncio.to_thread(sf.Contact.update, contact_id, updates)
+    logger.info(
+        "Updated Facturatie Contact %s fields: %s",
+        contact_id,
+        ", ".join(sorted(updates.keys())),
+    )
+    return await asyncio.to_thread(sf.Contact.get, contact_id)
+
+
 async def get_unpaid_contacts(sf: Salesforce) -> list[dict[str, Any]]:
     """Return active Contacts with at least one unpaid active registration.
 
