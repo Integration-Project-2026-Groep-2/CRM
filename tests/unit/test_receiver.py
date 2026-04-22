@@ -1745,6 +1745,35 @@ FACTURATIE_ACCOUNT_RETURN = {
 }
 
 
+class TestBuildCompanyPayloadGuards:
+    """Regression — 2026-04-22 production. Defensive guards in the three
+    company builders so a stray None CRM_ID__c never reaches the outbound
+    sender (where `str(None) == "None"` would fail XSD UUID validation and
+    trigger a 5-retry loop).
+    """
+
+    def test_build_company_data_raises_on_missing_crm_id(self):
+        from src.receiver import _build_company_data
+
+        account = {**FACTURATIE_ACCOUNT_RETURN, "CRM_ID__c": None}
+        with pytest.raises(ValueError, match="no CRM_ID__c"):
+            _build_company_data(account)
+
+    def test_build_updated_company_data_raises_on_missing_crm_id(self):
+        from src.receiver import _build_updated_company_data
+
+        account = {**FACTURATIE_ACCOUNT_RETURN, "CRM_ID__c": None}
+        with pytest.raises(ValueError, match="no CRM_ID__c"):
+            _build_updated_company_data(account)
+
+    def test_build_company_deactivation_data_raises_on_missing_crm_id(self):
+        from src.receiver import _build_company_deactivation_data
+
+        account = {**FACTURATIE_ACCOUNT_RETURN, "CRM_ID__c": None}
+        with pytest.raises(ValueError, match="no CRM_ID__c"):
+            _build_company_deactivation_data(account, "2026-04-22T11:00:00Z")
+
+
 class TestHandleFacturatieCompanyCreated:
     @pytest.fixture
     def sf_mock(self):

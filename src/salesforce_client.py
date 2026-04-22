@@ -295,26 +295,26 @@ async def upsert_contact_by_email(
 
     existing = await get_contact_by_email(sf, email)
     if existing and existing.get("CRM_ID__c"):
+        # Preserve the existing canonical UUID on updates — never regenerate.
         data["CRM_ID__c"] = existing["CRM_ID__c"]
+    elif not data.get("CRM_ID__c"):
+        # simple-salesforce's SFType.upsert() always returns an HTTP status
+        # code (int), never a dict, so post-upsert minting via a "created"
+        # signal is dead code. Stamp CRM_ID__c into the body so SF persists
+        # it atomically on create and backfills any existing record missing it.
+        data["CRM_ID__c"] = str(uuid.uuid4())
     if existing is None:
         data = await _ensure_contact_active(sf, data)
 
     try:
         result = await asyncio.to_thread(sf.Contact.upsert, f"Email/{email}", data)
 
-        # Salesforce upsert may return a dict for creates and an int status code
-        # for updates, depending on backend/API behavior.
-        created = isinstance(result, dict) and result.get("created", False)
+        # Defensive dict-guard in case a future simple-salesforce version
+        # mirrors SFType.create() and returns a dict with "id".
         contact_id = result.get("id") if isinstance(result, dict) else None
 
         if contact_id is None and existing is not None:
             contact_id = existing.get("Id")
-
-        if created and contact_id and not data.get("CRM_ID__c"):
-            crm_id = str(uuid.uuid4())
-            await asyncio.to_thread(
-                sf.Contact.update, contact_id, {"CRM_ID__c": crm_id}
-            )
 
         if contact_id is None:
             refreshed = await get_contact_by_email(sf, email)
@@ -1789,26 +1789,27 @@ async def upsert_account_by_vat(
 
     existing = await get_account_by_vat(sf, vat_number)
     if existing and existing.get("CRM_ID__c"):
+        # Preserve the existing canonical UUID on updates — never regenerate.
         data["CRM_ID__c"] = existing["CRM_ID__c"]
+    elif not data.get("CRM_ID__c"):
+        # simple-salesforce's SFType.upsert() always returns an HTTP status
+        # code (int), never a dict, so there is no "created" signal we can
+        # use to mint CRM_ID__c post-upsert. Stamp it in the request body so
+        # SF persists it atomically on create. Also backfills existing
+        # records whose CRM_ID__c was left blank by an earlier buggy rollout.
+        data["CRM_ID__c"] = str(uuid.uuid4())
 
     try:
         result = await asyncio.to_thread(
             sf.Account.upsert, f"VAT_Number__c/{vat_number}", data
         )
 
-        # Salesforce upsert returns a dict for creates (201 Created with body)
-        # but a raw int status code for updates (204 No Content). Handle both.
-        created = isinstance(result, dict) and result.get("created", False)
+        # Defensive dict-guard in case a future simple-salesforce version
+        # mirrors SFType.create() and returns a dict with "id".
         account_id = result.get("id") if isinstance(result, dict) else None
 
         if account_id is None and existing is not None:
             account_id = existing.get("Id")
-
-        if created and account_id and not data.get("CRM_ID__c"):
-            crm_id = str(uuid.uuid4())
-            await asyncio.to_thread(
-                sf.Account.update, account_id, {"CRM_ID__c": crm_id}
-            )
 
         if account_id is None:
             refreshed = await get_account_by_vat(sf, vat_number)
