@@ -1268,6 +1268,73 @@ async def test_upsert_account_preserves_existing_crm_id(sf):
 
 
 @pytest.mark.asyncio
+async def test_upsert_account_by_vat_handles_int_status_on_update(sf):
+    """Regression — 2026-04-22 production. simple-salesforce's `upsert()`
+    returns a dict for CREATE (201 with body) and a raw int for UPDATE
+    (204 No Content). When Facturatie re-sends the same company, the
+    Account already exists → SF update → int returned → crashed on
+    `result["id"]` with `'int' object is not subscriptable`.
+
+    The helper must accept the int, recover the ID from the pre-upsert
+    lookup (`existing`), and return the fetched record.
+    """
+    existing_account = {
+        "Id": "001000000000700",
+        "Name": "Acme",
+        "VAT_Number__c": "BE0412341112",
+        "CRM_ID__c": "existing-crm-uuid",
+    }
+    # First query (get_account_by_vat before upsert) finds the existing record.
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "001000000000700"}]}
+    sf.Account.get.return_value = existing_account
+    # SF upsert for an update returns HTTP 204 as a bare int.
+    sf.Account.upsert.return_value = 204
+
+    result = await upsert_account_by_vat(sf, "BE0412341112", {"Name": "Acme Updated"})
+
+    sf.Account.upsert.assert_called_once()
+    # Must have fetched the final record via the id recovered from existing.
+    assert sf.Account.get.called
+    fetched_id = sf.Account.get.call_args_list[-1].args[0]
+    assert fetched_id == "001000000000700"
+    # Must NOT have allocated a new CRM UUID (not a create path).
+    update_calls = [
+        call for call in sf.Account.update.call_args_list
+        if len(call.args) >= 2 and "CRM_ID__c" in call.args[1]
+    ]
+    assert update_calls == [], "no CRM_ID__c mint should happen on update path"
+    assert result == existing_account
+
+
+@pytest.mark.asyncio
+async def test_upsert_account_by_vat_refetches_when_int_and_no_existing(sf):
+    """Edge case — upsert returned int (so we didn't get an id back) and the
+    pre-upsert `get_account_by_vat` returned None (account didn't exist at the
+    time of our lookup). Can happen under a race with another producer. Helper
+    must re-query by VAT and return the freshly-created record.
+    """
+    # First lookup: nothing there (account doesn't exist yet from our POV).
+    # Second lookup (after upsert): account exists, return it.
+    freshly_created = {
+        "Id": "001000000000701",
+        "Name": "RaceWinner",
+        "VAT_Number__c": "BE0412341999",
+        "CRM_ID__c": "new-crm-uuid",
+    }
+    sf.query.side_effect = [
+        {"totalSize": 0, "records": []},                                     # pre-upsert
+        {"totalSize": 1, "records": [{"Id": "001000000000701"}]},            # re-query
+    ]
+    sf.Account.get.return_value = freshly_created
+    sf.Account.upsert.return_value = 204  # update-ish response even though we didn't see it
+
+    result = await upsert_account_by_vat(sf, "BE0412341999", {"Name": "RaceWinner"})
+
+    sf.Account.upsert.assert_called_once()
+    assert result == freshly_created
+
+
+@pytest.mark.asyncio
 async def test_upsert_account_by_vat_strips_external_id_from_body(sf):
     """Regression — 2026-04-22 production. Salesforce v59+ rejects the
     external-ID field in the body when it's in the URL path. Helper must
