@@ -923,32 +923,6 @@ async def get_contact_match_by_planning_id(
         raise
 
 
-async def get_contact_match_by_crm_id(
-    sf: Salesforce, crm_id: str
-) -> tuple[Literal["none", "unique", "ambiguous"], dict[str, Any] | None]:
-    """Classify a CRM master UUID lookup as no match, unique match, or ambiguous match.
-
-    Used by update/deactivate handlers where consumers send back the canonical
-    CRM UUID received in `crm.user.confirmed` (Option 2 UUID strategy).
-    """
-    try:
-        escaped_crm_id = _escape_soql(crm_id)
-        query = f"SELECT Id FROM Contact WHERE CRM_ID__c = '{escaped_crm_id}'"
-        result = await asyncio.to_thread(sf.query, query)
-
-        if result["totalSize"] == 0:
-            return "none", None
-        if result["totalSize"] > 1:
-            return "ambiguous", None
-
-        contact_id = result["records"][0]["Id"]
-        contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
-        logger.info("Found unique Contact by CRM_ID__c: %s", crm_id)
-        return "unique", contact_record
-    except SalesforceError as e:
-        logger.error("Failed to get contact match by CRM_ID__c %s: %s", crm_id, str(e))
-        raise
-
 
 async def ensure_contact_identifiers(
     sf: Salesforce,
@@ -1153,6 +1127,89 @@ async def update_mailing_contact(
     )
     return await asyncio.to_thread(sf.Contact.get, contact_id)
 
+async def update_facturatie_contact(
+    sf: Salesforce,
+    contact: dict[str, Any],
+    *,
+    email: str,
+    first_name: str,
+    last_name: str,
+    phone: str | None,
+    street: str | None,
+    house_number: str | None,
+    postal_code: str | None,
+    city: str | None,
+    country: str | None,
+    role: str,
+    company_id: str | None,
+) -> dict[str, Any]:
+    """Authoritatively update Facturatie-owned fields on an existing Contact.
+
+    Contract 25 sends the full Facturatie-side user object. CRM therefore
+    overwrites Facturatie-owned Contact fields to match the payload while
+    preserving unrelated CRM-owned fields (badge, CRM_ID__c, Registration_ID__c,
+    active flag).
+
+    Role protection: specialized existing roles (ADMIN, SPEAKER, EVENT_MANAGER,
+    CASHIER, BAR_STAFF) keep their Role__c and Company_ID__c untouched, because
+    Facturatie is not authoritative for those role assignments. Roles VISITOR
+    and COMPANY_CONTACT may be overwritten by the Facturatie payload.
+    """
+    updates: dict[str, Any] = {}
+    existing_role = _normalize_optional_field_value(contact.get("Role__c"))
+    can_manage_role_and_company = existing_role in (None, "VISITOR", "COMPANY_CONTACT")
+
+    if contact.get("Email") != email:
+        updates["Email"] = email
+
+    if _normalize_optional_field_value(contact.get("FirstName")) != _normalize_optional_field_value(first_name):
+        updates["FirstName"] = first_name
+
+    if _normalize_optional_field_value(contact.get("LastName")) != _normalize_optional_field_value(last_name):
+        updates["LastName"] = last_name
+
+    if _normalize_optional_field_value(contact.get("Phone")) != _normalize_optional_field_value(phone):
+        updates["Phone"] = phone
+
+    address_mapping = {
+        "MailingStreet": street,
+        "House_Number__c": house_number,
+        "MailingPostalCode": postal_code,
+        "MailingCity": city,
+        "MailingCountry": country,
+    }
+    for sf_field, incoming_value in address_mapping.items():
+        if _normalize_optional_field_value(contact.get(sf_field)) != _normalize_optional_field_value(incoming_value):
+            updates[sf_field] = incoming_value
+
+    if can_manage_role_and_company:
+        normalized_incoming_role = _normalize_optional_field_value(role)
+        if (
+            normalized_incoming_role is not None
+            and normalized_incoming_role != existing_role
+        ):
+            updates["Role__c"] = normalized_incoming_role
+
+        if (
+            _normalize_optional_field_value(contact.get("Company_ID__c"))
+            != _normalize_optional_field_value(company_id)
+        ):
+            updates["Company_ID__c"] = company_id
+
+    if contact.get("GDPR_Consent__c") is not True:
+        updates["GDPR_Consent__c"] = True
+
+    if not updates:
+        return contact
+
+    contact_id = contact["Id"]
+    await asyncio.to_thread(sf.Contact.update, contact_id, updates)
+    logger.info(
+        "Updated Facturatie Contact %s fields: %s",
+        contact_id,
+        ", ".join(sorted(updates.keys())),
+    )
+    return await asyncio.to_thread(sf.Contact.get, contact_id)
 
 async def update_planning_contact(
     sf: Salesforce,

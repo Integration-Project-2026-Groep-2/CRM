@@ -24,12 +24,8 @@ from src.salesforce_client import (
     deactivate_contact_record,
     deactivate_session_registration,
     ensure_contact_identifiers,
-<<<<<<< feature/registration-receiver-v2
-    get_contact_by_crm_id,
-=======
     ensure_session_registration_active,
     get_active_session_participants,
->>>>>>> dev
     get_contact_by_email,
     get_contact_match_by_crm_id,
     get_contact_match_by_email,
@@ -291,30 +287,17 @@ async def run_receiver(
     # Queue: facturatie.user.created | Exchange: user.topic | durable: true
     queue_facturatie_user_created = await _declare_and_bind(channel, "facturatie.user.created", durable=True)
     await queue_facturatie_user_created.consume(partial(handle_facturatie_user_created, sf=sf_client))
-<<<<<<< feature/registration-receiver-v2
-    
-    # Contract 25 — Facturatie → CRM: user updated
-=======
 
     # Contract 25 — Facturatie → CRM: update existing CRM-linked user
->>>>>>> dev
     # Queue: facturatie.user.updated | Exchange: user.topic | durable: true
     queue_facturatie_user_updated = await _declare_and_bind(channel, "facturatie.user.updated", durable=True)
     await queue_facturatie_user_updated.consume(partial(handle_facturatie_user_updated, sf=sf_client))
 
-<<<<<<< feature/registration-receiver-v2
-    # Contract 26 — Facturatie → CRM: user deactivated (soft delete only)
-    # Queue: facturatie.user.deactivated | Exchange: user.topic | durable: true
-    queue_facturatie_user_deactivated = await _declare_and_bind(channel, "facturatie.user.deactivated", durable=True)
-    await queue_facturatie_user_deactivated.consume(partial(handle_facturatie_user_deactivated, sf=sf_client))
-    
-=======
     # Contract 26 — Facturatie → CRM: deactivate existing CRM-linked user
     # Queue: facturatie.user.deactivated | Exchange: user.topic | durable: true
     queue_facturatie_user_deactivated = await _declare_and_bind(channel, "facturatie.user.deactivated", durable=True)
     await queue_facturatie_user_deactivated.consume(partial(handle_facturatie_user_deactivated, sf=sf_client))
 
->>>>>>> dev
     # Contract 27 — Mailing → CRM: new Mailing user sync
     # Queue: mailing.user.created | Exchange: user.topic | durable: true
     queue_mailing_user_created = await _declare_and_bind(channel, "mailing.user.created", durable=True)
@@ -578,33 +561,6 @@ def _get_contact_is_active(contact: dict) -> bool:
         if active_field in contact:
             return coerce_is_active(contact[active_field])
     return True
-
-
-async def _handle_out_of_order_deferral(
-    contract_name: str,
-    message: aio_pika.IncomingMessage,
-    *,
-    identifier_label: str,
-    identifier_value: str,
-) -> None:
-    """Requeue out-of-order events so eventual create/update ordering can recover."""
-    logger.warning(
-        "%s deferred — no Contact found for %s %s; retrying for possible out-of-order delivery",
-        contract_name,
-        identifier_label,
-        identifier_value,
-    )
-    await message.reject(requeue=True)
-
-
-async def _handle_processing_error(
-    contract_name: str,
-    message: aio_pika.IncomingMessage,
-    exc: Exception,
-) -> None:
-    """Handle processing errors consistently by logging and requeueing."""
-    logger.error("%s — error processing message: %s", contract_name, exc)
-    await message.reject(requeue=True)
 
 
 def _build_user_data(contact: dict) -> dict:
@@ -1654,10 +1610,22 @@ async def handle_mailing_user_deactivated(
     except Exception as exc:  # noqa: BLE001
         await _handle_processing_error("MailingUserDeactivated", message, exc)
 
+
 async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
     """Contract 1 — Frontend -> CRM: new registration.
 
     Queue: frontend.registration.created | durable: true | US-02, US-04, US-05, US-19
+
+    Behaviour:
+    - Validate XML against schema.
+    - Reject registrations without GDPR consent.
+    - Ensure Session_Registration__c exists in the org (reject otherwise).
+    - Reuse a unique existing Contact when registrationId/session fields match.
+    - Upsert Session_Registration__c to keep the registration active.
+    - Create a new Contact when no unique match exists.
+    - Publish crm.user.confirmed and crm.mail.requested on success.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
     """
     try:
         xml = xml_validator.validate(message.body)
@@ -1668,12 +1636,24 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
 
     try:
         email = xml.findtext("email")
+        registration_id = xml.findtext("registrationId") or ""
+        session_id = xml.findtext("sessionId") or ""
 
         gdpr_text = xml.findtext("gdprConsent")
         if gdpr_text not in ("true", "1"):
             logger.warning("Registration refused — gdprConsent=%s for email %s", gdpr_text, email)
             await message.reject(requeue=False)
             return
+
+        if not await has_session_registration_object(sf):
+            logger.error(
+                "Registration rejected — Salesforce object Session_Registration__c is missing",
+            )
+            await message.reject(requeue=False)
+            return
+
+        # TODO: Switch to registrationId-based dedup as primary key (contract spec).
+        #       Current R1 approach uses email as lookup; registrationId is secondary.
 
         role = xml.findtext("role")
         company = xml.findtext("company")
@@ -1683,23 +1663,75 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
         existing_contact = await get_contact_by_email(sf, email)
 
         if existing_contact:
-            reg_id_incoming = xml.findtext("registrationId")
-            reg_id_existing = existing_contact.get("Registration_ID__c")
+            existing_session_registration = await get_session_registration_by_registration_id(
+                sf,
+                registration_id,
+            )
 
-            if reg_id_incoming == reg_id_existing:
-                logger.info("Retry for registrationId %s — republishing", reg_id_incoming)
+            if (
+                existing_session_registration is not None
+                and existing_session_registration.get("Is_Active__c") is not False
+            ):
+                # Retry na publish failure -> opnieuw publishen
+                logger.info("Retry for registrationId %s — republishing", registration_id)
+
                 await sender.publish_user_confirmed(_build_user_data(existing_contact))
-                full_name = _build_full_name(
+
+                # C6: Publish mail request
+                full_name = _build_mail_display_name(
                     existing_contact.get("FirstName"),
                     existing_contact.get("LastName"),
+                    email,
                 )
+
                 recipient = {"email": email, "name": full_name}
                 dynamic_data = {"guest_name": full_name}
                 await sender.publish_mail_requested("registration_confirmation", recipient, dynamic_data)
+
+                await message.ack()
+                return
+            if existing_session_registration is not None:
+                logger.info(
+                    "Reactivating inactive registrationId %s via normal registration flow",
+                    registration_id,
+                )
+
+            if not _registration_fields_are_compatible(existing_contact, xml):
+                logger.warning(
+                    "Conflict: email %s exists with incompatible person fields for registrationId %s",
+                    email,
+                    registration_id,
+                )
                 await message.ack()
                 return
 
-            logger.warning("Conflict: email %s exists with different registrationId", email)
+            contact = await ensure_contact_identifiers(
+                sf,
+                existing_contact,
+                registration_id=registration_id,
+            )
+            await upsert_session_registration(
+                sf,
+                registration_id=registration_id,
+                session_id=session_id,
+                contact_id=contact["Id"],
+            )
+
+            logger.info(
+                "Reusing existing Salesforce Contact for email=%s registrationId=%s",
+                email,
+                registration_id,
+            )
+            await sender.publish_user_confirmed(_build_user_data(contact))
+
+            full_name = _build_mail_display_name(
+                contact.get("FirstName"),
+                contact.get("LastName"),
+                email,
+            )
+            recipient = {"email": email, "name": full_name}
+            dynamic_data = {"guest_name": full_name}
+            await sender.publish_mail_requested("registration_confirmation", recipient, dynamic_data)
             await message.ack()
             return
 
@@ -1709,23 +1741,34 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
             "Email": email,
             "Role__c": xml.findtext("role"),
             "GDPR_Consent__c": xml.findtext("gdprConsent") in ("true", "1"),
-            "Registration_ID__c": xml.findtext("registrationId"),
+            "Registration_ID__c": registration_id,
         }
 
         phone = xml.findtext("phone")
         if phone:
             contact_data["Phone"] = phone
 
+        # Company mapping deferred to Contract 3 (aparte taak)
+
         logger.info("Creating new Salesforce Contact for %s", email)
         contact = await create_contact(sf, contact_data)
+        await upsert_session_registration(
+            sf,
+            registration_id=registration_id,
+            session_id=session_id,
+            contact_id=contact["Id"],
+        )
 
         await sender.publish_user_confirmed(_build_user_data(contact))
         logger.info("Published crm.user.confirmed for %s", email)
 
-        full_name = _build_full_name(
+        # Contract 6 (R1 scope) — publish registration_confirmation
+        full_name = _build_mail_display_name(
             contact_data.get("FirstName"),
             contact_data.get("LastName"),
+            email,
         )
+
         recipient = {"email": email, "name": full_name}
         dynamic_data = {"guest_name": full_name}
         await sender.publish_mail_requested("registration_confirmation", recipient, dynamic_data)
@@ -1734,8 +1777,8 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
         await message.ack()
 
     except Exception as exc:  # noqa: BLE001
-        logger.error("Registration — error processing message: %s", exc)
-        await message.reject(requeue=True)
+        await _handle_processing_error("Registration", message, exc)
+
 
 async def handle_facturatie_user_created(
     message: aio_pika.IncomingMessage, sf: "Salesforce"
@@ -2036,288 +2079,6 @@ async def handle_facturatie_user_deactivated(
     except Exception as exc:  # noqa: BLE001
         await _handle_processing_error("FacturatieUserDeactivated", message, exc)
 
-async def handle_facturatie_user_updated(
-    message: aio_pika.IncomingMessage, sf: "Salesforce"
-) -> None:
-    """Contract 25 — Facturatie -> CRM: existing CRM-linked user update.
-
-    Queue: facturatie.user.updated | durable: true
-    """
-    try:
-        xml = xml_validator.validate(message.body)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("FacturatieUserUpdated — invalid XML, rejecting message: %s", exc)
-        await message.reject(requeue=False)
-        return
-
-    try:
-<<<<<<< feature/registration-receiver-v2
-        crm_id = xml.findtext("id") or ""
-        email = xml.findtext("email") or ""
-        first_name = xml.findtext("firstName")
-        last_name = xml.findtext("lastName")
-        phone = xml.findtext("phone")
-        street = xml.findtext("street")
-        house_number = xml.findtext("houseNumber")
-        postal_code = xml.findtext("postalCode")
-        city = xml.findtext("city")
-        country = xml.findtext("country")
-        role = xml.findtext("role")
-        company_id = xml.findtext("companyId")
-        badge_code = xml.findtext("badgeCode")
-        is_active_text = xml.findtext("isActive")
-=======
-        email = xml.findtext("email")
-        registration_id = xml.findtext("registrationId") or ""
-        session_id = xml.findtext("sessionId") or ""
-
->>>>>>> dev
-        gdpr_text = xml.findtext("gdprConsent")
-
-        if gdpr_text not in ("true", "1"):
-            logger.warning(
-                "FacturatieUserUpdated refused — gdprConsent=%s for email %s",
-                gdpr_text,
-                email,
-            )
-            await message.reject(requeue=False)
-            return
-
-<<<<<<< feature/registration-receiver-v2
-        match_status, contact = await get_contact_match_by_crm_id(sf, crm_id)
-        if match_status == "none":
-            await _handle_out_of_order_deferral(
-                "FacturatieUserUpdated",
-                message,
-                identifier_label="CRM_ID__c",
-                identifier_value=crm_id,
-            )
-            return
-
-        if match_status == "ambiguous":
-            logger.warning(
-                "FacturatieUserUpdated ignored — ambiguous CRM_ID__c %s in Salesforce",
-                crm_id,
-            )
-            await message.ack()
-            return
-
-        requested_is_active = True
-        if is_active_text is not None:
-            requested_is_active = is_active_text.strip().lower() in ("true", "1")
-
-        if not requested_is_active:
-            deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            contact = await deactivate_contact_record(
-                sf,
-                contact,
-                log_value=f"CRM_ID__c {crm_id}",
-            )
-            await sender.publish_user_deactivated(
-                _build_user_deactivation_data(contact, deactivated_at)
-            )
-            logger.info("Published crm.user.deactivated for CRM_ID__c %s", crm_id)
-=======
-        if not await has_session_registration_object(sf):
-            logger.error(
-                "Registration rejected — Salesforce object Session_Registration__c is missing",
-            )
-            await message.reject(requeue=False)
-            return
-
-        # TODO: Switch to registrationId-based dedup as primary key (contract spec).
-        #       Current R1 approach uses email as lookup; registrationId is secondary.
-
-        role = xml.findtext("role")
-        company = xml.findtext("company")
-        if role == "COMPANY_CONTACT" and not company:
-            logger.warning("COMPANY_CONTACT registration without company field for %s", email)
-
-        existing_contact = await get_contact_by_email(sf, email)
-
-        if existing_contact:
-            existing_session_registration = await get_session_registration_by_registration_id(
-                sf,
-                registration_id,
-            )
-
-            if (
-                existing_session_registration is not None
-                and existing_session_registration.get("Is_Active__c") is not False
-            ):
-                # Retry na publish failure -> opnieuw publishen
-                logger.info("Retry for registrationId %s — republishing", registration_id)
-
-                await sender.publish_user_confirmed(_build_user_data(existing_contact))
-
-                # C6: Publish mail request
-                full_name = _build_mail_display_name(
-                    existing_contact.get("FirstName"),
-                    existing_contact.get("LastName"),
-                    email,
-                )
-
-                recipient = {"email": email, "name": full_name}
-                dynamic_data = {"guest_name": full_name}
-                await sender.publish_mail_requested("registration_confirmation", recipient, dynamic_data)
-
-                await message.ack()
-                return
-            if existing_session_registration is not None:
-                logger.info(
-                    "Reactivating inactive registrationId %s via normal registration flow",
-                    registration_id,
-                )
-
-            if not _registration_fields_are_compatible(existing_contact, xml):
-                logger.warning(
-                    "Conflict: email %s exists with incompatible person fields for registrationId %s",
-                    email,
-                    registration_id,
-                )
-                await message.ack()
-                return
-
-            contact = await ensure_contact_identifiers(
-                sf,
-                existing_contact,
-                registration_id=registration_id,
-            )
-            await upsert_session_registration(
-                sf,
-                registration_id=registration_id,
-                session_id=session_id,
-                contact_id=contact["Id"],
-            )
-
-            logger.info(
-                "Reusing existing Salesforce Contact for email=%s registrationId=%s",
-                email,
-                registration_id,
-            )
-            await sender.publish_user_confirmed(_build_user_data(contact))
-
-            full_name = _build_mail_display_name(
-                contact.get("FirstName"),
-                contact.get("LastName"),
-                email,
-            )
-            recipient = {"email": email, "name": full_name}
-            dynamic_data = {"guest_name": full_name}
-            await sender.publish_mail_requested("registration_confirmation", recipient, dynamic_data)
->>>>>>> dev
-            await message.ack()
-            return
-
-        update_payload: dict[str, str] = {}
-        field_mapping = {
-            "FirstName": first_name,
-            "LastName": last_name,
-            "Phone": phone,
-            "Email": email,
-<<<<<<< feature/registration-receiver-v2
-            "MailingStreet": street,
-            "House_Number__c": house_number,
-            "MailingPostalCode": postal_code,
-            "MailingCity": city,
-            "MailingCountry": country,
-            "Role__c": role,
-            "Company_ID__c": company_id,
-            "Badge_Code__c": badge_code,
-=======
-            "Role__c": xml.findtext("role"),
-            "GDPR_Consent__c": xml.findtext("gdprConsent") in ("true", "1"),
-            "Registration_ID__c": registration_id,
->>>>>>> dev
-        }
-        for sf_field, xml_value in field_mapping.items():
-            if xml_value is not None:
-                update_payload[sf_field] = xml_value
-
-        await asyncio.to_thread(sf.Contact.update, contact["Id"], update_payload)
-        contact = await asyncio.to_thread(sf.Contact.get, contact["Id"])
-
-<<<<<<< feature/registration-receiver-v2
-        if not _get_contact_is_active(contact):
-            active_payload = await apply_is_active(sf, {}, True)
-            await asyncio.to_thread(sf.Contact.update, contact["Id"], active_payload)
-            contact = await asyncio.to_thread(sf.Contact.get, contact["Id"])
-
-        await sender.publish_user_updated(_build_updated_user_data(contact))
-        logger.info("Published crm.user.updated for Facturatie user CRM_ID__c %s", crm_id)
-        await message.ack()
-    except Exception as exc:  # noqa: BLE001
-        await _handle_processing_error("FacturatieUserUpdated", message, exc)
-=======
-        # Company mapping deferred to Contract 3 (aparte taak)
-
-        logger.info("Creating new Salesforce Contact for %s", email)
-        contact = await create_contact(sf, contact_data)
-        await upsert_session_registration(
-            sf,
-            registration_id=registration_id,
-            session_id=session_id,
-            contact_id=contact["Id"],
-        )
->>>>>>> dev
-
-
-<<<<<<< feature/registration-receiver-v2
-async def handle_facturatie_user_deactivated(
-    message: aio_pika.IncomingMessage, sf: "Salesforce"
-) -> None:
-    """Contract 26 — Facturatie -> CRM: CRM-linked user deactivation.
-=======
-        # Contract 6 (R1 scope) — publish registration_confirmation
-        full_name = _build_mail_display_name(
-            contact_data.get("FirstName"),
-            contact_data.get("LastName"),
-            email,
-        )
-
-        recipient = {"email": email, "name": full_name}
-        dynamic_data = {"guest_name": full_name}
-        await sender.publish_mail_requested("registration_confirmation", recipient, dynamic_data)
-        logger.info("Published crm.mail.requested for %s", email)
->>>>>>> dev
-
-    Queue: facturatie.user.deactivated | durable: true
-    """
-    try:
-        xml = xml_validator.validate(message.body)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("FacturatieUserDeactivated — invalid XML, rejecting message: %s", exc)
-        await message.reject(requeue=False)
-        return
-
-    try:
-        crm_id = xml.findtext("id") or ""
-        email = xml.findtext("email") or ""
-
-        contact = await get_contact_by_crm_id(sf, crm_id)
-        if contact is None:
-            logger.warning(
-                "FacturatieUserDeactivated — no Contact found for CRM_ID %s", crm_id
-            )
-            await message.ack()
-            return
-
-        contact = await deactivate_contact_record(sf, contact, log_value=crm_id)
-        deactivation_data = {
-            "id": contact["CRM_ID__c"],
-            "email": contact["Email"],
-            "deactivatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
-        await sender.publish_user_deactivated(deactivation_data)
-        logger.info("Published crm.user.deactivated for Facturatie user %s", email)
-        await message.ack()
-    except Exception as exc:  # noqa: BLE001
-<<<<<<< feature/registration-receiver-v2
-        logger.error("FacturatieUserDeactivated — error processing message: %s", exc)
-        await message.reject(requeue=True)
-=======
-        await _handle_processing_error("Registration", message, exc)
->>>>>>> dev
 
 def _build_updated_user_data(contact: dict) -> dict:
     """Build user_data payload dict for crm.user.updated from a Salesforce record.
