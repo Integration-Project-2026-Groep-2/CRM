@@ -8,9 +8,10 @@ Implemented contracts:
   Contract 15 — crm.user.conflict            (fanout exchange, durable)
   Contract 13 — crm.user.confirmed           (durable: true)
   Contract 18 — crm.user.updated             (durable: true)
-    Contract 22 — crm.user.deactivated         (durable: true)
+  Contract 22 — crm.user.deactivated         (durable: true)
   Contract 14 — crm.company.confirmed        (durable: true)
-    Contract 23 — crm.company.deactivated      (durable: true)
+  Contract 19 — crm.company.updated          (durable: true)
+  Contract 23 — crm.company.deactivated      (durable: true)
   Contract 5b  — crm.company.responded       (durable: false)
   Contract 10b — crm.person.lookup.responded (durable: false)
   Contract 17b — crm.unpaid.responded        (durable: false)
@@ -298,7 +299,7 @@ async def publish_person_lookup_responded(request_id: str, person_data: dict[str
     Optional keys (only if found=True):
         id, companyName, companyId (only if linkedToCompany=True)
     """
-    root = etree.Element("PersonResponse")
+    root = etree.Element("PersonLookupResponse")
 
     etree.SubElement(root, "requestId").text = str(request_id)
     found = person_data["found"]
@@ -437,12 +438,51 @@ async def publish_user_deactivated(user_data: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Contract 19 — CRM → consumers: company updated
+# Queue: crm.company.updated | durable: true | US-41
+# ---------------------------------------------------------------------------
+
+async def publish_company_updated(company_data: dict[str, Any]) -> None:
+    """Contract 19 — Publish full company profile after Account update in Salesforce.
+
+    Consumers replace their local copy entirely — no partial merge.
+
+    Required keys in company_data:
+        id, vatNumber, name, isActive, updatedAt
+    Optional keys:
+        email, phone, street, houseNumber, postalCode, city, country
+
+    Field order follows XSD xs:sequence exactly:
+        id, vatNumber, name, [email], [phone], [street], [houseNumber],
+        [postalCode], [city], [country], isActive, updatedAt
+    """
+    root = etree.Element("CompanyUpdated")
+
+    etree.SubElement(root, "id").text = str(company_data["id"])
+    etree.SubElement(root, "vatNumber").text = company_data["vatNumber"]
+    etree.SubElement(root, "name").text = company_data["name"]
+
+    for field in ("email", "phone", "street", "houseNumber", "postalCode", "city", "country"):
+        if field in company_data:
+            etree.SubElement(root, field).text = str(company_data[field])
+
+    etree.SubElement(root, "isActive").text = str(company_data["isActive"]).lower()
+    etree.SubElement(root, "updatedAt").text = company_data["updatedAt"]
+
+    xml_bytes = etree.tostring(root, encoding="utf-8", xml_declaration=True)
+    xml_validator.validate(xml_bytes)
+    await _publish("crm.company.updated", xml_bytes, persistent=True)
+
+
+# ---------------------------------------------------------------------------
 # Contract 23 — CRM → consumers: company deactivated
-# Queue: crm.company.deactivated | durable: true | US-54 (R3)
+# Queue: crm.company.deactivated | durable: true | US-54
 # ---------------------------------------------------------------------------
 
 async def publish_company_deactivated(company_data: dict[str, Any]) -> None:
     """Contract 23 — Publish company deactivation after Account soft-delete.
+
+    Consumers must remove or anonymise their cached data accordingly.
 
     Required keys in company_data:
         id, vatNumber, deactivatedAt

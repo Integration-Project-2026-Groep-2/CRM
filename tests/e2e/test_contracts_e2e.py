@@ -146,7 +146,7 @@ async def ensure_local_e2e_stack():
     await _wait_for_local_rabbitmq()
     await _wait_for_receiver_queue("frontend.registration.created")
     await _wait_for_receiver_queue("mailing.user.created")
-    await _wait_for_receiver_queue("mailing.user.deactivated")
+    await _wait_for_receiver_queue("crm.mailing.user.deactivated")
 
 
 @pytest.fixture
@@ -632,7 +632,7 @@ class TestContract28MailingUserUpdated:
         self, channel, inbound_exchanges, outbound_exchange, sf_client,
     ):
         await _wait_for_receiver_queue("mailing.user.created")
-        await _wait_for_receiver_queue("mailing.user.updated")
+        await _wait_for_receiver_queue("crm.mailing.user.updated")
         await _require_salesforce_contact_field(sf_client, "Mailing_ID__c")
 
         email = _unique_email()
@@ -688,6 +688,156 @@ class TestContract28MailingUserUpdated:
 
 
 # ---------------------------------------------------------------------------
+# Contract 25 → Contract 18 — Facturatie User Update → User Updated
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.salesforce
+class TestContract25FacturatieUserUpdated:
+    """C25: facturatie.user.updated → C18 crm.user.updated."""
+
+    @pytest.mark.asyncio
+    async def test_existing_facturatie_user_update_produces_user_updated(
+        self, channel, inbound_exchanges, outbound_exchange, sf_client,
+    ):
+        await _wait_for_receiver_queue("facturatie.user.created")
+        await _wait_for_receiver_queue("facturatie.user.updated")
+
+        email = _unique_email()
+        registration_id = f"REG-E2E-FACT-{random.randint(100000, 999999)}"
+        company_id = str(uuid.uuid4())
+
+        q_confirmed = await _create_temp_queue(channel, outbound_exchange, "crm.user.confirmed")
+        q_updated = await _create_temp_queue(channel, outbound_exchange, "crm.user.updated")
+        await _drain_queue(q_confirmed)
+        await _drain_queue(q_updated)
+
+        create_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<UserCreated>
+    <facturatieCustomerId>FB-E2E-{random.randint(1000, 9999)}</facturatieCustomerId>
+    <registrationId>{registration_id}</registrationId>
+    <firstName>Before</firstName>
+    <lastName>Update</lastName>
+    <email>{email}</email>
+    <role>COMPANY_CONTACT</role>
+    <companyId>{company_id}</companyId>
+    <isActive>true</isActive>
+    <createdAt>2026-04-21T09:00:00Z</createdAt>
+</UserCreated>"""
+
+        await _publish(inbound_exchanges["user.topic"], "facturatie.user.created", create_xml)
+
+        confirmed = await _consume_one(q_confirmed)
+        assert confirmed is not None, "Prerequisite: C24 must produce UserConfirmed first"
+        confirmed_id = confirmed.findtext("id")
+        assert confirmed_id is not None, "UserConfirmed did not contain a CRM UUID"
+
+        await _drain_queue(q_updated)
+
+        new_company_id = str(uuid.uuid4())
+        update_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<UserUpdated>
+    <id>{confirmed_id}</id>
+    <email>{email}</email>
+    <firstName>After</firstName>
+    <lastName>Update</lastName>
+    <phone>+32470111222</phone>
+    <street>Nieuwe straat</street>
+    <houseNumber>42</houseNumber>
+    <postalCode>1000</postalCode>
+    <city>Brussel</city>
+    <country>BE</country>
+    <role>COMPANY_CONTACT</role>
+    <companyId>{new_company_id}</companyId>
+    <isActive>true</isActive>
+    <updatedAt>2026-04-21T10:00:00Z</updatedAt>
+</UserUpdated>"""
+
+        await _publish(inbound_exchanges["user.topic"], "facturatie.user.updated", update_xml)
+
+        result = await _consume_one(q_updated)
+
+        assert result is not None, "No UserUpdated message received within timeout"
+        assert result.tag == "UserUpdated"
+        assert result.findtext("id") == confirmed_id
+        assert result.findtext("email") == email
+        assert result.findtext("firstName") == "After"
+        assert result.findtext("role") == "COMPANY_CONTACT"
+        assert result.findtext("companyId") == new_company_id
+        assert result.findtext("street") == "Nieuwe straat"
+        assert result.findtext("houseNumber") == "42"
+        assert result.findtext("postalCode") == "1000"
+        assert result.findtext("city") == "Brussel"
+        assert result.findtext("country") == "BE"
+        assert result.findtext("phone") == "+32470111222"
+        assert result.findtext("updatedAt") is not None
+
+
+# ---------------------------------------------------------------------------
+# Contract 26 → Contract 22 — Facturatie User Deactivated → User Deactivated
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.salesforce
+class TestContract26FacturatieUserDeactivated:
+    """C26: facturatie.user.deactivated → C22 crm.user.deactivated."""
+
+    @pytest.mark.asyncio
+    async def test_existing_facturatie_user_deactivated_produces_user_deactivated(
+        self, channel, inbound_exchanges, outbound_exchange, sf_client,
+    ):
+        await _wait_for_receiver_queue("facturatie.user.created")
+        await _wait_for_receiver_queue("facturatie.user.deactivated")
+
+        email = _unique_email()
+        registration_id = f"REG-E2E-FACT-{random.randint(100000, 999999)}"
+        deactivated_at = "2026-04-21T16:00:00Z"
+
+        q_confirmed = await _create_temp_queue(channel, outbound_exchange, "crm.user.confirmed")
+        q_deactivated = await _create_temp_queue(channel, outbound_exchange, "crm.user.deactivated")
+        await _drain_queue(q_confirmed)
+        await _drain_queue(q_deactivated)
+
+        create_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<UserCreated>
+    <facturatieCustomerId>FB-E2E-{random.randint(1000, 9999)}</facturatieCustomerId>
+    <registrationId>{registration_id}</registrationId>
+    <firstName>Before</firstName>
+    <lastName>Deactivate</lastName>
+    <email>{email}</email>
+    <role>VISITOR</role>
+    <isActive>true</isActive>
+    <createdAt>2026-04-21T09:00:00Z</createdAt>
+</UserCreated>"""
+
+        await _publish(inbound_exchanges["user.topic"], "facturatie.user.created", create_xml)
+
+        confirmed = await _consume_one(q_confirmed)
+        assert confirmed is not None, "Prerequisite: C24 must produce UserConfirmed first"
+        confirmed_id = confirmed.findtext("id")
+        assert confirmed_id is not None, "UserConfirmed did not contain a CRM UUID"
+
+        await _drain_queue(q_deactivated)
+
+        deactivation_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<UserDeactivated>
+    <id>{confirmed_id}</id>
+    <email>{email}</email>
+    <deactivatedAt>{deactivated_at}</deactivatedAt>
+</UserDeactivated>"""
+
+        await _publish(inbound_exchanges["user.topic"], "facturatie.user.deactivated", deactivation_xml)
+
+        result = await _consume_one(q_deactivated)
+
+        assert result is not None, "No UserDeactivated message received within timeout"
+        assert result.tag == "UserDeactivated"
+        assert result.findtext("id") == confirmed_id
+        assert result.findtext("email") == email
+        assert result.findtext("deactivatedAt") == deactivated_at
+
+
+# ---------------------------------------------------------------------------
 # Contract 29 → Contract 22 — Mailing User Deactivated → User Deactivated
 # ---------------------------------------------------------------------------
 
@@ -701,7 +851,7 @@ class TestContract29MailingUserDeactivated:
         self, channel, inbound_exchanges, outbound_exchange, sf_client,
     ):
         await _wait_for_receiver_queue("mailing.user.created")
-        await _wait_for_receiver_queue("mailing.user.deactivated")
+        await _wait_for_receiver_queue("crm.mailing.user.deactivated")
         await _require_salesforce_contact_field(sf_client, "Mailing_ID__c")
 
         email = _unique_email()
@@ -1120,3 +1270,101 @@ class TestContract17UnpaidRequested:
         unpaid_person = next(person for person in persons if person.findtext("email") == unpaid_email)
         assert unpaid_person.findtext("firstName") == "Unpaid"
         assert unpaid_person.findtext("lastName") == "Person"
+
+
+# ---------------------------------------------------------------------------
+# Contract 10 — Person Lookup Request → Response with Salesforce resolution
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.salesforce
+class TestContract10PersonLookup:
+    """C10: kassa.person.lookup.requested returns CRM's canonical Contact id."""
+
+    @pytest.mark.asyncio
+    async def test_person_lookup_returns_found_for_registered_contact(
+        self, channel, inbound_exchanges, outbound_exchange, sf_client,
+    ):
+        """Happy path: registered Contact produces found=true with CRM UUID."""
+        email = _unique_email()
+        registration_id = f"REG-E2E-LOOKUP-{random.randint(100000, 999999)}"
+
+        q_confirmed = await _create_temp_queue(channel, outbound_exchange, "crm.user.confirmed")
+        q_lookup = await _create_temp_queue(channel, outbound_exchange, "crm.person.lookup.responded")
+        await _drain_queue(q_confirmed)
+        await _drain_queue(q_lookup)
+
+        registration_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<Registration>
+    <registrationId>{registration_id}</registrationId>
+    <firstName>Lookup</firstName>
+    <lastName>Found</lastName>
+    <email>{email}</email>
+    <sessionId>SESS-E2E-010A</sessionId>
+    <role>VISITOR</role>
+    <gdprConsent>true</gdprConsent>
+</Registration>"""
+
+        await _publish(inbound_exchanges["user.topic"], "frontend.registration.created", registration_xml)
+
+        confirmed = await _consume_one(q_confirmed)
+        assert confirmed is not None, "Prerequisite: C1 must produce UserConfirmed first"
+        expected_id = confirmed.findtext("id")
+        assert expected_id is not None, "UserConfirmed missing canonical id"
+
+        lookup_queue_name = "kassa.person.lookup.requested"
+        lookup_queue = await channel.declare_queue(lookup_queue_name, durable=True)
+        await lookup_queue.bind(inbound_exchanges["payment.topic"], routing_key=lookup_queue_name)
+        await _drain_queue(lookup_queue)
+
+        request_id = f"LOOKUP-E2E-{random.randint(100000, 999999)}"
+        lookup_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<PersonLookupRequest>
+    <requestId>{request_id}</requestId>
+    <email>{email}</email>
+</PersonLookupRequest>"""
+
+        await _publish(inbound_exchanges["payment.topic"], lookup_queue_name, lookup_xml)
+
+        response = await _consume_one(q_lookup)
+        assert response is not None, "Contract 10b response was not published"
+        assert response.findtext("requestId") == request_id
+        assert response.findtext("found") == "true"
+        assert response.findtext("linkedToCompany") == "false"
+        assert response.findtext("id") == expected_id
+
+        remaining = await _queue_message_count(channel, lookup_queue_name)
+        assert remaining == 0, f"PersonLookupRequest still in queue (count={remaining})"
+
+    @pytest.mark.asyncio
+    async def test_person_lookup_returns_found_false_for_unknown_email(
+        self, channel, inbound_exchanges, outbound_exchange,
+    ):
+        """Negative path: unknown email produces found=false, linkedToCompany=false."""
+        unknown_email = _unique_email()
+
+        q_lookup = await _create_temp_queue(channel, outbound_exchange, "crm.person.lookup.responded")
+        await _drain_queue(q_lookup)
+
+        lookup_queue_name = "kassa.person.lookup.requested"
+        lookup_queue = await channel.declare_queue(lookup_queue_name, durable=True)
+        await lookup_queue.bind(inbound_exchanges["payment.topic"], routing_key=lookup_queue_name)
+        await _drain_queue(lookup_queue)
+
+        request_id = f"LOOKUP-E2E-MISS-{random.randint(100000, 999999)}"
+        lookup_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<PersonLookupRequest>
+    <requestId>{request_id}</requestId>
+    <email>{unknown_email}</email>
+</PersonLookupRequest>"""
+
+        await _publish(inbound_exchanges["payment.topic"], lookup_queue_name, lookup_xml)
+
+        response = await _consume_one(q_lookup)
+        assert response is not None, "Contract 10b response was not published"
+        assert response.findtext("requestId") == request_id
+        assert response.findtext("found") == "false"
+        assert response.findtext("linkedToCompany") == "false"
+        assert response.find("id") is None
+        assert response.find("companyName") is None
+        assert response.find("companyId") is None

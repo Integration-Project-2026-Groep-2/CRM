@@ -42,6 +42,15 @@
     </xs:restriction>
   </xs:simpleType>
 
+  <!-- Niet-lege string — spiegelt Facturatie's NonEmptyStringType (2026-04-21).
+       Gebruikt voor verplichte naamvelden zodat lege elementen (bv. <lastName></lastName>)
+       door XSD-validatie worden geweigerd in plaats van pas door Salesforce. -->
+  <xs:simpleType name="NonEmptyStringType">
+    <xs:restriction base="xs:string">
+      <xs:minLength value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
   <xs:simpleType name="BelgianVatNumberType">
     <xs:restriction base="xs:string">
       <xs:pattern value="BE[0-9]{10}"/>
@@ -221,13 +230,13 @@
       <xs:sequence>
         <xs:element name="facturatieCustomerId" type="xs:string"/>
         <xs:element name="registrationId"       type="xs:string" minOccurs="0"/>
-        <xs:element name="firstName"            type="xs:string"/>
-        <xs:element name="lastName"             type="xs:string"/>
+        <xs:element name="firstName"            type="NonEmptyStringType"/>
+        <xs:element name="lastName"             type="NonEmptyStringType"/>
         <xs:element name="email"                type="EmailType"/>
         <xs:element name="phone"                type="xs:string" minOccurs="0" nillable="true"/>
         <xs:element name="role"                 type="FacturatieUserRoleType"/>
-        <xs:element name="isActive"             type="xs:boolean"/>
         <xs:element name="companyId"            type="UUIDType"  minOccurs="0" nillable="true"/>
+        <xs:element name="isActive"             type="xs:boolean"/>
         <xs:element name="createdAt"            type="ISO8601DateTimeType"/>
       </xs:sequence>
     </xs:complexType>
@@ -241,14 +250,14 @@
 
   <!-- ============================================================
        CONTRACT 28 — Mailing → CRM: user bijwerken
-       Queue: mailing.user.updated | durable: true
+       Queue: crm.mailing.user.updated (routing key: mailing.user.updated) | durable: true
        Volledig object vereist volgens producer-XSD.
   ============================================================ -->
   <xs:element name="MailingUserUpdated" type="MailingUserPayloadType"/>
 
   <!-- ============================================================
        CONTRACT 29 — Mailing → CRM: user deactiveren
-       Queue: mailing.user.deactivated | durable: true
+       Queue: crm.mailing.user.deactivated (routing key: mailing.user.deactivated) | durable: true
   ============================================================ -->
   <xs:element name="MailingUserDeactivated">
     <xs:complexType>
@@ -499,8 +508,9 @@
   <!-- ============================================================
        CONTRACT 10a — Kassa → CRM: persoonscheck request
        Queue: kassa.person.lookup.requested | durable: true
+       Root: <PersonLookupRequest> (aligned met Kassa XSD 2026-04-22)
   ============================================================ -->
-  <xs:element name="PersonLookup">
+  <xs:element name="PersonLookupRequest">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="requestId" type="xs:string"/>
@@ -512,8 +522,13 @@
   <!-- ============================================================
        CONTRACT 10b — CRM → Kassa: persoonscheck response
        Queue: crm.person.lookup.responded | durable: false
+       Root: <PersonLookupResponse> (aligned met Kassa XSD 2026-04-22)
+
+       Application-level regels (afgedwongen in sender.py):
+       - linkedToCompany moet false zijn als found=false
+       - id/companyName/companyId alleen aanwezig als found=true
   ============================================================ -->
-  <xs:element name="PersonResponse">
+  <xs:element name="PersonLookupResponse">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="requestId"       type="xs:string"/>
@@ -701,17 +716,21 @@
 
   <!-- ============================================================
        CONTRACT 18 — CRM → consumers: user updated
-       CONTRACT 25 — Facturatie → CRM: user updated
+       CONTRACT 25 — Facturatie → CRM: user bijwerken
        Queue: crm.user.updated / facturatie.user.updated | durable: true
-       Noot: gedeelde root met order-onafhankelijke veldvalidatie.
+       Noot: gedeelde root. Facturatie stuurt geen gdprConsent of
+       badgeCode (daarom op XSD-niveau optional); CRM outbound (C18)
+       vult die velden wel in op basis van Salesforce-data.
+       firstName en lastName zijn NonEmptyStringType (sinds 2026-04-21)
+       — lege elementen worden door XSD-validatie geweigerd.
   ============================================================ -->
   <xs:element name="UserUpdated">
     <xs:complexType>
       <xs:all>
         <xs:element name="id"          type="UUIDType"/>
         <xs:element name="email"       type="EmailType"/>
-        <xs:element name="firstName"   type="xs:string"/>
-        <xs:element name="lastName"    type="xs:string"/>
+        <xs:element name="firstName"   type="NonEmptyStringType"/>
+        <xs:element name="lastName"    type="NonEmptyStringType"/>
         <xs:element name="phone"       type="xs:string"       minOccurs="0" nillable="true"/>
         <xs:element name="street"      type="xs:string"       minOccurs="0" nillable="true"/>
         <xs:element name="houseNumber" type="xs:string"       minOccurs="0" nillable="true"/>
@@ -722,7 +741,7 @@
         <xs:element name="companyId"   type="UUIDType"        minOccurs="0" nillable="true"/>
         <xs:element name="badgeCode"   type="xs:string"       minOccurs="0" nillable="true"/>
         <xs:element name="isActive"    type="xs:boolean"/>
-        <xs:element name="gdprConsent" type="xs:boolean"/>
+        <xs:element name="gdprConsent" type="xs:boolean"      minOccurs="0"/>
         <xs:element name="updatedAt"   type="ISO8601DateTimeType"/>
       </xs:all>
     </xs:complexType>
@@ -796,8 +815,9 @@
 
   <!-- ============================================================
        CONTRACT 22 — CRM → consumers: user deactivated (GDPR)
-       CONTRACT 26 — Facturatie → CRM: user deactivated
+       CONTRACT 26 — Facturatie → CRM: user deactiveren
        Queue: crm.user.deactivated / facturatie.user.deactivated | durable: true
+       Noot: gedeelde root met identieke velden.
   ============================================================ -->
   <xs:element name="UserDeactivated">
     <xs:complexType>
