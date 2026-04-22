@@ -325,6 +325,7 @@ async def upsert_contact_by_email(
 
 _active_field_cache: str | None = None
 _mailing_id_field_supported_cache: bool | None = None
+_account_active_field_cache: str | None = None
 _planning_id_field_supported_cache: bool | None = None
 _session_registration_object_supported_cache: bool | None = None
 
@@ -409,6 +410,38 @@ async def has_contact_mailing_id_field(sf: Salesforce) -> bool:
     _mailing_id_field_supported_cache = "Mailing_ID__c" in available_fields
     return _mailing_id_field_supported_cache
 
+
+async def _resolve_account_active_field_optional(sf: Salesforce) -> str | None:
+    """Resolve the optional Account active field without requiring migration."""
+    global _account_active_field_cache  # noqa: PLW0603
+    if _account_active_field_cache is not None:
+        return _account_active_field_cache
+
+    describe = await asyncio.to_thread(sf.Account.describe)
+    if asyncio.iscoroutine(describe):
+        describe = await describe
+    if not isinstance(describe, dict):
+        return None
+    available_fields = {field["name"] for field in describe.get("fields", [])}
+
+    for candidate in ("IsActive__c", "Active__c", "Is_Active__c"):
+        if candidate in available_fields:
+            _account_active_field_cache = candidate
+            return candidate
+
+    return None
+
+
+async def _resolve_account_active_field(sf: Salesforce) -> str:
+    """Resolve which custom field is used as account active flag in this org."""
+    active_field = await _resolve_account_active_field_optional(sf)
+    if active_field is not None:
+        return active_field
+
+    raise RuntimeError(
+        "No supported Account active field found. Expected one of: "
+        "IsActive__c, Active__c, Is_Active__c"
+    )
 
 async def has_contact_planning_id_field(sf: Salesforce) -> bool:
     """Return whether the Salesforce org exposes Contact.Planning_ID__c."""
@@ -753,6 +786,36 @@ async def count_active_session_registrations(sf: Salesforce, contact_id: str) ->
         logger.error(
             "Failed to count active Session_Registration__c rows for Contact %s: %s",
             contact_id,
+            str(e),
+        )
+        raise
+
+    return int(result["totalSize"])
+
+
+async def count_active_contacts_for_company(
+    sf: Salesforce, company_id: str
+) -> int:
+    """Return the number of active Contacts that share the given Company_ID__c.
+
+    Used as a sibling guard before deactivating an Account: if other active
+    Contacts still reference the same company, the Account must stay active.
+    """
+    active_field = await _resolve_contact_active_field_optional(sf)
+    escaped_company_id = _escape_soql(company_id)
+    query = (
+        "SELECT COUNT() FROM Contact "
+        f"WHERE Company_ID__c = '{escaped_company_id}'"
+    )
+    if active_field is not None:
+        query += f" AND {active_field} = true"
+
+    try:
+        result = await asyncio.to_thread(sf.query, query)
+    except SalesforceError as e:
+        logger.error(
+            "Failed to count active Contacts for Company_ID__c %s: %s",
+            company_id,
             str(e),
         )
         raise
@@ -1561,6 +1624,60 @@ async def deactivate_contact_record(
         return updated_record
     except SalesforceError as e:
         logger.error("Failed to deactivate contact %s: %s", log_target, str(e))
+        raise
+
+
+
+
+async def get_account_by_crm_id(
+    sf: Salesforce, crm_id: str
+) -> dict[str, Any] | None:
+    """Look up an Account by CRM UUID."""
+    try:
+        escaped_crm_id = _escape_soql(crm_id)
+        query = f"SELECT Id FROM Account WHERE CRM_ID__c = '{escaped_crm_id}'"
+        result = await asyncio.to_thread(sf.query, query)
+
+        if result["totalSize"] == 0:
+            return None
+        if result["totalSize"] > 1:
+            logger.warning("Multiple Accounts found for CRM_ID__c %s", crm_id)
+            return None
+
+        account_id = result["records"][0]["Id"]
+        account_record = await asyncio.to_thread(sf.Account.get, account_id)
+        logger.info("Found Account by CRM_ID__c: %s", crm_id)
+        return account_record
+    except SalesforceError as e:
+        logger.error("Failed to get account by CRM_ID__c %s: %s", crm_id, str(e))
+        raise
+
+
+async def deactivate_account_by_crm_id(
+    sf: Salesforce, crm_id: str
+) -> dict[str, Any] | None:
+    """Soft-delete an Account by CRM UUID (Contract 23, US-54)."""
+    account = await get_account_by_crm_id(sf, crm_id)
+    if account is None:
+        logger.warning("Cannot deactivate — Account not found for CRM_ID__c: %s", crm_id)
+        return None
+
+    account_id = account["Id"]
+
+    try:
+        active_field = await _resolve_account_active_field(sf)
+
+        await asyncio.to_thread(
+            sf.Account.update, account_id, {active_field: False}
+        )
+        logger.info("Deactivated Account %s (CRM_ID__c: %s)", account_id, crm_id)
+
+        updated_record = await asyncio.to_thread(sf.Account.get, account_id)
+        if active_field != "IsActive__c" and "IsActive__c" not in updated_record:
+            updated_record["IsActive__c"] = updated_record.get(active_field, False)
+        return updated_record
+    except SalesforceError as e:
+        logger.error("Failed to deactivate account %s: %s", crm_id, str(e))
         raise
 
 

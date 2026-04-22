@@ -480,7 +480,7 @@ async def publish_company_updated(company_data: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 async def publish_company_deactivated(company_data: dict[str, Any]) -> None:
-    """Contract 23 — Publish company deactivation (soft delete).
+    """Contract 23 — Publish company deactivation after Account soft-delete.
 
     Consumers must remove or anonymise their cached data accordingly.
 
