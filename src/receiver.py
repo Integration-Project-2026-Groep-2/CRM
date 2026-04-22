@@ -681,6 +681,44 @@ def _build_user_data(contact: dict) -> dict:
         data["companyId"] = contact["Company_ID__c"]
     return data
 
+def _build_updated_user_data(contact: dict) -> dict:
+    """Build outbound Contract 18 crm.user.updated payload from a Salesforce Contact.
+
+    Consumers replace their local copy entirely — include all available fields.
+    CRM reads gdprConsent and badgeCode from Salesforce (per C18 spec: outbound
+    always includes them even when inbound C25/C28/C31 did not carry them).
+    """
+    role = _normalize_optional_text(contact.get("Role__c")) or "VISITOR"
+    gdpr_consent = contact.get("GDPR_Consent__c")
+    if gdpr_consent is None:
+        gdpr_consent = True
+    data: dict[str, Any] = {
+        "id": contact["CRM_ID__c"],
+        "email": contact["Email"],
+        "firstName": contact.get("FirstName", ""),
+        "lastName": contact.get("LastName", ""),
+        "role": role,
+        "isActive": _get_contact_is_active(contact),
+        "gdprConsent": gdpr_consent,
+        "updatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if contact.get("Phone"):
+        data["phone"] = contact["Phone"]
+    if contact.get("Company_ID__c"):
+        data["companyId"] = contact["Company_ID__c"]
+    if contact.get("Badge_Code__c"):
+        data["badgeCode"] = contact["Badge_Code__c"]
+    address_mapping = {
+        "MailingStreet": "street",
+        "MailingPostalCode": "postalCode",
+        "MailingCity": "city",
+        "MailingCountry": "country",
+    }
+    for sf_field, xml_field in address_mapping.items():
+        value = contact.get(sf_field)
+        if value:
+            data[xml_field] = value
+    return data
 
 def _build_user_deactivation_data(contact: dict, deactivated_at: str) -> dict[str, str]:
     """Build the outbound Contract 22 payload from a Salesforce Contact."""
@@ -2566,213 +2604,6 @@ async def handle_facturatie_company_deactivated(
     except Exception as exc:  # noqa: BLE001
         await _handle_processing_error("FacturatieCompanyDeactivated", message, exc)
 
-
-async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
-    """Contract 1 — Frontend -> CRM: new registration.
-
-    Queue: frontend.registration.created | durable: true | US-02, US-04, US-05, US-19
-
-    Behaviour:
-    - Validate XML against schema.
-    - Check if email exists in Salesforce (R1 scope: log only. R2 adds C15 publish).
-    - If new, create Contact in Salesforce mapping fields.
-    - Publish crm.user.confirmed via sender.
-    - Invalid XML: rejected without requeue.
-    - Other errors: requeued.
-    """
-    try:
-        xml = xml_validator.validate(message.body)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Registration — invalid XML, rejecting message: %s", exc)
-        await message.reject(requeue=False)
-        return
-
-    try:
-        email = xml.findtext("email")
-        registration_id = xml.findtext("registrationId") or ""
-        session_id = xml.findtext("sessionId") or ""
-
-        gdpr_text = xml.findtext("gdprConsent")
-        if gdpr_text not in ("true", "1"):
-            logger.warning("Registration refused — gdprConsent=%s for email %s", gdpr_text, email)
-            await message.reject(requeue=False)
-            return
-
-        if not await has_session_registration_object(sf):
-            logger.error(
-                "Registration rejected — Salesforce object Session_Registration__c is missing",
-            )
-            await message.reject(requeue=False)
-            return
-
-        # TODO: Switch to registrationId-based dedup as primary key (contract spec).
-        #       Current R1 approach uses email as lookup; registrationId is secondary.
-
-        role = xml.findtext("role")
-        company = xml.findtext("company")
-        if role == "COMPANY_CONTACT" and not company:
-            logger.warning("COMPANY_CONTACT registration without company field for %s", email)
-
-        existing_contact = await get_contact_by_email(sf, email)
-
-        if existing_contact:
-            existing_session_registration = await get_session_registration_by_registration_id(
-                sf,
-                registration_id,
-            )
-
-            if (
-                existing_session_registration is not None
-                and existing_session_registration.get("Is_Active__c") is not False
-            ):
-                # Retry na publish failure -> opnieuw publishen
-                logger.info("Retry for registrationId %s — republishing", registration_id)
-
-                await sender.publish_user_confirmed(_build_user_data(existing_contact))
-
-                # C6: Publish mail request
-                full_name = _build_mail_display_name(
-                    existing_contact.get("FirstName"),
-                    existing_contact.get("LastName"),
-                    email,
-                )
-
-                recipient = {"email": email, "name": full_name}
-                dynamic_data = {"guest_name": full_name}
-                await sender.publish_mail_requested("registration_confirmation", recipient, dynamic_data)
-
-                await message.ack()
-                return
-            if existing_session_registration is not None:
-                logger.info(
-                    "Reactivating inactive registrationId %s via normal registration flow",
-                    registration_id,
-                )
-
-            if not _registration_fields_are_compatible(existing_contact, xml):
-                logger.warning(
-                    "Conflict: email %s exists with incompatible person fields for registrationId %s",
-                    email,
-                    registration_id,
-                )
-                await message.ack()
-                return
-
-            contact = await ensure_contact_identifiers(
-                sf,
-                existing_contact,
-                registration_id=registration_id,
-            )
-            await upsert_session_registration(
-                sf,
-                registration_id=registration_id,
-                session_id=session_id,
-                contact_id=contact["Id"],
-            )
-
-            logger.info(
-                "Reusing existing Salesforce Contact for email=%s registrationId=%s",
-                email,
-                registration_id,
-            )
-            await sender.publish_user_confirmed(_build_user_data(contact))
-
-            full_name = _build_mail_display_name(
-                contact.get("FirstName"),
-                contact.get("LastName"),
-                email,
-            )
-            recipient = {"email": email, "name": full_name}
-            dynamic_data = {"guest_name": full_name}
-            await sender.publish_mail_requested("registration_confirmation", recipient, dynamic_data)
-            await message.ack()
-            return
-
-        # Prepare payload for Salesforce
-        contact_data = {
-            "FirstName": xml.findtext("firstName"),
-            "LastName": xml.findtext("lastName"),
-            "Email": email,
-            "Role__c": xml.findtext("role"),
-            "GDPR_Consent__c": xml.findtext("gdprConsent") in ("true", "1"),
-            "Registration_ID__c": registration_id,
-        }
-
-        phone = xml.findtext("phone")
-        if phone:
-            contact_data["Phone"] = phone
-
-        # Company mapping deferred to Contract 3 (aparte taak)
-
-        logger.info("Creating new Salesforce Contact for %s", email)
-        contact = await create_contact(sf, contact_data)
-        await upsert_session_registration(
-            sf,
-            registration_id=registration_id,
-            session_id=session_id,
-            contact_id=contact["Id"],
-        )
-
-        # Publish crm.user.confirmed
-        await sender.publish_user_confirmed(_build_user_data(contact))
-        logger.info("Published crm.user.confirmed for %s", email)
-
-        # Contract 6 (R1 scope) — publish registration_confirmation
-        full_name = _build_mail_display_name(
-            contact_data.get("FirstName"),
-            contact_data.get("LastName"),
-            email,
-        )
-
-        recipient = {"email": email, "name": full_name}
-        dynamic_data = {"guest_name": full_name}
-        await sender.publish_mail_requested("registration_confirmation", recipient, dynamic_data)
-        logger.info("Published crm.mail.requested for %s", email)
-
-        await message.ack()
-
-    except Exception as exc:  # noqa: BLE001
-        await _handle_processing_error("Registration", message, exc)
-
-
-def _build_updated_user_data(contact: dict) -> dict:
-    """Build user_data payload dict for crm.user.updated from a Salesforce record.
-
-    Same structure as _build_user_data but with updatedAt instead of confirmedAt.
-    Contract 18 requires the full user profile - consumers replace their local
-    copy entirely, so all available fields must be included.
-    """
-    data = {
-        "id": contact["CRM_ID__c"],
-        "email": contact["Email"],
-        "firstName": contact.get("FirstName", ""),
-        "lastName": contact.get("LastName", ""),
-        "role": contact.get("Role__c", "VISITOR"),
-        "isActive": _get_contact_is_active(contact),
-        "gdprConsent": contact.get("GDPR_Consent__c", True),
-        "updatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
-    if contact.get("Phone"):
-        data["phone"] = contact["Phone"]
-    if contact.get("Company_ID__c"):
-        data["companyId"] = contact["Company_ID__c"]
-    if contact.get("Badge_Code__c"):
-        data["badgeCode"] = contact["Badge_Code__c"]
-
-    # Address fields - map all available SF fields for full profile
-    address_mapping = {
-        "MailingStreet": "street",
-        "House_Number__c": "houseNumber",
-        "MailingPostalCode": "postalCode",
-        "MailingCity": "city",
-        "MailingCountry": "country",
-    }
-    for sf_field, xml_field in address_mapping.items():
-        value = contact.get(sf_field)
-        if value:
-            data[xml_field] = value
-
-    return data
 
 
 async def handle_registration_updated(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
