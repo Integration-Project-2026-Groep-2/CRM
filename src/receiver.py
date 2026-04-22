@@ -15,19 +15,24 @@ from lxml import etree
 from src import sender, xml_validator
 from src.config import Config
 from src.salesforce_client import (
+    apply_account_is_active,
     apply_is_active,
     backfill_mailing_contact_fields,
     backfill_planning_contact_fields,
     coerce_is_active,
     count_active_contacts_for_company,
     count_active_session_registrations,
+    create_account,
     create_contact,
     deactivate_account_by_crm_id,
+    deactivate_account_record,
     deactivate_contact_record,
     deactivate_session_registration,
     ensure_contact_identifiers,
     ensure_session_registration_active,
     get_account_by_crm_id,
+    get_account_match_by_crm_id,
+    get_account_match_by_email,
     get_active_session_participants,
     get_contact_by_email,
     get_contact_for_person_lookup,
@@ -42,10 +47,12 @@ from src.salesforce_client import (
     has_contact_planning_id_field,
     has_session_registration_object,
     is_rate_limit_error,
+    update_facturatie_account,
     update_facturatie_contact,
     update_mailing_contact,
     update_payment_status,
     update_planning_contact,
+    upsert_account_by_vat,
     upsert_contact_by_email,
     upsert_session_registration,
 )
@@ -74,6 +81,9 @@ _INBOUND_EXCHANGE: dict[str, str] = {
     "planning.user.updated": "user.topic",
     "planning.user.deactivated": "user.topic",
     "facturatie.company.requested": "invoice.topic",
+    "facturatie.company.created": "company.topic",
+    "facturatie.company.updated": "company.topic",
+    "facturatie.company.deactivated": "company.topic",
     "kassa.person.lookup.requested": "payment.topic",
     "kassa.payment.confirmed": "payment.topic",
     "kassa.unpaid.requested": "payment.topic",
@@ -301,6 +311,21 @@ async def run_receiver(
     # Queue: facturatie.user.deactivated | Exchange: user.topic | durable: true
     queue_facturatie_user_deactivated = await _declare_and_bind(channel, "facturatie.user.deactivated", durable=True)
     await queue_facturatie_user_deactivated.consume(partial(handle_facturatie_user_deactivated, sf=sf_client))
+
+    # Contract 33 — Facturatie → CRM: new company created in FOSSBilling
+    # Queue: facturatie.company.created | Exchange: company.topic | durable: true
+    queue_facturatie_company_created = await _declare_and_bind(channel, "facturatie.company.created", durable=True)
+    await queue_facturatie_company_created.consume(partial(handle_facturatie_company_created, sf=sf_client))
+
+    # Contract 34 — Facturatie → CRM: update existing CRM-linked company
+    # Queue: facturatie.company.updated | Exchange: company.topic | durable: true
+    queue_facturatie_company_updated = await _declare_and_bind(channel, "facturatie.company.updated", durable=True)
+    await queue_facturatie_company_updated.consume(partial(handle_facturatie_company_updated, sf=sf_client))
+
+    # Contract 35 — Facturatie → CRM: deactivate existing CRM-linked company
+    # Queue: facturatie.company.deactivated | Exchange: company.topic | durable: true
+    queue_facturatie_company_deactivated = await _declare_and_bind(channel, "facturatie.company.deactivated", durable=True)
+    await queue_facturatie_company_deactivated.consume(partial(handle_facturatie_company_deactivated, sf=sf_client))
 
     # Contract 27 — Mailing → CRM: new Mailing user sync
     # Queue: mailing.user.created | Exchange: user.topic | durable: true
@@ -673,6 +698,79 @@ def _build_company_deactivation_data(account: dict, deactivated_at: str) -> dict
         "vatNumber": account["VAT_Number__c"],
         "deactivatedAt": deactivated_at,
     }
+
+
+def _get_account_is_active(account: dict) -> bool:
+    """Normalized active flag across the supported Account active field names."""
+    for active_field in ("IsActive__c", "Active__c", "Is_Active__c"):
+        if active_field in account:
+            return coerce_is_active(account[active_field])
+    return True
+
+
+def _get_account_email(account: dict) -> str | None:
+    """Return the Account email via either custom Email__c or standard Email."""
+    for candidate in ("Email__c", "Email"):
+        value = account.get(candidate)
+        if value:
+            return value
+    return None
+
+
+def _build_company_data(account: dict) -> dict:
+    """Build outbound Contract 14 crm.company.confirmed payload from a Salesforce Account.
+
+    Required XSD fields: id, vatNumber, name, email, isActive, confirmedAt.
+    Phone/adres fields are not part of C14 (only C19/C5b carry them).
+    """
+    email = _get_account_email(account)
+    if email is None:
+        raise ValueError(
+            f"Account {account.get('Id')} has no email; cannot build "
+            "crm.company.confirmed payload (Contract 14 requires email).",
+        )
+
+    return {
+        "id": account["CRM_ID__c"],
+        "vatNumber": account["VAT_Number__c"],
+        "name": account["Name"],
+        "email": email,
+        "isActive": _get_account_is_active(account),
+        "confirmedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+def _build_updated_company_data(account: dict) -> dict:
+    """Build outbound Contract 19 crm.company.updated payload from a Salesforce Account.
+
+    Consumers replace their local copy entirely — include all available fields.
+    """
+    data: dict[str, Any] = {
+        "id": account["CRM_ID__c"],
+        "vatNumber": account["VAT_Number__c"],
+        "name": account["Name"],
+        "isActive": _get_account_is_active(account),
+        "updatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+    email = _get_account_email(account)
+    if email:
+        data["email"] = email
+    if account.get("Phone"):
+        data["phone"] = account["Phone"]
+
+    address_mapping = {
+        "BillingStreet": "street",
+        "BillingPostalCode": "postalCode",
+        "BillingCity": "city",
+        "BillingCountry": "country",
+    }
+    for sf_field, xml_field in address_mapping.items():
+        value = account.get(sf_field)
+        if value:
+            data[xml_field] = value
+
+    return data
 
 
 def _build_full_name(first_name: str | None, last_name: str | None) -> str:
@@ -1988,6 +2086,315 @@ async def handle_facturatie_user_deactivated(
         await message.ack()
     except Exception as exc:  # noqa: BLE001
         await _handle_processing_error("FacturatieUserDeactivated", message, exc)
+
+
+# ---------------------------------------------------------------------------
+# Contracts 33/34/35 — Facturatie → CRM company sync (v1.9.0)
+# Queues: facturatie.company.{created,updated,deactivated} | Exchange: company.topic
+# ---------------------------------------------------------------------------
+
+
+def _build_facturatie_account_data(xml: etree._Element) -> dict[str, Any]:
+    """Map Facturatie inbound company XML to an Account-create payload.
+
+    houseNumber is intentionally NOT persisted — Account has no standard
+    House_Number__c field. See update_facturatie_account for the same policy.
+    """
+    data: dict[str, Any] = {
+        "Name": xml.findtext("name") or "",
+    }
+    vat_number = _normalize_optional_text(xml.findtext("vatNumber"))
+    if vat_number:
+        data["VAT_Number__c"] = vat_number
+    email = _normalize_optional_text(xml.findtext("email"))
+    if email:
+        # The account email custom field (Email__c) is the preferred target,
+        # but legacy orgs may only have standard Email. Storing under Email__c
+        # is safe because sf.Account.create will raise INVALID_FIELD if the
+        # field does not exist, and the receiver handler catches that.
+        data["Email__c"] = email
+    phone = _normalize_optional_text(xml.findtext("phone"))
+    if phone:
+        data["Phone"] = phone
+
+    address_mapping = {
+        "street": "BillingStreet",
+        "postalCode": "BillingPostalCode",
+        "city": "BillingCity",
+        "country": "BillingCountry",
+    }
+    for xml_field, sf_field in address_mapping.items():
+        value = _normalize_optional_text(xml.findtext(xml_field))
+        if value:
+            data[sf_field] = value
+
+    return data
+
+
+async def handle_facturatie_company_created(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 33 — Facturatie → CRM: new company created in FOSSBilling.
+
+    Queue: facturatie.company.created | durable: true | Exchange: company.topic
+
+    Behaviour:
+    - Validate XML against schema.
+    - If vatNumber is present, upsert on VAT_Number__c (preserves CRM_ID__c).
+    - Otherwise match on email: unique → reuse, none → create, ambiguous → ack.
+    - Publish C14 crm.company.confirmed after persistence.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("FacturatieCompanyCreated — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        vat_number = _normalize_optional_text(xml.findtext("vatNumber"))
+        email = xml.findtext("email") or ""
+        name = xml.findtext("name") or ""
+
+        account_data = _build_facturatie_account_data(xml)
+
+        if vat_number:
+            account = await upsert_account_by_vat(sf, vat_number, account_data)
+            await sender.publish_company_confirmed(_build_company_data(account))
+            logger.info(
+                "Published crm.company.confirmed for Facturatie company %s (vatNumber=%s)",
+                name,
+                vat_number,
+            )
+            await message.ack()
+            return
+
+        email_match_status, existing_account = await get_account_match_by_email(sf, email)
+        if email_match_status == "ambiguous":
+            logger.warning(
+                "FacturatieCompanyCreated ignored — ambiguous email %s in Salesforce",
+                email,
+            )
+            await message.ack()
+            return
+
+        if email_match_status == "unique" and existing_account is not None:
+            # Account hijack guard: email is a weak identity signal (generic
+            # addresses like info@bigcorp.com can collide with unrelated
+            # companies). Only reuse when the existing Account has no VAT —
+            # i.e. it was not created via the authoritative VAT-upsert path.
+            # Otherwise ack with a warning so the ambiguity is visible but we
+            # never silently bind Facturatie's company to someone else's
+            # CRM_ID__c (which a subsequent C34 would then overwrite).
+            if _normalize_optional_text(existing_account.get("VAT_Number__c")):
+                logger.warning(
+                    "FacturatieCompanyCreated ignored — email %s matches existing "
+                    "Account with VAT_Number__c %s; refusing to bind new Facturatie "
+                    "company (no vatNumber in payload) to established CRM_ID__c",
+                    email,
+                    existing_account.get("VAT_Number__c"),
+                )
+                await message.ack()
+                return
+            await sender.publish_company_confirmed(_build_company_data(existing_account))
+            logger.info(
+                "Published crm.company.confirmed for existing Facturatie company %s (email=%s)",
+                name,
+                email,
+            )
+            await message.ack()
+            return
+
+        account = await create_account(sf, account_data)
+        await sender.publish_company_confirmed(_build_company_data(account))
+        logger.info(
+            "Published crm.company.confirmed for new Facturatie company %s (email=%s)",
+            name,
+            email,
+        )
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        await _handle_processing_error("FacturatieCompanyCreated", message, exc)
+
+
+async def handle_facturatie_company_updated(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 34 — Facturatie → CRM: update existing CRM-linked company.
+
+    Queue: facturatie.company.updated | durable: true | Exchange: company.topic
+
+    The `<id>` field carries the CRM master UUID (received by Facturatie in
+    crm.company.confirmed). CRM resolves the Account by CRM_ID__c.
+
+    Behaviour:
+    - Validate XML against schema.
+    - Resolve strictly by CRM_ID__c.
+    - Requeue unknown identities (create may still be in flight).
+    - Ack ambiguous identities without retry.
+    - If isActive=false, soft-delete and publish crm.company.deactivated.
+    - Otherwise update Facturatie-owned fields authoritatively and publish
+      crm.company.updated.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("FacturatieCompanyUpdated — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        crm_id = xml.findtext("id") or ""
+        is_active = xml.findtext("isActive") in ("true", "1")
+
+        crm_match_status, existing_account = await get_account_match_by_crm_id(sf, crm_id)
+        if crm_match_status == "none":
+            await _handle_out_of_order_deferral(
+                "FacturatieCompanyUpdated",
+                message,
+                identifier_label="CRM_ID__c",
+                identifier_value=crm_id,
+            )
+            return
+
+        if crm_match_status == "ambiguous":
+            logger.warning(
+                "FacturatieCompanyUpdated ignored — ambiguous CRM_ID__c %s in Salesforce",
+                crm_id,
+            )
+            await message.ack()
+            return
+
+        account = existing_account
+        if not is_active:
+            account = await deactivate_account_record(
+                sf, account, log_value=f"CRM_ID__c {crm_id}",
+            )
+            deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            await sender.publish_company_deactivated(
+                _build_company_deactivation_data(account, deactivated_at),
+            )
+            logger.info(
+                "Published crm.company.deactivated for Facturatie company CRM_ID__c %s (isActive=false on update)",
+                crm_id,
+            )
+            await message.ack()
+            return
+
+        account = await update_facturatie_account(
+            sf,
+            account,
+            vat_number=_normalize_optional_text(xml.findtext("vatNumber")),
+            name=xml.findtext("name") or "",
+            email=xml.findtext("email") or "",
+            phone=_normalize_optional_text(xml.findtext("phone")),
+            street=_normalize_optional_text(xml.findtext("street")),
+            house_number=_normalize_optional_text(xml.findtext("houseNumber")),
+            postal_code=_normalize_optional_text(xml.findtext("postalCode")),
+            city=_normalize_optional_text(xml.findtext("city")),
+            country=_normalize_optional_text(xml.findtext("country")),
+        )
+        if not _get_account_is_active(account):
+            reactivation_update = await apply_account_is_active(sf, {}, True)
+            if reactivation_update:
+                account_id = account["Id"]
+                await asyncio.to_thread(sf.Account.update, account_id, reactivation_update)
+                account = await asyncio.to_thread(sf.Account.get, account_id)
+                logger.info(
+                    "Reactivated Account %s for Facturatie company CRM_ID__c %s (isActive=true on update)",
+                    account_id,
+                    crm_id,
+                )
+        await sender.publish_company_updated(_build_updated_company_data(account))
+        logger.info(
+            "Published crm.company.updated for Facturatie company CRM_ID__c %s",
+            crm_id,
+        )
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        await _handle_processing_error("FacturatieCompanyUpdated", message, exc)
+
+
+async def handle_facturatie_company_deactivated(
+    message: aio_pika.IncomingMessage, sf: "Salesforce"
+) -> None:
+    """Contract 35 — Facturatie → CRM: deactivate existing CRM-linked company.
+
+    Queue: facturatie.company.deactivated | durable: true | Exchange: company.topic
+
+    The `<id>` field carries the CRM master UUID. CRM resolves the Account by
+    CRM_ID__c and performs a soft delete only (audit trail).
+
+    Behaviour:
+    - Validate XML against schema.
+    - Resolve strictly by CRM_ID__c.
+    - Requeue unknown identities (create may still be in flight).
+    - Ack ambiguous identities without retry.
+    - Trust CRM_ID__c over a stale payload email, but log the mismatch.
+    - Soft delete and publish crm.company.deactivated.
+    - Invalid XML: rejected without requeue.
+    - Other errors: requeued.
+    """
+    try:
+        xml = xml_validator.validate(message.body)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("FacturatieCompanyDeactivated — invalid XML, rejecting message: %s", exc)
+        await message.reject(requeue=False)
+        return
+
+    try:
+        email = xml.findtext("email") or ""
+        crm_id = xml.findtext("id") or ""
+        deactivated_at = xml.findtext("deactivatedAt") or ""
+
+        crm_match_status, existing_account = await get_account_match_by_crm_id(sf, crm_id)
+        if crm_match_status == "none":
+            await _handle_out_of_order_deferral(
+                "FacturatieCompanyDeactivated",
+                message,
+                identifier_label="CRM_ID__c",
+                identifier_value=crm_id,
+            )
+            return
+
+        if crm_match_status == "ambiguous":
+            logger.warning(
+                "FacturatieCompanyDeactivated ignored — ambiguous CRM_ID__c %s in Salesforce",
+                crm_id,
+            )
+            await message.ack()
+            return
+
+        account = existing_account
+        existing_email = _normalize_email_for_compare(_get_account_email(account))
+        incoming_email = _normalize_email_for_compare(email)
+        if existing_email is not None and incoming_email is not None and existing_email != incoming_email:
+            logger.warning(
+                "FacturatieCompanyDeactivated email mismatch — CRM_ID__c %s resolved to %s but payload contained %s; proceeding with soft delete",
+                crm_id,
+                _get_account_email(account),
+                email,
+            )
+
+        account = await deactivate_account_record(
+            sf,
+            account,
+            log_value=f"CRM_ID__c {crm_id}",
+        )
+        await sender.publish_company_deactivated(
+            _build_company_deactivation_data(account, deactivated_at),
+        )
+        logger.info(
+            "Published crm.company.deactivated for Facturatie company CRM_ID__c %s",
+            crm_id,
+        )
+        await message.ack()
+    except Exception as exc:  # noqa: BLE001
+        await _handle_processing_error("FacturatieCompanyDeactivated", message, exc)
 
 
 async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:

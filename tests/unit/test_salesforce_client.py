@@ -8,6 +8,7 @@ from simple_salesforce.exceptions import SalesforceAuthenticationFailed
 
 import src.salesforce_client as salesforce_client_module
 from src.salesforce_client import (
+    apply_account_is_active,
     backfill_mailing_contact_fields,
     backfill_planning_contact_fields,
     count_active_contacts_for_company,
@@ -15,6 +16,7 @@ from src.salesforce_client import (
     create_account,
     create_contact,
     deactivate_account_by_crm_id,
+    deactivate_account_record,
     deactivate_contact,
     deactivate_session_registration,
     ensure_contact_identifiers,
@@ -22,6 +24,8 @@ from src.salesforce_client import (
     find_unique_contact_by_email,
     get_account_by_crm_id,
     get_account_by_vat,
+    get_account_match_by_crm_id,
+    get_account_match_by_email,
     get_active_session_participants,
     get_contact_by_crm_id,
     get_contact_by_email,
@@ -34,6 +38,7 @@ from src.salesforce_client import (
     has_contact_mailing_id_field,
     has_contact_planning_id_field,
     has_session_registration_object,
+    update_facturatie_account,
     update_mailing_contact,
     update_payment_status,
     update_planning_contact,
@@ -1428,6 +1433,288 @@ async def test_deactivate_account_by_crm_id_returns_none_when_missing(sf):
 
 
 # ---------------------------------------------------------------------------
+# Contracts 33/34/35 — Facturatie company sync (v1.9.0)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_account_match_by_crm_id_returns_none(sf):
+    sf.query.return_value = {"totalSize": 0, "records": []}
+
+    match_status, account = await get_account_match_by_crm_id(sf, "missing-crm-id")
+
+    assert match_status == "none"
+    assert account is None
+    sf.Account.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_account_match_by_crm_id_returns_unique(sf):
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "001000000000100"}]}
+    sf.Account.get.return_value = {
+        "Id": "001000000000100",
+        "CRM_ID__c": "crm-company-xyz",
+        "Name": "Acme NV",
+        "VAT_Number__c": "BE0123456789",
+    }
+
+    match_status, account = await get_account_match_by_crm_id(sf, "crm-company-xyz")
+
+    assert match_status == "unique"
+    assert account["Id"] == "001000000000100"
+    sf.Account.get.assert_called_once_with("001000000000100")
+
+
+@pytest.mark.asyncio
+async def test_get_account_match_by_crm_id_returns_ambiguous(sf):
+    sf.query.return_value = {
+        "totalSize": 2,
+        "records": [{"Id": "001000000000100"}, {"Id": "001000000000101"}],
+    }
+
+    match_status, account = await get_account_match_by_crm_id(sf, "duplicate-crm-id")
+
+    assert match_status == "ambiguous"
+    assert account is None
+    sf.Account.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_account_match_by_email_prefers_email_custom_field(sf):
+    sf.Account.describe.return_value = {
+        "fields": [{"name": "Email__c"}, {"name": "Name"}]
+    }
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "001000000000102"}]}
+    sf.Account.get.return_value = {"Id": "001000000000102", "Email__c": "hello@acme.example"}
+
+    match_status, account = await get_account_match_by_email(sf, "hello@acme.example")
+
+    assert match_status == "unique"
+    assert account["Id"] == "001000000000102"
+    # Verify SOQL used Email__c (not Email)
+    query_call = sf.query.call_args[0][0]
+    assert "Email__c" in query_call
+
+
+@pytest.mark.asyncio
+async def test_get_account_match_by_email_falls_back_to_email_standard(sf):
+    sf.Account.describe.return_value = {
+        "fields": [{"name": "Email"}, {"name": "Name"}]
+    }
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "001000000000103"}]}
+    sf.Account.get.return_value = {"Id": "001000000000103", "Email": "hello@acme.example"}
+
+    match_status, account = await get_account_match_by_email(sf, "hello@acme.example")
+
+    assert match_status == "unique"
+    query_call = sf.query.call_args[0][0]
+    assert "Email" in query_call
+
+
+@pytest.mark.asyncio
+async def test_get_account_match_by_email_returns_none_when_no_email_field(sf):
+    sf.Account.describe.return_value = {
+        "fields": [{"name": "Name"}, {"name": "VAT_Number__c"}]
+    }
+
+    match_status, account = await get_account_match_by_email(sf, "no-field@example.com")
+
+    assert match_status == "none"
+    assert account is None
+    sf.query.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_account_match_by_email_returns_ambiguous(sf):
+    sf.Account.describe.return_value = {"fields": [{"name": "Email__c"}]}
+    sf.query.return_value = {
+        "totalSize": 2,
+        "records": [{"Id": "001000000000104"}, {"Id": "001000000000105"}],
+    }
+
+    match_status, account = await get_account_match_by_email(sf, "duplicate@example.com")
+
+    assert match_status == "ambiguous"
+    assert account is None
+    sf.Account.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_facturatie_account_overwrites_changed_fields(sf):
+    sf.Account.describe.return_value = {"fields": [{"name": "Email__c"}, {"name": "Name"}]}
+    account = {
+        "Id": "001000000000200",
+        "Name": "Old Name",
+        "VAT_Number__c": "BE0123456789",
+        "Email__c": "old@acme.example",
+        "Phone": "+32 2 000 00 00",
+        "BillingStreet": "Oldstreet",
+        "BillingPostalCode": "1000",
+        "BillingCity": "Brussels",
+        "BillingCountry": "BE",
+    }
+    sf.Account.get.return_value = {**account, "Name": "New Name", "Email__c": "new@acme.example"}
+
+    result = await update_facturatie_account(
+        sf,
+        account,
+        vat_number="BE0123456789",
+        name="New Name",
+        email="new@acme.example",
+        phone="+32 2 000 00 00",
+        street="Oldstreet",
+        house_number=None,
+        postal_code="1000",
+        city="Brussels",
+        country="BE",
+    )
+
+    sf.Account.update.assert_called_once()
+    update_call = sf.Account.update.call_args
+    assert update_call[0][0] == "001000000000200"
+    updates = update_call[0][1]
+    assert updates["Name"] == "New Name"
+    assert updates["Email__c"] == "new@acme.example"
+    assert result["Name"] == "New Name"
+
+
+@pytest.mark.asyncio
+async def test_update_facturatie_account_no_changes_skips_update(sf):
+    sf.Account.describe.return_value = {"fields": [{"name": "Email__c"}, {"name": "Name"}]}
+    account = {
+        "Id": "001000000000201",
+        "Name": "Acme NV",
+        "VAT_Number__c": "BE0123456789",
+        "Email__c": "same@acme.example",
+        "Phone": None,
+        "BillingStreet": None,
+        "BillingPostalCode": None,
+        "BillingCity": None,
+        "BillingCountry": None,
+    }
+
+    result = await update_facturatie_account(
+        sf,
+        account,
+        vat_number="BE0123456789",
+        name="Acme NV",
+        email="same@acme.example",
+        phone=None,
+        street=None,
+        house_number=None,
+        postal_code=None,
+        city=None,
+        country=None,
+    )
+
+    sf.Account.update.assert_not_called()
+    assert result == account
+
+
+@pytest.mark.asyncio
+async def test_update_facturatie_account_preserves_vat_when_omitted(sf):
+    """Regression — 2026-04-22 review Blocker #2. Omitted vatNumber must NOT
+    clear an existing VAT_Number__c (it doubles as external ID / dedup key).
+    """
+    sf.Account.describe.return_value = {"fields": [{"name": "Email__c"}, {"name": "Name"}]}
+    account = {
+        "Id": "001000000000202",
+        "Name": "Acme NV",
+        "VAT_Number__c": "BE0123456789",
+        "Email__c": "same@acme.example",
+        "Phone": None,
+        "BillingStreet": None,
+        "BillingPostalCode": None,
+        "BillingCity": None,
+        "BillingCountry": None,
+    }
+
+    result = await update_facturatie_account(
+        sf,
+        account,
+        vat_number=None,  # Facturatie omitted vatNumber in payload
+        name="Acme Updated NV",
+        email="same@acme.example",
+        phone=None,
+        street=None,
+        house_number=None,
+        postal_code=None,
+        city=None,
+        country=None,
+    )
+
+    assert sf.Account.update.called
+    updates = sf.Account.update.call_args[0][1]
+    assert "VAT_Number__c" not in updates
+    assert updates == {"Name": "Acme Updated NV"}
+    del result  # We only care about the update payload, not the post-fetch record.
+
+
+@pytest.mark.asyncio
+async def test_apply_account_is_active_uses_account_resolver(sf):
+    """Regression — 2026-04-22 review Blocker #1. apply_account_is_active must
+    resolve the Account active field, not Contact's.
+    """
+    sf.Account.describe.return_value = {
+        "fields": [{"name": "Active__c", "type": "boolean"}]
+    }
+
+    result = await apply_account_is_active(sf, {}, True)
+
+    assert result == {"Active__c": True}
+
+
+@pytest.mark.asyncio
+async def test_apply_account_is_active_returns_data_when_no_field(sf):
+    sf.Account.describe.return_value = {"fields": [{"name": "Name"}]}
+
+    result = await apply_account_is_active(sf, {"existing": "key"}, True)
+
+    # No active field on Account → leave data untouched.
+    assert result == {"existing": "key"}
+
+
+@pytest.mark.asyncio
+async def test_deactivate_account_record_sets_active_false(sf):
+    sf.Account.describe.return_value = {
+        "fields": [{"name": "IsActive__c", "type": "boolean"}]
+    }
+    account = {
+        "Id": "001000000000300",
+        "CRM_ID__c": "crm-deact-1",
+        "VAT_Number__c": "BE0111111111",
+        "IsActive__c": True,
+    }
+    sf.Account.get.return_value = {**account, "IsActive__c": False}
+
+    result = await deactivate_account_record(sf, account, log_value="crm-deact-1")
+
+    sf.Account.update.assert_called_once_with("001000000000300", {"IsActive__c": False})
+    assert result["IsActive__c"] is False
+
+
+@pytest.mark.asyncio
+async def test_deactivate_account_record_normalizes_legacy_active_field(sf):
+    """When the org uses Active__c or Is_Active__c, the returned record should
+    expose IsActive__c for stable downstream payload building."""
+    sf.Account.describe.return_value = {
+        "fields": [{"name": "Is_Active__c", "type": "boolean"}]
+    }
+    account = {
+        "Id": "001000000000301",
+        "CRM_ID__c": "crm-deact-2",
+        "VAT_Number__c": "BE0222222222",
+        "Is_Active__c": True,
+    }
+    sf.Account.get.return_value = {**account, "Is_Active__c": False}
+
+    result = await deactivate_account_record(sf, account)
+
+    sf.Account.update.assert_called_once_with("001000000000301", {"Is_Active__c": False})
+    assert result["IsActive__c"] is False
+
+
+# ---------------------------------------------------------------------------
 # get_unpaid_contacts (Contract 17)
 # ---------------------------------------------------------------------------
 
@@ -2049,6 +2336,39 @@ async def test_get_salesforce_client_backoff_caps_at_max_delay(
     assert [call.args[0] for call in sleep_mock.await_args_list] == [
         1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 60.0,
     ]
+
+
+# ---------------------------------------------------------------------------
+# escape_soql — SOQL string-literal escaping
+# ---------------------------------------------------------------------------
+
+class TestEscapeSoql:
+    """Verify SOQL injection protection. Regression for Facturatie sync review."""
+
+    def test_escapes_single_quote_with_backslash(self):
+        from src.salesforce_client import escape_soql
+
+        assert escape_soql("O'Brien") == "O\\'Brien"
+
+    def test_escapes_backslash_before_quote(self):
+        """Known SOQL injection vector: backslash-quote breaks naive escaping.
+
+        Without backslash escaping, `foo\\'` becomes `foo\\''` after quote doubling;
+        SOQL parses `\\'` as escaped quote so the trailing `'` closes the literal.
+        """
+        from src.salesforce_client import escape_soql
+
+        # Input contains a single backslash followed by a quote.
+        escaped = escape_soql("foo\\' OR CreatedDate > 2000-01-01 --")
+        # Expect: backslash doubled, then quote escaped → `foo\\\\\\' OR ...`
+        assert escaped == "foo\\\\\\' OR CreatedDate > 2000-01-01 --"
+        # After escaping, the backslash is a literal `\\\\` (no escape meaning to
+        # SOQL) and the `\\'` is a proper escaped quote, so the literal remains closed.
+
+    def test_no_metachars_passthrough(self):
+        from src.salesforce_client import escape_soql
+
+        assert escape_soql("plain@example.com") == "plain@example.com"
 
 
 # ---------------------------------------------------------------------------
