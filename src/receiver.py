@@ -15,19 +15,24 @@ from lxml import etree
 from src import sender, xml_validator
 from src.config import Config
 from src.salesforce_client import (
+    apply_account_is_active,
     apply_is_active,
     backfill_mailing_contact_fields,
     backfill_planning_contact_fields,
     coerce_is_active,
     count_active_contacts_for_company,
     count_active_session_registrations,
+    create_account,
     create_contact,
     deactivate_account_by_crm_id,
+    deactivate_account_record,
     deactivate_contact_record,
     deactivate_session_registration,
     ensure_contact_identifiers,
     ensure_session_registration_active,
     get_account_by_crm_id,
+    get_account_match_by_crm_id,
+    get_account_match_by_email,
     get_active_session_participants,
     get_contact_by_email,
     get_contact_for_person_lookup,
@@ -42,10 +47,12 @@ from src.salesforce_client import (
     has_contact_planning_id_field,
     has_session_registration_object,
     is_rate_limit_error,
+    update_facturatie_account,
     update_facturatie_contact,
     update_mailing_contact,
     update_payment_status,
     update_planning_contact,
+    upsert_account_by_vat,
     upsert_contact_by_email,
     upsert_session_registration,
 )
@@ -74,6 +81,9 @@ _INBOUND_EXCHANGE: dict[str, str] = {
     "planning.user.updated": "user.topic",
     "planning.user.deactivated": "user.topic",
     "facturatie.company.requested": "invoice.topic",
+    "facturatie.company.created": "company.topic",
+    "facturatie.company.updated": "company.topic",
+    "facturatie.company.deactivated": "company.topic",
     "kassa.person.lookup.requested": "payment.topic",
     "kassa.payment.confirmed": "payment.topic",
     "kassa.unpaid.requested": "payment.topic",
@@ -301,6 +311,21 @@ async def run_receiver(
     # Queue: facturatie.user.deactivated | Exchange: user.topic | durable: true
     queue_facturatie_user_deactivated = await _declare_and_bind(channel, "facturatie.user.deactivated", durable=True)
     await queue_facturatie_user_deactivated.consume(partial(handle_facturatie_user_deactivated, sf=sf_client))
+
+    # Contract 33 — Facturatie → CRM: new company created in FOSSBilling
+    # Queue: facturatie.company.created | Exchange: company.topic | durable: true
+    queue_facturatie_company_created = await _declare_and_bind(channel, "facturatie.company.created", durable=True)
+    await queue_facturatie_company_created.consume(partial(handle_facturatie_company_created, sf=sf_client))
+
+    # Contract 34 — Facturatie → CRM: update existing CRM-linked company
+    # Queue: facturatie.company.updated | Exchange: company.topic | durable: true
+    queue_facturatie_company_updated = await _declare_and_bind(channel, "facturatie.company.updated", durable=True)
+    await queue_facturatie_company_updated.consume(partial(handle_facturatie_company_updated, sf=sf_client))
+
+    # Contract 35 — Facturatie → CRM: deactivate existing CRM-linked company
+    # Queue: facturatie.company.deactivated | Exchange: company.topic | durable: true
+    queue_facturatie_company_deactivated = await _declare_and_bind(channel, "facturatie.company.deactivated", durable=True)
+    await queue_facturatie_company_deactivated.consume(partial(handle_facturatie_company_deactivated, sf=sf_client))
 
     # Contract 27 — Mailing → CRM: new Mailing user sync
     # Queue: mailing.user.created | Exchange: user.topic | durable: true
@@ -685,7 +710,6 @@ def _build_updated_user_data(contact: dict) -> dict:
         data["badgeCode"] = contact["Badge_Code__c"]
     address_mapping = {
         "MailingStreet": "street",
-        "House_Number__c": "houseNumber",
         "MailingPostalCode": "postalCode",
         "MailingCity": "city",
         "MailingCountry": "country",
@@ -712,6 +736,79 @@ def _build_company_deactivation_data(account: dict, deactivated_at: str) -> dict
         "vatNumber": account["VAT_Number__c"],
         "deactivatedAt": deactivated_at,
     }
+
+
+def _get_account_is_active(account: dict) -> bool:
+    """Normalized active flag across the supported Account active field names."""
+    for active_field in ("IsActive__c", "Active__c", "Is_Active__c"):
+        if active_field in account:
+            return coerce_is_active(account[active_field])
+    return True
+
+
+def _get_account_email(account: dict) -> str | None:
+    """Return the Account email via either custom Email__c or standard Email."""
+    for candidate in ("Email__c", "Email"):
+        value = account.get(candidate)
+        if value:
+            return value
+    return None
+
+
+def _build_company_data(account: dict) -> dict:
+    """Build outbound Contract 14 crm.company.confirmed payload from a Salesforce Account.
+
+    Required XSD fields: id, vatNumber, name, email, isActive, confirmedAt.
+    Phone/adres fields are not part of C14 (only C19/C5b carry them).
+    """
+    email = _get_account_email(account)
+    if email is None:
+        raise ValueError(
+            f"Account {account.get('Id')} has no email; cannot build "
+            "crm.company.confirmed payload (Contract 14 requires email).",
+        )
+
+    return {
+        "id": account["CRM_ID__c"],
+        "vatNumber": account["VAT_Number__c"],
+        "name": account["Name"],
+        "email": email,
+        "isActive": _get_account_is_active(account),
+        "confirmedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+def _build_updated_company_data(account: dict) -> dict:
+    """Build outbound Contract 19 crm.company.updated payload from a Salesforce Account.
+
+    Consumers replace their local copy entirely — include all available fields.
+    """
+    data: dict[str, Any] = {
+        "id": account["CRM_ID__c"],
+        "vatNumber": account["VAT_Number__c"],
+        "name": account["Name"],
+        "isActive": _get_account_is_active(account),
+        "updatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+    email = _get_account_email(account)
+    if email:
+        data["email"] = email
+    if account.get("Phone"):
+        data["phone"] = account["Phone"]
+
+    address_mapping = {
+        "BillingStreet": "street",
+        "BillingPostalCode": "postalCode",
+        "BillingCity": "city",
+        "BillingCountry": "country",
+    }
+    for sf_field, xml_field in address_mapping.items():
+        value = account.get(sf_field)
+        if value:
+            data[xml_field] = value
+
+    return data
 
 
 def _build_full_name(first_name: str | None, last_name: str | None) -> str:
@@ -2506,6 +2603,7 @@ async def handle_facturatie_company_deactivated(
         await message.ack()
     except Exception as exc:  # noqa: BLE001
         await _handle_processing_error("FacturatieCompanyDeactivated", message, exc)
+
 
 
 async def handle_registration_updated(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
