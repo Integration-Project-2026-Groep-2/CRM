@@ -49,8 +49,14 @@ _TRANSIENT_SF_AUTH_CODES = frozenset({"SERVER_UNAVAILABLE", "SERVICE_UNAVAILABLE
 
 
 def escape_soql(value: str) -> str:
-    """Escape single quotes for SOQL to prevent injection attacks."""
-    return value.replace("'", "''")
+    """Escape SOQL string-literal metacharacters to prevent injection.
+
+    Salesforce SOQL string literals honour `\\` as escape, so a lone
+    backslash followed by the doubling-quote trick (`\\''`) would close
+    the literal early. Escape backslashes first (ordering matters), then
+    single quotes per the official Salesforce SOQL docs.
+    """
+    return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
 # Backwards-compatibility alias — existing callers in this module use the
@@ -361,6 +367,23 @@ async def apply_is_active(
     authoritative `isActive` state from the source system.
     """
     active_field = await _resolve_contact_active_field_optional(sf)
+    if active_field is None:
+        return data
+
+    data[active_field] = is_active
+    return data
+
+
+async def apply_account_is_active(
+    sf: Salesforce, data: dict[str, Any], is_active: bool,
+) -> dict[str, Any]:
+    """Set the resolved Account active field on a payload dict.
+
+    Sibling of apply_is_active for the Account object. Orgs may use different
+    active-field names on Contact vs Account (e.g. IsActive__c on one and
+    Active__c on the other), so resolving per-object is mandatory.
+    """
+    active_field = await _resolve_account_active_field_optional(sf)
     if active_field is None:
         return data
 
@@ -1811,4 +1834,190 @@ async def get_account_by_vat(
             return None
     except SalesforceError as e:
         logger.error("Failed to get account by VAT %s: %s", vat_number, str(e))
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Contracts 33/34/35 — Facturatie → CRM company sync (v1.9.0)
+# ---------------------------------------------------------------------------
+
+
+async def _resolve_account_email_field(sf: Salesforce) -> str | None:
+    """Probe which email field exists on Account, preferring Email__c over Email."""
+    describe = await asyncio.to_thread(sf.Account.describe)
+    available = {field["name"] for field in describe.get("fields", [])}
+    for candidate in ("Email__c", "Email"):
+        if candidate in available:
+            return candidate
+    return None
+
+
+async def get_account_match_by_crm_id(
+    sf: Salesforce, crm_id: str
+) -> tuple[Literal["none", "unique", "ambiguous"], dict[str, Any] | None]:
+    """Classify an Account CRM_ID__c lookup as no/unique/ambiguous match.
+
+    Used by Contracts 34/35 (Facturatie company updated/deactivated) where
+    Facturatie sends the canonical CRM UUID back in the payload.
+    """
+    try:
+        escaped_crm_id = _escape_soql(crm_id)
+        query = f"SELECT Id FROM Account WHERE CRM_ID__c = '{escaped_crm_id}'"
+        result = await asyncio.to_thread(sf.query, query)
+
+        if result["totalSize"] == 0:
+            return "none", None
+        if result["totalSize"] > 1:
+            return "ambiguous", None
+
+        account_id = result["records"][0]["Id"]
+        account_record = await asyncio.to_thread(sf.Account.get, account_id)
+        logger.info("Found unique Account by CRM_ID__c: %s", crm_id)
+        return "unique", account_record
+    except SalesforceError as e:
+        logger.error("Failed to get account match by CRM_ID__c %s: %s", crm_id, str(e))
+        raise
+
+
+async def get_account_match_by_email(
+    sf: Salesforce, email: str
+) -> tuple[Literal["none", "unique", "ambiguous"], dict[str, Any] | None]:
+    """Classify an Account email lookup as no/unique/ambiguous match.
+
+    Probes the Account SObject for either Email__c or standard Email.
+    Returns ("none", None) when no email field exists on the org's Account.
+    """
+    email_field = await _resolve_account_email_field(sf)
+    if email_field is None:
+        logger.info(
+            "Account has no Email__c or Email field; cannot match by email: %s", email,
+        )
+        return "none", None
+
+    try:
+        escaped_email = _escape_soql(email)
+        query = f"SELECT Id FROM Account WHERE {email_field} = '{escaped_email}'"
+        result = await asyncio.to_thread(sf.query, query)
+
+        if result["totalSize"] == 0:
+            return "none", None
+        if result["totalSize"] > 1:
+            return "ambiguous", None
+
+        account_id = result["records"][0]["Id"]
+        account_record = await asyncio.to_thread(sf.Account.get, account_id)
+        logger.info("Found unique Account by %s: %s", email_field, email)
+        return "unique", account_record
+    except SalesforceError as e:
+        logger.error("Failed to get account match by email %s: %s", email, str(e))
+        raise
+
+
+async def update_facturatie_account(
+    sf: Salesforce,
+    account: dict[str, Any],
+    *,
+    vat_number: str | None,
+    name: str,
+    email: str,
+    phone: str | None,
+    street: str | None,
+    house_number: str | None,
+    postal_code: str | None,
+    city: str | None,
+    country: str | None,
+) -> dict[str, Any]:
+    """Authoritatively update Facturatie-owned fields on an existing Account.
+
+    Contract 34 sends the full Facturatie-side company object. CRM overwrites
+    the Facturatie-owned fields to match, while preserving CRM-owned identifiers
+    (CRM_ID__c). Only writes to Salesforce when at least one field differs.
+
+    `house_number` is currently not persisted on Account (no standard SF field
+    for it). Included in the signature for XSD-field completeness but logged
+    as a debug trace if present; persist by adding House_Number__c on Account.
+    """
+    email_field = await _resolve_account_email_field(sf)
+
+    updates: dict[str, Any] = {}
+
+    if _normalize_optional_field_value(account.get("Name")) != _normalize_optional_field_value(name):
+        updates["Name"] = name
+
+    # VAT_Number__c doubles as the Account external ID / idempotency key
+    # (upsert_account_by_vat). Only overwrite when Facturatie explicitly sends
+    # a vatNumber — an omission means "no change", NOT "clear the field".
+    # Guards against breaking dedup on the next facturatie.company.created.
+    if vat_number is not None and _normalize_optional_field_value(
+        account.get("VAT_Number__c")
+    ) != _normalize_optional_field_value(vat_number):
+        updates["VAT_Number__c"] = vat_number
+
+    if email_field is not None and (
+        _normalize_optional_field_value(account.get(email_field))
+        != _normalize_optional_field_value(email)
+    ):
+        updates[email_field] = email
+
+    if _normalize_optional_field_value(account.get("Phone")) != _normalize_optional_field_value(phone):
+        updates["Phone"] = phone
+
+    if _normalize_optional_field_value(account.get("BillingStreet")) != _normalize_optional_field_value(street):
+        updates["BillingStreet"] = street
+
+    if _normalize_optional_field_value(account.get("BillingPostalCode")) != _normalize_optional_field_value(postal_code):
+        updates["BillingPostalCode"] = postal_code
+
+    if _normalize_optional_field_value(account.get("BillingCity")) != _normalize_optional_field_value(city):
+        updates["BillingCity"] = city
+
+    if _normalize_optional_field_value(account.get("BillingCountry")) != _normalize_optional_field_value(country):
+        updates["BillingCountry"] = country
+
+    if house_number:
+        logger.debug(
+            "Facturatie update for Account %s received houseNumber=%s but Account has "
+            "no House_Number__c field; value not persisted",
+            account.get("Id"),
+            house_number,
+        )
+
+    if not updates:
+        return account
+
+    account_id = account["Id"]
+    await asyncio.to_thread(sf.Account.update, account_id, updates)
+    logger.info(
+        "Updated Facturatie Account %s fields: %s",
+        account_id,
+        ", ".join(sorted(updates.keys())),
+    )
+    return await asyncio.to_thread(sf.Account.get, account_id)
+
+
+async def deactivate_account_record(
+    sf: Salesforce, account: dict[str, Any], *, log_value: str | None = None
+) -> dict[str, Any]:
+    """Soft-delete an already resolved Account by setting its active flag to False.
+
+    NEVER physically delete an Account — company records may be referenced
+    by Contacts, invoices, etc. Preserve for audit trail.
+    """
+    account_id = account["Id"]
+    log_target = log_value or account.get("CRM_ID__c") or account.get("VAT_Number__c") or account_id
+
+    try:
+        active_field = await _resolve_account_active_field(sf)
+
+        await asyncio.to_thread(
+            sf.Account.update, account_id, {active_field: False}
+        )
+        logger.info("Deactivated Account %s (%s)", account_id, log_target)
+
+        updated_record = await asyncio.to_thread(sf.Account.get, account_id)
+        if active_field != "IsActive__c" and "IsActive__c" not in updated_record:
+            updated_record["IsActive__c"] = updated_record.get(active_field, False)
+        return updated_record
+    except SalesforceError as e:
+        logger.error("Failed to deactivate account %s: %s", log_target, str(e))
         raise
