@@ -41,7 +41,6 @@ from src.salesforce_client import (
     get_contact_match_by_mailing_id,
     get_contact_match_by_planning_id,
     get_salesforce_client,
-    get_session_registration_by_registration_id,
     get_unpaid_contacts,
     has_contact_mailing_id_field,
     has_contact_planning_id_field,
@@ -54,7 +53,6 @@ from src.salesforce_client import (
     update_planning_contact,
     upsert_account_by_vat,
     upsert_contact_by_email,
-    upsert_session_registration,
 )
 
 if TYPE_CHECKING:
@@ -2420,18 +2418,10 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
     try:
         email = xml.findtext("email")
         registration_id = xml.findtext("registrationId") or ""
-        session_id = xml.findtext("sessionId") or ""
 
         gdpr_text = xml.findtext("gdprConsent")
         if gdpr_text not in ("true", "1"):
             logger.warning("Registration refused — gdprConsent=%s for email %s", gdpr_text, email)
-            await message.reject(requeue=False)
-            return
-
-        if not await has_session_registration_object(sf):
-            logger.error(
-                "Registration rejected — Salesforce object Session_Registration__c is missing",
-            )
             await message.reject(requeue=False)
             return
 
@@ -2446,39 +2436,6 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
         existing_contact = await get_contact_by_email(sf, email)
 
         if existing_contact:
-            existing_session_registration = await get_session_registration_by_registration_id(
-                sf,
-                registration_id,
-            )
-
-            if (
-                existing_session_registration is not None
-                and existing_session_registration.get("Is_Active__c") is not False
-            ):
-                # Retry na publish failure -> opnieuw publishen
-                logger.info("Retry for registrationId %s — republishing", registration_id)
-
-                await sender.publish_user_confirmed(_build_user_data(existing_contact))
-
-                # C6: Publish mail request
-                full_name = _build_mail_display_name(
-                    existing_contact.get("FirstName"),
-                    existing_contact.get("LastName"),
-                    email,
-                )
-
-                recipient = {"email": email, "name": full_name}
-                dynamic_data = {"guest_name": full_name}
-                await sender.publish_mail_requested("registration_confirmation", recipient, dynamic_data)
-
-                await message.ack()
-                return
-            if existing_session_registration is not None:
-                logger.info(
-                    "Reactivating inactive registrationId %s via normal registration flow",
-                    registration_id,
-                )
-
             if not _registration_fields_are_compatible(existing_contact, xml):
                 logger.warning(
                     "Conflict: email %s exists with incompatible person fields for registrationId %s",
@@ -2492,12 +2449,6 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
                 sf,
                 existing_contact,
                 registration_id=registration_id,
-            )
-            await upsert_session_registration(
-                sf,
-                registration_id=registration_id,
-                session_id=session_id,
-                contact_id=contact["Id"],
             )
 
             logger.info(
@@ -2536,12 +2487,6 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
 
         logger.info("Creating new Salesforce Contact for %s", email)
         contact = await create_contact(sf, contact_data)
-        await upsert_session_registration(
-            sf,
-            registration_id=registration_id,
-            session_id=session_id,
-            contact_id=contact["Id"],
-        )
 
         # Publish crm.user.confirmed
         await sender.publish_user_confirmed(_build_user_data(contact))
