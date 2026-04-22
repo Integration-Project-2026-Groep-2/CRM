@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -1304,6 +1305,146 @@ async def test_upsert_account_by_vat_handles_int_status_on_update(sf):
     ]
     assert update_calls == [], "no CRM_ID__c mint should happen on update path"
     assert result == existing_account
+
+
+@pytest.mark.asyncio
+async def test_upsert_account_by_vat_mints_crm_id_for_new_record(sf):
+    """Regression — 2026-04-22 production. simple-salesforce's upsert()
+    never returns a dict, so the post-upsert mint branch was dead code
+    and new Accounts landed in Salesforce with CRM_ID__c = null. That
+    null propagated to the C14 outbound payload (<id>None</id>) and
+    failed XSD UUID-pattern validation.
+
+    Fix: stamp CRM_ID__c in the request body atomically on create.
+    """
+    freshly_created = {
+        "Id": "001000000000800",
+        "Name": "NewCo",
+        "VAT_Number__c": "BE0412341500",
+    }
+    sf.query.side_effect = [
+        {"totalSize": 0, "records": []},                                  # pre-upsert: not found
+        {"totalSize": 1, "records": [{"Id": "001000000000800"}]},         # post-upsert: refresh
+    ]
+
+    def fetch_with_crm_id(_id: str):
+        # The refreshed record reflects the CRM_ID__c that was stamped in
+        # the upsert body — capture whatever the caller actually sent.
+        stamped = sf.Account.upsert.call_args.args[1].get("CRM_ID__c")
+        return {**freshly_created, "CRM_ID__c": stamped}
+
+    sf.Account.get.side_effect = fetch_with_crm_id
+    sf.Account.upsert.return_value = 201
+
+    result = await upsert_account_by_vat(sf, "BE0412341500", {"Name": "NewCo"})
+
+    sf.Account.upsert.assert_called_once()
+    body = sf.Account.upsert.call_args.args[1]
+    crm_id = body.get("CRM_ID__c")
+    assert crm_id, "CRM_ID__c must be present in upsert body"
+    # Shape check — UUID v4 format.
+    uuid_pattern = re.compile(
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    )
+    assert uuid_pattern.match(crm_id), f"CRM_ID__c '{crm_id}' is not a UUID v4"
+    # No secondary sf.Account.update for CRM_ID__c is needed anymore.
+    crm_id_update_calls = [
+        call for call in sf.Account.update.call_args_list
+        if len(call.args) >= 2 and "CRM_ID__c" in call.args[1]
+    ]
+    assert crm_id_update_calls == []
+    assert result["CRM_ID__c"] == crm_id
+
+
+@pytest.mark.asyncio
+async def test_upsert_account_by_vat_backfills_crm_id_when_existing_has_none(sf):
+    """Backfill path — an Account already exists for this VAT (created by
+    an earlier buggy rollout) but its CRM_ID__c is null. Next upsert must
+    stamp a new UUID so subsequent C14 publishes succeed.
+    """
+    ghost_account = {
+        "Id": "001000000000801",
+        "Name": "GhostCo",
+        "VAT_Number__c": "BE0412341600",
+        "CRM_ID__c": None,
+    }
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "001000000000801"}]}
+
+    def fetch(_id: str):
+        # Pre-upsert: ghost state. Post-upsert: reflect the stamped UUID.
+        if sf.Account.upsert.call_args is None:
+            return ghost_account
+        stamped = sf.Account.upsert.call_args.args[1].get("CRM_ID__c")
+        return {**ghost_account, "CRM_ID__c": stamped}
+
+    sf.Account.get.side_effect = fetch
+    sf.Account.upsert.return_value = 204
+
+    result = await upsert_account_by_vat(sf, "BE0412341600", {"Name": "GhostCo"})
+
+    body = sf.Account.upsert.call_args.args[1]
+    crm_id = body.get("CRM_ID__c")
+    assert crm_id, "ghost account must get a freshly-minted CRM_ID__c"
+    assert result["CRM_ID__c"] == crm_id
+
+
+@pytest.mark.asyncio
+async def test_upsert_account_by_vat_accepts_preset_crm_id_in_data(sf):
+    """Future-proof: if a caller passes CRM_ID__c explicitly (e.g. a data
+    import tool that knows the canonical UUID), don't overwrite it.
+    """
+    sf.query.return_value = {"totalSize": 0, "records": []}
+    sf.Account.upsert.return_value = 201
+    sf.query.side_effect = [
+        {"totalSize": 0, "records": []},
+        {"totalSize": 1, "records": [{"Id": "001000000000802"}]},
+    ]
+    sf.Account.get.return_value = {
+        "Id": "001000000000802",
+        "Name": "Imported",
+        "VAT_Number__c": "BE0412341700",
+        "CRM_ID__c": "caller-supplied-uuid",
+    }
+
+    payload = {"Name": "Imported", "CRM_ID__c": "caller-supplied-uuid"}
+    await upsert_account_by_vat(sf, "BE0412341700", payload)
+
+    body = sf.Account.upsert.call_args.args[1]
+    assert body["CRM_ID__c"] == "caller-supplied-uuid"
+
+
+@pytest.mark.asyncio
+async def test_upsert_contact_by_email_mints_crm_id_for_new_record(sf):
+    """Symmetric regression for upsert_contact_by_email — same latent bug
+    as upsert_account_by_vat: simple-salesforce returns int, dead-code
+    post-upsert mint never ran. Not currently triggered by any production
+    flow (facturatie user creates go through create_contact), but fixed
+    proactively to avoid future whack-a-mole.
+    """
+    sf.Contact.describe.return_value = {"fields": [{"name": "IsActive__c"}]}
+    # Pre-upsert lookup: no existing contact. Post-upsert refresh: found.
+    sf.query.side_effect = [
+        {"totalSize": 0, "records": []},
+        {"totalSize": 1, "records": [{"Id": "003000000000900"}]},
+    ]
+    sf.Contact.upsert.return_value = 201
+    sf.Contact.get.return_value = {
+        "Id": "003000000000900",
+        "Email": "new@example.com",
+        "CRM_ID__c": "mocked-uuid",
+    }
+
+    await upsert_contact_by_email(
+        sf, "new@example.com", {"FirstName": "New", "LastName": "User", "Email": "new@example.com"}
+    )
+
+    body = sf.Contact.upsert.call_args.args[1]
+    crm_id = body.get("CRM_ID__c")
+    assert crm_id, "CRM_ID__c must be stamped in upsert body for new contacts"
+    uuid_pattern = re.compile(
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    )
+    assert uuid_pattern.match(crm_id), f"CRM_ID__c '{crm_id}' is not a UUID v4"
 
 
 @pytest.mark.asyncio
