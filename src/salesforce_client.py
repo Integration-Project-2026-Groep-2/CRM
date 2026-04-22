@@ -1795,14 +1795,28 @@ async def upsert_account_by_vat(
         result = await asyncio.to_thread(
             sf.Account.upsert, f"VAT_Number__c/{vat_number}", data
         )
-        account_id = result["id"]
 
-        if result.get("created", False):
-            if not data.get("CRM_ID__c"):
-                crm_id = str(uuid.uuid4())
-                await asyncio.to_thread(
-                    sf.Account.update, account_id, {"CRM_ID__c": crm_id}
+        # Salesforce upsert returns a dict for creates (201 Created with body)
+        # but a raw int status code for updates (204 No Content). Handle both.
+        created = isinstance(result, dict) and result.get("created", False)
+        account_id = result.get("id") if isinstance(result, dict) else None
+
+        if account_id is None and existing is not None:
+            account_id = existing.get("Id")
+
+        if created and account_id and not data.get("CRM_ID__c"):
+            crm_id = str(uuid.uuid4())
+            await asyncio.to_thread(
+                sf.Account.update, account_id, {"CRM_ID__c": crm_id}
+            )
+
+        if account_id is None:
+            refreshed = await get_account_by_vat(sf, vat_number)
+            if refreshed is None:
+                raise RuntimeError(
+                    f"Upsert succeeded but account not found for VAT {vat_number}"
                 )
+            return refreshed
 
         account_record = await asyncio.to_thread(sf.Account.get, account_id)
         return account_record
