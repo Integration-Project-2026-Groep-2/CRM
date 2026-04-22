@@ -1265,6 +1265,40 @@ async def test_upsert_account_preserves_existing_crm_id(sf):
     assert sf.Account.upsert.call_args.args[1]["CRM_ID__c"] == "FIXED-UUID"
 
 
+@pytest.mark.asyncio
+async def test_upsert_account_by_vat_strips_external_id_from_body(sf):
+    """Regression — 2026-04-22 production. Salesforce v59+ rejects the
+    external-ID field in the body when it's in the URL path. Helper must
+    remove VAT_Number__c from the data dict before calling upsert.
+
+    Real-world error caught on dev:
+        INVALID_FIELD: The VAT_Number__c field should not be specified in
+        the sobject data.
+    """
+    sf.query.return_value = {"totalSize": 0, "records": []}
+    sf.Account.upsert.return_value = {"id": "001000000000999", "created": True}
+    sf.Account.get.return_value = {
+        "Id": "001000000000999",
+        "Name": "Acme",
+        "VAT_Number__c": "BE0412341178",
+    }
+
+    # Caller may include VAT_Number__c in the dict (matches how
+    # _build_facturatie_account_data builds it). Helper must strip it.
+    payload = {"Name": "Acme", "VAT_Number__c": "BE0412341178", "Email__c": "a@b.c"}
+    await upsert_account_by_vat(sf, "BE0412341178", payload)
+
+    sf.Account.upsert.assert_called_once()
+    url_arg = sf.Account.upsert.call_args.args[0]
+    body_arg = sf.Account.upsert.call_args.args[1]
+    assert url_arg == "VAT_Number__c/BE0412341178"
+    assert "VAT_Number__c" not in body_arg, (
+        "VAT_Number__c must not appear in the request body when used as external ID"
+    )
+    assert body_arg["Name"] == "Acme"
+    assert body_arg["Email__c"] == "a@b.c"
+
+
 # ---------------------------------------------------------------------------
 # deactivate_contact (Contract 2)
 # ---------------------------------------------------------------------------
