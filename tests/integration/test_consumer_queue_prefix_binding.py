@@ -30,7 +30,7 @@ import os
 
 import aio_pika
 import pytest
-from aio_pika import ExchangeType, DeliveryMode
+from aio_pika import DeliveryMode, ExchangeType
 
 RABBITMQ_URL = os.getenv("CRM_TEST_RABBITMQ_URL", "amqp://guest:guest@localhost:5675/")
 
