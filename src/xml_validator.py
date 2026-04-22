@@ -11,6 +11,29 @@ SCHEMA_PATH = Path(__file__).parent / "schema" / "crm-schema-v1.xsd"
 
 _schema: etree.XMLSchema | None = None
 
+# Hardened parser for untrusted inbound XML.
+#
+# Defaults on lxml's standard parser block external entity resolution but still
+# expand internal DTD entities — enabling a "billion-laughs"-style memory
+# amplification where `<!ENTITY big "AAAA...">` followed by `&big;` in the
+# payload body produces megabytes of text that passes XSD validation and then
+# flows into Salesforce field writes.
+#
+# Settings:
+#   resolve_entities=False  — refuse to expand any entity reference (&foo;)
+#   no_network=True         — never fetch external resources
+#   load_dtd=False          — ignore any <!DOCTYPE ...> declarations
+#   huge_tree=False         — enforce libxml2's default tree-size limit
+#
+# We accept that well-formed payloads without DOCTYPE declarations validate
+# identically; producers in this project never emit DTDs.
+_SECURE_PARSER = etree.XMLParser(
+    resolve_entities=False,
+    no_network=True,
+    load_dtd=False,
+    huge_tree=False,
+)
+
 
 def load_schema(path: Path = SCHEMA_PATH) -> etree.XMLSchema:
     """Load and parse an XSD schema file.
@@ -53,10 +76,11 @@ def validate(xml_bytes: bytes) -> etree._Element:
 
     Raises:
         ValueError: If validation fails, with the schema error log.
-        etree.XMLSyntaxError: If the XML is malformed.
+        etree.XMLSyntaxError: If the XML is malformed or contains entity
+            references when entity resolution is disabled.
     """
     schema = _get_schema()
-    doc = etree.fromstring(xml_bytes)
+    doc = etree.fromstring(xml_bytes, _SECURE_PARSER)
     if not schema.validate(doc):
         raise ValueError(f"XML validation failed: {schema.error_log}")
     return doc
