@@ -710,6 +710,7 @@ def _build_updated_user_data(contact: dict) -> dict:
         data["badgeCode"] = contact["Badge_Code__c"]
     address_mapping = {
         "MailingStreet": "street",
+        "House_Number__c": "houseNumber",
         "MailingPostalCode": "postalCode",
         "MailingCity": "city",
         "MailingCountry": "country",
