@@ -169,7 +169,7 @@
 
   <!-- ============================================================
        CONTRACT 1 — Frontend → CRM: nieuwe inschrijving
-       Queue: frontend.registration.created | durable: true
+       Queue: crm.frontend.registration.created (routing key: frontend.registration.created) | durable: true
   ============================================================ -->
   <xs:element name="Registration">
     <xs:complexType>
@@ -189,7 +189,7 @@
 
   <!-- ============================================================
        CONTRACT 2 — Frontend → CRM: inschrijving wijzigen/annuleren
-       Queue: frontend.registration.updated | durable: true
+       Queue: crm.frontend.registration.updated (routing key: frontend.registration.updated) | durable: true
   ============================================================ -->
   <xs:element name="RegistrationChange">
     <xs:complexType>
@@ -223,7 +223,7 @@
 
   <!-- ============================================================
        CONTRACT 24 — Facturatie → CRM: user aanmaken
-       Queue: facturatie.user.created | durable: true
+       Queue: crm.facturatie.user.created (routing key: facturatie.user.created) | durable: true
   ============================================================ -->
   <xs:element name="UserCreated">
     <xs:complexType>
@@ -244,7 +244,7 @@
 
   <!-- ============================================================
        CONTRACT 27 — Mailing → CRM: user aanmaken
-       Queue: mailing.user.created | durable: true
+       Queue: crm.mailing.user.created (routing key: mailing.user.created) | durable: true
   ============================================================ -->
   <xs:element name="MailingUserCreated" type="MailingUserPayloadType"/>
 
@@ -271,19 +271,19 @@
 
   <!-- ============================================================
        CONTRACT 30 — Planning → CRM: user aanmaken
-       Planning ref 21 | Queue: planning.user.created | durable: true
+       Planning ref 21 | Queue: crm.planning.user.created (routing key: planning.user.created) | durable: true
   ============================================================ -->
   <xs:element name="PlanningUserCreated" type="PlanningUserPayloadType"/>
 
   <!-- ============================================================
        CONTRACT 31 — Planning → CRM: user bijwerken
-       Planning ref 22 | Queue: planning.user.updated | durable: true
+       Planning ref 22 | Queue: crm.planning.user.updated (routing key: planning.user.updated) | durable: true
   ============================================================ -->
   <xs:element name="PlanningUserUpdated" type="PlanningUserPayloadType"/>
 
   <!-- ============================================================
        CONTRACT 32 — Planning → CRM: user deactiveren
-       Planning ref 23 | Queue: planning.user.deactivated | durable: true
+       Planning ref 23 | Queue: crm.planning.user.deactivated (routing key: planning.user.deactivated) | durable: true
   ============================================================ -->
   <xs:element name="PlanningUserDeactivated">
     <xs:complexType>
@@ -717,7 +717,7 @@
   <!-- ============================================================
        CONTRACT 18 — CRM → consumers: user updated
        CONTRACT 25 — Facturatie → CRM: user bijwerken
-       Queue: crm.user.updated / facturatie.user.updated | durable: true
+       Queue: crm.user.updated / crm.facturatie.user.updated (routing key: facturatie.user.updated) | durable: true
        Noot: gedeelde root. Facturatie stuurt geen gdprConsent of
        badgeCode (daarom op XSD-niveau optional); CRM outbound (C18)
        vult die velden wel in op basis van Salesforce-data.
@@ -816,7 +816,7 @@
   <!-- ============================================================
        CONTRACT 22 — CRM → consumers: user deactivated (GDPR)
        CONTRACT 26 — Facturatie → CRM: user deactiveren
-       Queue: crm.user.deactivated / facturatie.user.deactivated | durable: true
+       Queue: crm.user.deactivated / crm.facturatie.user.deactivated (routing key: facturatie.user.deactivated) | durable: true
        Noot: gedeelde root met identieke velden.
   ============================================================ -->
   <xs:element name="UserDeactivated">
@@ -845,7 +845,7 @@
 
   <!-- ============================================================
        CONTRACT 33 — Facturatie → CRM: nieuw bedrijf aangemaakt
-       Queue: facturatie.company.created | durable: true | Exchange: company.topic
+       Queue: crm.facturatie.company.created (routing key: facturatie.company.created) | durable: true | Exchange: company.topic
        Noot: dedicated root om conflict met C3 <CompanyCreated> te vermijden.
   ============================================================ -->
   <xs:element name="FacturatieCompanyCreated">
@@ -867,7 +867,7 @@
 
   <!-- ============================================================
        CONTRACT 34 — Facturatie → CRM: bestaand bedrijf bijgewerkt
-       Queue: facturatie.company.updated | durable: true | Exchange: company.topic
+       Queue: crm.facturatie.company.updated (routing key: facturatie.company.updated) | durable: true | Exchange: company.topic
   ============================================================ -->
   <xs:element name="FacturatieCompanyUpdated">
     <xs:complexType>
@@ -890,7 +890,7 @@
 
   <!-- ============================================================
        CONTRACT 35 — Facturatie → CRM: bedrijf deactiveren
-       Queue: facturatie.company.deactivated | durable: true | Exchange: company.topic
+       Queue: crm.facturatie.company.deactivated (routing key: facturatie.company.deactivated) | durable: true | Exchange: company.topic
   ============================================================ -->
   <xs:element name="FacturatieCompanyDeactivated">
     <xs:complexType>

@@ -104,22 +104,25 @@ async def main() -> None:
     async with connection:
         channel = await connection.channel()
         user_exchange = await channel.declare_exchange("user.topic", ExchangeType.TOPIC, durable=True)
+        contact_exchange = await channel.declare_exchange(
+            "contact.topic", ExchangeType.TOPIC, durable=True,
+        )
 
-        confirmed_q = await channel.declare_queue("crm.user.confirmed", durable=True)
-        updated_q = await channel.declare_queue("crm.user.updated", durable=True)
-        deactivated_q = await channel.declare_queue("crm.user.deactivated", durable=True)
-
-        # Drain stale messages from previous runs
-        for q, name in [(confirmed_q, "crm.user.confirmed"), (updated_q, "crm.user.updated"), (deactivated_q, "crm.user.deactivated")]:
-            drained = 0
-            while True:
-                stale = await q.get(fail=False)
-                if not stale:
-                    break
-                await stale.ack()
-                drained += 1
-            if drained:
-                print(f"  Drained {drained} stale message(s) from {name}")
+        # Exclusive+auto_delete observation queues bound to contact.topic.
+        # Prevents collision with other teams' real consumer queues that may
+        # share the crm.user.* routing keys on contact.topic.
+        confirmed_q = await channel.declare_queue(
+            "crm.debug.demo.user.confirmed", exclusive=True, auto_delete=True,
+        )
+        await confirmed_q.bind(contact_exchange, routing_key="crm.user.confirmed")
+        updated_q = await channel.declare_queue(
+            "crm.debug.demo.user.updated", exclusive=True, auto_delete=True,
+        )
+        await updated_q.bind(contact_exchange, routing_key="crm.user.updated")
+        deactivated_q = await channel.declare_queue(
+            "crm.debug.demo.user.deactivated", exclusive=True, auto_delete=True,
+        )
+        await deactivated_q.bind(contact_exchange, routing_key="crm.user.deactivated")
 
         r = random.randint(10000, 99999)
         email = f"demo.user.{r}@shiftfestival.be"

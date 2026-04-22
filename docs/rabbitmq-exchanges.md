@@ -62,18 +62,18 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 
 | Queue | Exchange | Producent | Contract |
 |---|---|---|---|
-| `frontend.registration.created` | `user.topic` | Frontend | 1 |
-| `frontend.registration.updated` | `user.topic` | Frontend | 2 |
+| `crm.frontend.registration.created` (rk `frontend.registration.created`) | `user.topic` | Frontend | 1 |
+| `crm.frontend.registration.updated` (rk `frontend.registration.updated`) | `user.topic` | Frontend | 2 |
 | `frontend.company.created` | `user.topic` | Frontend | 3 |
-| `facturatie.user.created` | `user.topic` | Facturatie | 24 |
-| `facturatie.user.updated` | `user.topic` | Facturatie | 25 |
-| `facturatie.user.deactivated` | `user.topic` | Facturatie | 26 |
-| `mailing.user.created` | `user.topic` | Mailing | 27 |
+| `crm.facturatie.user.created` (rk `facturatie.user.created`) | `user.topic` | Facturatie | 24 |
+| `crm.facturatie.user.updated` (rk `facturatie.user.updated`) | `user.topic` | Facturatie | 25 |
+| `crm.facturatie.user.deactivated` (rk `facturatie.user.deactivated`) | `user.topic` | Facturatie | 26 |
+| `crm.mailing.user.created` (rk `mailing.user.created`) | `user.topic` | Mailing | 27 |
 | `crm.mailing.user.updated` (rk `mailing.user.updated`) | `user.topic` | Mailing | 28 |
 | `crm.mailing.user.deactivated` (rk `mailing.user.deactivated`) | `user.topic` | Mailing | 29 |
-| `planning.user.created` | `user.topic` | Planning | 30 (Planning ref 21) |
-| `planning.user.updated` | `user.topic` | Planning | 31 (Planning ref 22) |
-| `planning.user.deactivated` | `user.topic` | Planning | 32 (Planning ref 23) |
+| `crm.planning.user.created` (rk `planning.user.created`) | `user.topic` | Planning | 30 (Planning ref 21) |
+| `crm.planning.user.updated` (rk `planning.user.updated`) | `user.topic` | Planning | 31 (Planning ref 22) |
+| `crm.planning.user.deactivated` (rk `planning.user.deactivated`) | `user.topic` | Planning | 32 (Planning ref 23) |
 | `kassa.person.lookup.requested` | `payment.topic` | Kassa | 10a |
 | `kassa.payment.confirmed` | `payment.topic` | Kassa | 16 |
 | `kassa.unpaid.requested` | `payment.topic` | Kassa | 17a |

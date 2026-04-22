@@ -68,22 +68,22 @@ logger = logging.getLogger(__name__)
 # andere exchange. De routing keys blijven de producer-eventnamen — zie de
 # run_receiver calls waar routing_key expliciet meegegeven wordt.
 _INBOUND_EXCHANGE: dict[str, str] = {
-    "frontend.registration.created": "user.topic",
-    "frontend.registration.updated": "user.topic",
+    "crm.frontend.registration.created": "user.topic",
+    "crm.frontend.registration.updated": "user.topic",
     "frontend.company.created": "user.topic",
-    "facturatie.user.created": "user.topic",
-    "facturatie.user.updated": "user.topic",
-    "facturatie.user.deactivated": "user.topic",
-    "mailing.user.created": "user.topic",
+    "crm.facturatie.user.created": "user.topic",
+    "crm.facturatie.user.updated": "user.topic",
+    "crm.facturatie.user.deactivated": "user.topic",
+    "crm.mailing.user.created": "user.topic",
     "crm.mailing.user.updated": "user.topic",
     "crm.mailing.user.deactivated": "user.topic",
-    "planning.user.created": "user.topic",
-    "planning.user.updated": "user.topic",
-    "planning.user.deactivated": "user.topic",
+    "crm.planning.user.created": "user.topic",
+    "crm.planning.user.updated": "user.topic",
+    "crm.planning.user.deactivated": "user.topic",
     "facturatie.company.requested": "invoice.topic",
-    "facturatie.company.created": "company.topic",
-    "facturatie.company.updated": "company.topic",
-    "facturatie.company.deactivated": "company.topic",
+    "crm.facturatie.company.created": "company.topic",
+    "crm.facturatie.company.updated": "company.topic",
+    "crm.facturatie.company.deactivated": "company.topic",
     "kassa.person.lookup.requested": "payment.topic",
     "kassa.payment.confirmed": "payment.topic",
     "kassa.unpaid.requested": "payment.topic",
@@ -288,48 +288,105 @@ async def run_receiver(
     await queue_warning.consume(handle_warning)
 
     # Contract 1 — Frontend → CRM: new registration
-    # Queue: frontend.registration.created | Exchange: user.topic | durable: true
-    queue_registration = await _declare_and_bind(channel, "frontend.registration.created", durable=True)
+    # Queue: crm.frontend.registration.created (routing key: frontend.registration.created)
+    # Exchange: user.topic | durable: true. Consumer-prefixed queue voorkomt
+    # collision met Frontend's eigen consumer-queue op user.topic.
+    queue_registration = await _declare_and_bind(
+        channel,
+        "crm.frontend.registration.created",
+        durable=True,
+        routing_key="frontend.registration.created",
+    )
     await queue_registration.consume(partial(handle_registration, sf=sf_client))
 
     # Contract 2 — Frontend → CRM: update/cancel registration
-    # Queue: frontend.registration.updated | Exchange: user.topic | durable: true
-    queue_reg_updated = await _declare_and_bind(channel, "frontend.registration.updated", durable=True)
+    # Queue: crm.frontend.registration.updated (routing key: frontend.registration.updated)
+    # Exchange: user.topic | durable: true.
+    queue_reg_updated = await _declare_and_bind(
+        channel,
+        "crm.frontend.registration.updated",
+        durable=True,
+        routing_key="frontend.registration.updated",
+    )
     await queue_reg_updated.consume(partial(handle_registration_updated, sf=sf_client))
 
     # Contract 24 — Facturatie → CRM: manually created user
-    # Queue: facturatie.user.created | Exchange: user.topic | durable: true
-    queue_facturatie_user_created = await _declare_and_bind(channel, "facturatie.user.created", durable=True)
+    # Queue: crm.facturatie.user.created (routing key: facturatie.user.created)
+    # Exchange: user.topic | durable: true. Consumer-prefixed queue voorkomt
+    # collision met Facturatie's eigen consumer-queue op user.topic.
+    queue_facturatie_user_created = await _declare_and_bind(
+        channel,
+        "crm.facturatie.user.created",
+        durable=True,
+        routing_key="facturatie.user.created",
+    )
     await queue_facturatie_user_created.consume(partial(handle_facturatie_user_created, sf=sf_client))
 
     # Contract 25 — Facturatie → CRM: update existing CRM-linked user
-    # Queue: facturatie.user.updated | Exchange: user.topic | durable: true
-    queue_facturatie_user_updated = await _declare_and_bind(channel, "facturatie.user.updated", durable=True)
+    # Queue: crm.facturatie.user.updated (routing key: facturatie.user.updated)
+    # Exchange: user.topic | durable: true.
+    queue_facturatie_user_updated = await _declare_and_bind(
+        channel,
+        "crm.facturatie.user.updated",
+        durable=True,
+        routing_key="facturatie.user.updated",
+    )
     await queue_facturatie_user_updated.consume(partial(handle_facturatie_user_updated, sf=sf_client))
 
     # Contract 26 — Facturatie → CRM: deactivate existing CRM-linked user
-    # Queue: facturatie.user.deactivated | Exchange: user.topic | durable: true
-    queue_facturatie_user_deactivated = await _declare_and_bind(channel, "facturatie.user.deactivated", durable=True)
+    # Queue: crm.facturatie.user.deactivated (routing key: facturatie.user.deactivated)
+    # Exchange: user.topic | durable: true.
+    queue_facturatie_user_deactivated = await _declare_and_bind(
+        channel,
+        "crm.facturatie.user.deactivated",
+        durable=True,
+        routing_key="facturatie.user.deactivated",
+    )
     await queue_facturatie_user_deactivated.consume(partial(handle_facturatie_user_deactivated, sf=sf_client))
 
     # Contract 33 — Facturatie → CRM: new company created in FOSSBilling
-    # Queue: facturatie.company.created | Exchange: company.topic | durable: true
-    queue_facturatie_company_created = await _declare_and_bind(channel, "facturatie.company.created", durable=True)
+    # Queue: crm.facturatie.company.created (routing key: facturatie.company.created)
+    # Exchange: company.topic | durable: true.
+    queue_facturatie_company_created = await _declare_and_bind(
+        channel,
+        "crm.facturatie.company.created",
+        durable=True,
+        routing_key="facturatie.company.created",
+    )
     await queue_facturatie_company_created.consume(partial(handle_facturatie_company_created, sf=sf_client))
 
     # Contract 34 — Facturatie → CRM: update existing CRM-linked company
-    # Queue: facturatie.company.updated | Exchange: company.topic | durable: true
-    queue_facturatie_company_updated = await _declare_and_bind(channel, "facturatie.company.updated", durable=True)
+    # Queue: crm.facturatie.company.updated (routing key: facturatie.company.updated)
+    # Exchange: company.topic | durable: true.
+    queue_facturatie_company_updated = await _declare_and_bind(
+        channel,
+        "crm.facturatie.company.updated",
+        durable=True,
+        routing_key="facturatie.company.updated",
+    )
     await queue_facturatie_company_updated.consume(partial(handle_facturatie_company_updated, sf=sf_client))
 
     # Contract 35 — Facturatie → CRM: deactivate existing CRM-linked company
-    # Queue: facturatie.company.deactivated | Exchange: company.topic | durable: true
-    queue_facturatie_company_deactivated = await _declare_and_bind(channel, "facturatie.company.deactivated", durable=True)
+    # Queue: crm.facturatie.company.deactivated (routing key: facturatie.company.deactivated)
+    # Exchange: company.topic | durable: true.
+    queue_facturatie_company_deactivated = await _declare_and_bind(
+        channel,
+        "crm.facturatie.company.deactivated",
+        durable=True,
+        routing_key="facturatie.company.deactivated",
+    )
     await queue_facturatie_company_deactivated.consume(partial(handle_facturatie_company_deactivated, sf=sf_client))
 
     # Contract 27 — Mailing → CRM: new Mailing user sync
-    # Queue: mailing.user.created | Exchange: user.topic | durable: true
-    queue_mailing_user_created = await _declare_and_bind(channel, "mailing.user.created", durable=True)
+    # Queue: crm.mailing.user.created (routing key: mailing.user.created)
+    # Exchange: user.topic | durable: true. Consumer-prefixed queue voorkomt
+    # collision met Mailing's eigen consumer-queue op user.topic.
+    queue_mailing_user_created = await _declare_and_bind(
+        channel,
+        "crm.mailing.user.created",
+        durable=True,
+        routing_key="mailing.user.created",
+    )
     await queue_mailing_user_created.consume(partial(handle_mailing_user_created, sf=sf_client))
 
     # Contract 28 — Mailing → CRM: update existing Mailing user sync
@@ -356,18 +413,37 @@ async def run_receiver(
     await queue_mailing_user_deactivated.consume(partial(handle_mailing_user_deactivated, sf=sf_client))
 
     # Contract 30 — Planning → CRM: new Planning user sync
-    # Queue: planning.user.created | Exchange: user.topic | durable: true
-    queue_planning_user_created = await _declare_and_bind(channel, "planning.user.created", durable=True)
+    # Queue: crm.planning.user.created (routing key: planning.user.created)
+    # Exchange: user.topic | durable: true. Consumer-prefixed queue voorkomt
+    # collision met Planning's eigen consumer-queue op user.topic.
+    queue_planning_user_created = await _declare_and_bind(
+        channel,
+        "crm.planning.user.created",
+        durable=True,
+        routing_key="planning.user.created",
+    )
     await queue_planning_user_created.consume(partial(handle_planning_user_created, sf=sf_client))
 
     # Contract 31 — Planning → CRM: update existing Planning user sync
-    # Queue: planning.user.updated | Exchange: user.topic | durable: true
-    queue_planning_user_updated = await _declare_and_bind(channel, "planning.user.updated", durable=True)
+    # Queue: crm.planning.user.updated (routing key: planning.user.updated)
+    # Exchange: user.topic | durable: true.
+    queue_planning_user_updated = await _declare_and_bind(
+        channel,
+        "crm.planning.user.updated",
+        durable=True,
+        routing_key="planning.user.updated",
+    )
     await queue_planning_user_updated.consume(partial(handle_planning_user_updated, sf=sf_client))
 
     # Contract 32 — Planning → CRM: deactivate existing Planning user sync
-    # Queue: planning.user.deactivated | Exchange: user.topic | durable: true
-    queue_planning_user_deactivated = await _declare_and_bind(channel, "planning.user.deactivated", durable=True)
+    # Queue: crm.planning.user.deactivated (routing key: planning.user.deactivated)
+    # Exchange: user.topic | durable: true.
+    queue_planning_user_deactivated = await _declare_and_bind(
+        channel,
+        "crm.planning.user.deactivated",
+        durable=True,
+        routing_key="planning.user.deactivated",
+    )
     await queue_planning_user_deactivated.consume(partial(handle_planning_user_deactivated, sf=sf_client))
 
     # Contract 3 — Frontend → CRM: create company
@@ -1051,7 +1127,7 @@ async def handle_planning_user_created(
 ) -> None:
     """Contract 30 — Planning -> CRM: create or attach a Planning user identity.
 
-    Queue: planning.user.created | durable: true
+    Queue: crm.planning.user.created (routing key: planning.user.created) | durable: true
 
     Behaviour:
     - Validate XML against schema.
@@ -1237,7 +1313,7 @@ async def handle_planning_user_updated(
 ) -> None:
     """Contract 31 — Planning -> CRM: update an existing Planning-linked user.
 
-    Queue: planning.user.updated | durable: true
+    Queue: crm.planning.user.updated (routing key: planning.user.updated) | durable: true
 
     Behaviour:
     - Validate XML against schema.
@@ -1345,7 +1421,7 @@ async def handle_planning_user_deactivated(
 ) -> None:
     """Contract 32 — Planning -> CRM: deactivate an existing Planning-linked user.
 
-    Queue: planning.user.deactivated | durable: true
+    Queue: crm.planning.user.deactivated (routing key: planning.user.deactivated) | durable: true
 
     Behaviour:
     - Validate XML against schema.
@@ -1430,7 +1506,7 @@ async def handle_mailing_user_created(
 ) -> None:
     """Contract 27 — Mailing -> CRM: create or attach a Mailing user identity.
 
-    Queue: mailing.user.created | durable: true
+    Queue: crm.mailing.user.created (routing key: mailing.user.created) | durable: true
 
     Behaviour:
     - Validate XML against schema.
@@ -1811,7 +1887,7 @@ async def handle_facturatie_user_created(
 ) -> None:
     """Contract 24 — Facturatie -> CRM: manually created user.
 
-    Queue: facturatie.user.created | durable: true
+    Queue: crm.facturatie.user.created (routing key: facturatie.user.created) | durable: true
 
     Behaviour:
     - Validate XML against schema.
@@ -1908,7 +1984,7 @@ async def handle_facturatie_user_updated(
 ) -> None:
     """Contract 25 — Facturatie -> CRM: update an existing CRM-linked user.
 
-    Queue: facturatie.user.updated | durable: true
+    Queue: crm.facturatie.user.updated (routing key: facturatie.user.updated) | durable: true
 
     The `<id>` field carries the CRM master UUID (received by Facturatie in
     crm.user.confirmed, Option 2 UUID strategy). CRM resolves the Contact by
@@ -2035,7 +2111,7 @@ async def handle_facturatie_user_deactivated(
 ) -> None:
     """Contract 26 — Facturatie -> CRM: deactivate an existing CRM-linked user.
 
-    Queue: facturatie.user.deactivated | durable: true
+    Queue: crm.facturatie.user.deactivated (routing key: facturatie.user.deactivated) | durable: true
 
     The `<id>` field carries the CRM master UUID. CRM resolves the Contact by
     `CRM_ID__c` and performs a soft delete only (GDPR audit trail).
@@ -2165,7 +2241,7 @@ async def handle_facturatie_company_created(
 ) -> None:
     """Contract 33 — Facturatie → CRM: new company created in FOSSBilling.
 
-    Queue: facturatie.company.created | durable: true | Exchange: company.topic
+    Queue: crm.facturatie.company.created (routing key: facturatie.company.created) | durable: true | Exchange: company.topic
 
     Behaviour:
     - Validate XML against schema.
@@ -2253,7 +2329,7 @@ async def handle_facturatie_company_updated(
 ) -> None:
     """Contract 34 — Facturatie → CRM: update existing CRM-linked company.
 
-    Queue: facturatie.company.updated | durable: true | Exchange: company.topic
+    Queue: crm.facturatie.company.updated (routing key: facturatie.company.updated) | durable: true | Exchange: company.topic
 
     The `<id>` field carries the CRM master UUID (received by Facturatie in
     crm.company.confirmed). CRM resolves the Account by CRM_ID__c.
@@ -2353,7 +2429,7 @@ async def handle_facturatie_company_deactivated(
 ) -> None:
     """Contract 35 — Facturatie → CRM: deactivate existing CRM-linked company.
 
-    Queue: facturatie.company.deactivated | durable: true | Exchange: company.topic
+    Queue: crm.facturatie.company.deactivated (routing key: facturatie.company.deactivated) | durable: true | Exchange: company.topic
 
     The `<id>` field carries the CRM master UUID. CRM resolves the Account by
     CRM_ID__c and performs a soft delete only (audit trail).
@@ -2429,7 +2505,7 @@ async def handle_facturatie_company_deactivated(
 async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
     """Contract 1 — Frontend -> CRM: new registration.
 
-    Queue: frontend.registration.created | durable: true | US-02, US-04, US-05, US-19
+    Queue: crm.frontend.registration.created (routing key: frontend.registration.created) | durable: true | US-02, US-04, US-05, US-19
 
     Behaviour:
     - Validate XML against schema.
@@ -2584,7 +2660,7 @@ def _build_updated_user_data(contact: dict) -> dict:
 async def handle_registration_updated(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
     """Contract 2 — Frontend -> CRM: registration update or cancellation.
 
-    Queue: frontend.registration.updated | durable: true | US-21 (R1), US-33 (R2)
+    Queue: crm.frontend.registration.updated (routing key: frontend.registration.updated) | durable: true | US-21 (R1), US-33 (R2)
 
     Behaviour:
     - Validate XML against schema (<RegistrationChange>).

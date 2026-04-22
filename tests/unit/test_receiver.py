@@ -5134,9 +5134,9 @@ class TestRunReceiver:
 
         queues, mock_declare, sf_client = await self._run_receiver()
 
-        self._assert_declared_queue(mock_declare, "frontend.registration.created", durable=True)
+        self._assert_declared_queue(mock_declare, "crm.frontend.registration.created", durable=True)
         self._assert_partial_callback(
-            queues["frontend.registration.created"], handle_registration, sf_client
+            queues["crm.frontend.registration.created"], handle_registration, sf_client
         )
 
     @pytest.mark.asyncio
@@ -5145,9 +5145,9 @@ class TestRunReceiver:
 
         queues, mock_declare, sf_client = await self._run_receiver()
 
-        self._assert_declared_queue(mock_declare, "frontend.registration.updated", durable=True)
+        self._assert_declared_queue(mock_declare, "crm.frontend.registration.updated", durable=True)
         self._assert_partial_callback(
-            queues["frontend.registration.updated"], handle_registration_updated, sf_client
+            queues["crm.frontend.registration.updated"], handle_registration_updated, sf_client
         )
 
     @pytest.mark.asyncio
@@ -5156,9 +5156,9 @@ class TestRunReceiver:
 
         queues, mock_declare, sf_client = await self._run_receiver()
 
-        self._assert_declared_queue(mock_declare, "facturatie.user.created", durable=True)
+        self._assert_declared_queue(mock_declare, "crm.facturatie.user.created", durable=True)
         self._assert_partial_callback(
-            queues["facturatie.user.created"], handle_facturatie_user_created, sf_client
+            queues["crm.facturatie.user.created"], handle_facturatie_user_created, sf_client
         )
 
     @pytest.mark.asyncio
@@ -5167,9 +5167,9 @@ class TestRunReceiver:
 
         queues, mock_declare, sf_client = await self._run_receiver()
 
-        self._assert_declared_queue(mock_declare, "facturatie.user.updated", durable=True)
+        self._assert_declared_queue(mock_declare, "crm.facturatie.user.updated", durable=True)
         self._assert_partial_callback(
-            queues["facturatie.user.updated"], handle_facturatie_user_updated, sf_client
+            queues["crm.facturatie.user.updated"], handle_facturatie_user_updated, sf_client
         )
 
     @pytest.mark.asyncio
@@ -5178,9 +5178,9 @@ class TestRunReceiver:
 
         queues, mock_declare, sf_client = await self._run_receiver()
 
-        self._assert_declared_queue(mock_declare, "facturatie.user.deactivated", durable=True)
+        self._assert_declared_queue(mock_declare, "crm.facturatie.user.deactivated", durable=True)
         self._assert_partial_callback(
-            queues["facturatie.user.deactivated"], handle_facturatie_user_deactivated, sf_client
+            queues["crm.facturatie.user.deactivated"], handle_facturatie_user_deactivated, sf_client
         )
 
     @pytest.mark.asyncio
@@ -5222,9 +5222,9 @@ class TestRunReceiver:
 
         queues, mock_declare, sf_client = await self._run_receiver()
 
-        self._assert_declared_queue(mock_declare, "mailing.user.created", durable=True)
+        self._assert_declared_queue(mock_declare, "crm.mailing.user.created", durable=True)
         self._assert_partial_callback(
-            queues["mailing.user.created"], handle_mailing_user_created, sf_client
+            queues["crm.mailing.user.created"], handle_mailing_user_created, sf_client
         )
 
     @pytest.mark.asyncio
@@ -5255,9 +5255,9 @@ class TestRunReceiver:
 
         queues, mock_declare, sf_client = await self._run_receiver()
 
-        self._assert_declared_queue(mock_declare, "planning.user.created", durable=True)
+        self._assert_declared_queue(mock_declare, "crm.planning.user.created", durable=True)
         self._assert_partial_callback(
-            queues["planning.user.created"], handle_planning_user_created, sf_client
+            queues["crm.planning.user.created"], handle_planning_user_created, sf_client
         )
 
     @pytest.mark.asyncio
@@ -5266,9 +5266,9 @@ class TestRunReceiver:
 
         queues, mock_declare, sf_client = await self._run_receiver()
 
-        self._assert_declared_queue(mock_declare, "planning.user.deactivated", durable=True)
+        self._assert_declared_queue(mock_declare, "crm.planning.user.deactivated", durable=True)
         self._assert_partial_callback(
-            queues["planning.user.deactivated"], handle_planning_user_deactivated, sf_client
+            queues["crm.planning.user.deactivated"], handle_planning_user_deactivated, sf_client
         )
 
     @pytest.mark.asyncio
