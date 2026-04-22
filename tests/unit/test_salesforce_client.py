@@ -55,6 +55,8 @@ def sf(monkeypatch):
     salesforce_client_module._account_active_field_cache = None
     salesforce_client_module._planning_id_field_supported_cache = None
     salesforce_client_module._session_registration_object_supported_cache = None
+    salesforce_client_module._account_email_field_cache = None
+    salesforce_client_module._account_country_field_cache = None
 
     async def immediate_to_thread(func, /, *args, **kwargs):
         return func(*args, **kwargs)
@@ -1725,6 +1727,88 @@ async def test_deactivate_account_record_sets_active_false(sf):
 
     sf.Account.update.assert_called_once_with("001000000000300", {"IsActive__c": False})
     assert result["IsActive__c"] is False
+
+
+@pytest.mark.asyncio
+async def test_resolve_account_country_field_prefers_billing_country_code(sf):
+    """Regression — 2026-04-22 production FIELD_INTEGRITY_EXCEPTION.
+
+    Salesforce orgs with State & Country Picklists enabled have a read-only
+    BillingCountry and require writes to go to BillingCountryCode (ISO-2).
+    Resolver must prefer BillingCountryCode when it exists.
+    """
+    from src.salesforce_client import _resolve_account_country_field
+
+    sf.Account.describe.return_value = {
+        "fields": [
+            {"name": "BillingCountry"},
+            {"name": "BillingCountryCode"},
+            {"name": "BillingCity"},
+        ]
+    }
+
+    result = await _resolve_account_country_field(sf)
+
+    assert result == "BillingCountryCode"
+
+
+@pytest.mark.asyncio
+async def test_resolve_account_country_field_falls_back_to_billing_country(sf):
+    """Orgs without picklists only have BillingCountry (free text)."""
+    from src.salesforce_client import _resolve_account_country_field
+
+    sf.Account.describe.return_value = {
+        "fields": [{"name": "BillingCountry"}, {"name": "BillingCity"}]
+    }
+
+    result = await _resolve_account_country_field(sf)
+
+    assert result == "BillingCountry"
+
+
+@pytest.mark.asyncio
+async def test_update_facturatie_account_writes_to_resolved_country_field(sf):
+    """update_facturatie_account must honour the picklist-enabled org layout."""
+    sf.Account.describe.return_value = {
+        "fields": [
+            {"name": "Email__c"},
+            {"name": "Name"},
+            {"name": "BillingCountry"},
+            {"name": "BillingCountryCode"},
+        ]
+    }
+    account = {
+        "Id": "001000000000400",
+        "Name": "Acme",
+        "VAT_Number__c": "BE0123456789",
+        "Email__c": "a@b.c",
+        "Phone": None,
+        "BillingStreet": None,
+        "BillingPostalCode": None,
+        "BillingCity": None,
+        "BillingCountry": "Belgium",
+        "BillingCountryCode": "BE",
+    }
+    sf.Account.get.return_value = {**account, "BillingCountryCode": "NL"}
+
+    await update_facturatie_account(
+        sf,
+        account,
+        vat_number="BE0123456789",
+        name="Acme",
+        email="a@b.c",
+        phone=None,
+        street=None,
+        house_number=None,
+        postal_code=None,
+        city=None,
+        country="NL",
+    )
+
+    # Should update BillingCountryCode (picklist-enabled path), not BillingCountry.
+    sf.Account.update.assert_called_once()
+    updates = sf.Account.update.call_args[0][1]
+    assert updates == {"BillingCountryCode": "NL"}
 
 
 @pytest.mark.asyncio
