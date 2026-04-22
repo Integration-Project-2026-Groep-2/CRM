@@ -19,12 +19,15 @@ from src.salesforce_client import (
     backfill_mailing_contact_fields,
     backfill_planning_contact_fields,
     coerce_is_active,
+    count_active_contacts_for_company,
     count_active_session_registrations,
     create_contact,
+    deactivate_account_by_crm_id,
     deactivate_contact_record,
     deactivate_session_registration,
     ensure_contact_identifiers,
     ensure_session_registration_active,
+    get_account_by_crm_id,
     get_active_session_participants,
     get_contact_by_email,
     get_contact_for_person_lookup,
@@ -659,6 +662,15 @@ def _build_user_deactivation_data(contact: dict, deactivated_at: str) -> dict[st
     return {
         "id": contact["CRM_ID__c"],
         "email": contact["Email"],
+        "deactivatedAt": deactivated_at,
+    }
+
+
+def _build_company_deactivation_data(account: dict, deactivated_at: str) -> dict[str, str]:
+    """Build the outbound Contract 23 payload from a Salesforce Account."""
+    return {
+        "id": account["CRM_ID__c"],
+        "vatNumber": account["VAT_Number__c"],
         "deactivatedAt": deactivated_at,
     }
 
@@ -2300,6 +2312,7 @@ async def _handle_cancellation(
         await message.ack()
         return
 
+    deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     session_registration = await deactivate_session_registration(
         sf,
         registration_id=registration_id,
@@ -2339,10 +2352,60 @@ async def _handle_cancellation(
             return
 
     contact = await deactivate_contact_record(sf, contact, log_value=email)
-    deactivation_data = _build_user_deactivation_data(
-        contact,
-        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    )
+    deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    deactivation_data = _build_user_deactivation_data(contact, deactivated_at)
     await sender.publish_user_deactivated(deactivation_data)
     logger.info("Published crm.user.deactivated for %s", email)
+
+    company_id = _normalize_optional_text(contact.get("Company_ID__c"))
+    if company_id is not None:
+        # C1 fix — sibling guard: only deactivate the Account when this is
+        # the last active Contact on the company. Multiple contacts can share
+        # the same Company_ID__c; one cancellation must not wipe the whole
+        # company link.
+        #
+        # C2 fix — pre-validate: look up the Account *before* mutating SF so
+        # we never soft-delete an Account that lacks VAT_Number__c (which
+        # would prevent Contract 23 from firing → split-brain).
+        #
+        # H2 fix — wrap in try/except: if this block raises after
+        # publish_user_deactivated already fired, we still ack the message
+        # to prevent Contract 22 re-fire on redelivery. The company
+        # reconciliation can happen separately.
+        try:
+            sibling_count = await count_active_contacts_for_company(sf, company_id)
+            if sibling_count > 0:
+                logger.info(
+                    "Skipping Account deactivation for Company_ID__c %s — %d other active contact(s) remain",
+                    company_id,
+                    sibling_count,
+                )
+            else:
+                account = await get_account_by_crm_id(sf, company_id)
+                if account is None:
+                    logger.warning(
+                        "Contact %s is linked to Company_ID__c %s, but Account was not found",
+                        email,
+                        company_id,
+                    )
+                elif not account.get("VAT_Number__c"):
+                    logger.warning(
+                        "Account %s has no VAT_Number__c; skipping deactivation to avoid split-brain (Contract 23 cannot fire)",
+                        company_id,
+                    )
+                else:
+                    account = await deactivate_account_by_crm_id(sf, company_id)
+                    if account is not None:
+                        company_deactivation_data = _build_company_deactivation_data(account, deactivated_at)
+                        await sender.publish_company_deactivated(company_deactivation_data)
+                        logger.info(
+                            "Published crm.company.deactivated for company CRM_ID__c %s",
+                            company_id,
+                        )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Company deactivation failed for Company_ID__c %s after user deactivation was already published; acking to prevent Contract 22 re-fire",
+                company_id,
+            )
+
     await message.ack()
