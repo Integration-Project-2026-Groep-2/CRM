@@ -613,11 +613,11 @@
         <xs:element name="name"        type="xs:string"/>
         <xs:element name="email"       type="EmailType"/>
         <xs:element name="phone"       type="xs:string"       minOccurs="0"/>
-        <xs:element name="street"      type="xs:string"       minOccurs="0"/>
-        <xs:element name="houseNumber" type="xs:string"       minOccurs="0"/>
-        <xs:element name="postalCode"  type="xs:string"       minOccurs="0"/>
-        <xs:element name="city"        type="xs:string"       minOccurs="0"/>
-        <xs:element name="country"     type="CountryCodeType" minOccurs="0"/>
+        <xs:element name="street"      type="xs:string"/>
+        <xs:element name="houseNumber" type="xs:string"/>
+        <xs:element name="postalCode"  type="xs:string"/>
+        <xs:element name="city"        type="xs:string"/>
+        <xs:element name="country"     type="CountryCodeType"/>
         <xs:element name="isActive"    type="xs:boolean"/>
         <xs:element name="confirmedAt" type="ISO8601DateTimeType"/>
       </xs:sequence>

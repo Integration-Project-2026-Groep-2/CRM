@@ -243,6 +243,11 @@ class TestPublishCompanyConfirmed:
         "vatNumber": "BE0123456789",
         "name": "Acme NV",
         "email": "info@acme.be",
+        "street": "Main Street",
+        "houseNumber": "42",
+        "postalCode": "1000",
+        "city": "Brussels",
+        "country": "BE",
         "isActive": True,
         "confirmedAt": "2025-01-01T10:00:00Z",
     }
@@ -283,21 +288,16 @@ class TestPublishCompanyConfirmed:
             v.side_effect = lambda b: etree.fromstring(b)
             await sender.publish_company_confirmed(self.BASE_DATA)
         xml = _get_published_xml(setup_sender)
-        for field in ["id", "vatNumber", "name", "email", "isActive", "confirmedAt"]:
+        for field in ["id", "vatNumber", "name", "email", "street", "houseNumber", "postalCode", "city", "country", "isActive", "confirmedAt"]:
             assert xml.find(field) is not None, f"Required field '{field}' missing"
 
     @pytest.mark.asyncio
-    async def test_optional_fields_included_in_sequence_when_present(self, setup_sender):
+    async def test_phone_included_when_present(self, setup_sender):
         with patch("src.xml_validator.validate") as v:
             v.side_effect = lambda b: etree.fromstring(b)
             await sender.publish_company_confirmed(self.FULL_DATA)
         xml = _get_published_xml(setup_sender)
         assert xml.findtext("phone") == "+32 2 123 45 67"
-        assert xml.findtext("street") == "Main Street"
-        assert xml.findtext("houseNumber") == "42"
-        assert xml.findtext("postalCode") == "1000"
-        assert xml.findtext("city") == "Brussels"
-        assert xml.findtext("country") == "BE"
         tags = [child.tag for child in xml]
         assert tags.index("email") < tags.index("phone") < tags.index("street") < tags.index("houseNumber") < tags.index("postalCode") < tags.index("city") < tags.index("country") < tags.index("isActive") < tags.index("confirmedAt")
 

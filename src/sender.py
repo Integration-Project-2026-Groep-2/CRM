@@ -232,9 +232,10 @@ async def publish_company_confirmed(company_data: dict[str, Any]) -> None:
     """Contract 14 — Publish company confirmation after creation.
 
     Required keys in company_data:
-        id, vatNumber, name, email, isActive, confirmedAt
+        id, vatNumber, name, email, street, houseNumber, postalCode,
+        city, country, isActive, confirmedAt
     Optional keys:
-        phone, street, houseNumber, postalCode, city, country
+        phone
     """
     root = etree.Element("CompanyConfirmed")
 
@@ -243,9 +244,11 @@ async def publish_company_confirmed(company_data: dict[str, Any]) -> None:
     etree.SubElement(root, "name").text = company_data["name"]
     etree.SubElement(root, "email").text = company_data["email"]
 
-    for field in ("phone", "street", "houseNumber", "postalCode", "city", "country"):
-        if field in company_data:
-            etree.SubElement(root, field).text = str(company_data[field])
+    if "phone" in company_data:
+        etree.SubElement(root, "phone").text = str(company_data["phone"])
+
+    for field in ("street", "houseNumber", "postalCode", "city", "country"):
+        etree.SubElement(root, field).text = str(company_data[field])
 
     etree.SubElement(root, "isActive").text = str(company_data["isActive"]).lower()
     etree.SubElement(root, "confirmedAt").text = company_data["confirmedAt"]
