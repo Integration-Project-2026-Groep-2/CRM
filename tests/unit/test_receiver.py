@@ -3480,6 +3480,29 @@ VALID_UNPAID_REQUEST_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <requestId>UNPAID-001</requestId>
 </UnpaidRequest>"""
 
+VALID_PERSON_LOOKUP_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<PersonLookupRequest>
+    <requestId>LOOKUP-001</requestId>
+    <email>john.doe@example.com</email>
+</PersonLookupRequest>"""
+
+PERSON_LOOKUP_CONTACT_WITH_ACCOUNT = {
+    "Id": "003000000000055",
+    "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440099",
+    "AccountId": "001000000000055",
+    "Account": {
+        "Name": "Acme NV",
+        "CRM_ID__c": "660e8400-e29b-41d4-a716-446655440055",
+    },
+}
+
+PERSON_LOOKUP_CONTACT_WITHOUT_ACCOUNT = {
+    "Id": "003000000000066",
+    "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440066",
+    "AccountId": None,
+    "Account": None,
+}
+
 UPDATED_CONTACT_RETURN = {
     "Id": "003000000000099",
     "CRM_ID__c": "550e8400-e29b-41d4-a716-446655440099",
@@ -4291,6 +4314,129 @@ class TestHandleUnpaidRequested:
 
             # Transient error → republish acks original + publishes new copy
             # with incremented x-retry-count (instead of raw reject(requeue=True)).
+            msg.ack.assert_awaited_once()
+            msg.reject.assert_not_called()
+
+
+# ==========================================================================
+# Contract 10a: kassa.person.lookup.requested  →  Contract 10b response
+# ==========================================================================
+
+
+class TestHandlePersonLookup:
+    @pytest.fixture
+    def sf_mock(self):
+        return AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_publishes_found_true_with_company_when_contact_linked(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PERSON_LOOKUP_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch(
+                "src.receiver.get_contact_for_person_lookup",
+                return_value=PERSON_LOOKUP_CONTACT_WITH_ACCOUNT,
+            ) as mock_lookup,
+            patch("src.sender.publish_person_lookup_responded") as mock_publish,
+        ):
+            from src.receiver import handle_person_lookup
+
+            msg = _make_message(VALID_PERSON_LOOKUP_XML)
+            await handle_person_lookup(msg, sf_mock)
+
+            mock_lookup.assert_called_once_with(sf_mock, "john.doe@example.com")
+            mock_publish.assert_called_once_with(
+                "LOOKUP-001",
+                {
+                    "found": True,
+                    "linkedToCompany": True,
+                    "id": "550e8400-e29b-41d4-a716-446655440099",
+                    "companyName": "Acme NV",
+                    "companyId": "660e8400-e29b-41d4-a716-446655440055",
+                },
+            )
+            msg.ack.assert_called_once()
+            msg.reject.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_publishes_found_true_without_company_when_contact_not_linked(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PERSON_LOOKUP_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch(
+                "src.receiver.get_contact_for_person_lookup",
+                return_value=PERSON_LOOKUP_CONTACT_WITHOUT_ACCOUNT,
+            ),
+            patch("src.sender.publish_person_lookup_responded") as mock_publish,
+        ):
+            from src.receiver import handle_person_lookup
+
+            msg = _make_message(VALID_PERSON_LOOKUP_XML)
+            await handle_person_lookup(msg, sf_mock)
+
+            mock_publish.assert_called_once_with(
+                "LOOKUP-001",
+                {
+                    "found": True,
+                    "linkedToCompany": False,
+                    "id": "550e8400-e29b-41d4-a716-446655440066",
+                },
+            )
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_publishes_found_false_when_contact_missing(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PERSON_LOOKUP_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_contact_for_person_lookup", return_value=None),
+            patch("src.sender.publish_person_lookup_responded") as mock_publish,
+        ):
+            from src.receiver import handle_person_lookup
+
+            msg = _make_message(VALID_PERSON_LOOKUP_XML)
+            await handle_person_lookup(msg, sf_mock)
+
+            mock_publish.assert_called_once_with(
+                "LOOKUP-001",
+                {"found": False, "linkedToCompany": False},
+            )
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_xml_without_requeue(self, sf_mock):
+        with (
+            patch("src.xml_validator.validate", side_effect=ValueError("Bad XML")),
+            patch("src.receiver.get_contact_for_person_lookup") as mock_lookup,
+            patch("src.sender.publish_person_lookup_responded") as mock_publish,
+        ):
+            from src.receiver import handle_person_lookup
+
+            msg = _make_message(INVALID_XML)
+            await handle_person_lookup(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+            mock_lookup.assert_not_called()
+            mock_publish.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_requeues_on_salesforce_error(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_PERSON_LOOKUP_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch(
+                "src.receiver.get_contact_for_person_lookup",
+                side_effect=Exception("SF Down"),
+            ),
+            patch("src.sender.publish_person_lookup_responded"),
+        ):
+            from src.receiver import handle_person_lookup
+
+            msg = _make_message(VALID_PERSON_LOOKUP_XML)
+            await handle_person_lookup(msg, sf_mock)
+
+            # Transient error → _handle_processing_error acks original and
+            # republishes with incremented x-retry-count (no raw reject).
             msg.ack.assert_awaited_once()
             msg.reject.assert_not_called()
 

@@ -132,10 +132,10 @@ INBOUND_TESTS: list[TestCase] = [
         durable=True,
         direction="inbound",
         xml="""<?xml version='1.0' encoding='utf-8'?>
-<PersonLookup>
+<PersonLookupRequest>
     <requestId>REQ-EXTEST-002</requestId>
     <email>exchange.test@example.com</email>
-</PersonLookup>""",
+</PersonLookupRequest>""",
     ),
     TestCase(
         name="C16 — Kassa: betaling bevestigd",
@@ -314,12 +314,12 @@ OUTBOUND_TESTS: list[TestCase] = [
         durable=False,
         direction="outbound",
         xml="""<?xml version='1.0' encoding='utf-8'?>
-<PersonResponse>
+<PersonLookupResponse>
     <requestId>REQ-EXTEST-002</requestId>
     <found>true</found>
     <linkedToCompany>false</linkedToCompany>
     <id>550e8400-e29b-41d4-a716-446655440000</id>
-</PersonResponse>""",
+</PersonLookupResponse>""",
     ),
     TestCase(
         name="C17b — CRM: unpaid response",
