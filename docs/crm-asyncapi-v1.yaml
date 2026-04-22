@@ -34,10 +34,12 @@ channels:
   # ============================================================
 
   frontendRegistrationCreated:
-    address: frontend.registration.created
+    address: crm.frontend.registration.created
     description: >-
       Contract 1 — Frontend → CRM: nieuwe inschrijving aanmaken (US-02, US-03,
-      US-04, US-05, US-19 | R1)
+      US-04, US-05, US-19 | R1). Queue-naam gebruikt consumer-prefix (`crm.`) om
+      collision met Frontend's eigen consumer-queues op user.topic te vermijden.
+      Frontend publiceert nog steeds met routing key `frontend.registration.created`.
     messages:
       registrationCreated:
         $ref: "#/components/messages/RegistrationCreated"
@@ -48,10 +50,11 @@ channels:
           durable: true
 
   frontendRegistrationUpdated:
-    address: frontend.registration.updated
+    address: crm.frontend.registration.updated
     description: >-
       Contract 2 — Frontend → CRM: inschrijving wijzigen of annuleren (US-21 R1,
-      US-33 R2)
+      US-33 R2). Queue-naam gebruikt consumer-prefix. Frontend publiceert met
+      routing key `frontend.registration.updated`.
     messages:
       registrationChanged:
         $ref: "#/components/messages/RegistrationChanged"
@@ -90,10 +93,12 @@ channels:
   # ============================================================
 
   facturatieUserCreated:
-    address: facturatie.user.created
+    address: crm.facturatie.user.created
     description: >-
       Contract 24 — Facturatie → CRM: handmatig aangemaakte klant in FOSSBilling
       synchroniseren naar Salesforce en een officiële CRM UUID laten toekennen.
+      Queue-naam gebruikt consumer-prefix. Facturatie publiceert met routing key
+      `facturatie.user.created`.
     messages:
       facturatieUserCreated:
         $ref: "#/components/messages/FacturatieUserCreated"
@@ -104,7 +109,7 @@ channels:
           durable: true
 
   facturatieUserUpdated:
-    address: facturatie.user.updated
+    address: crm.facturatie.user.updated
     description: >-
       Contract 25 — Facturatie → CRM: bestaande CRM-linked user vanuit
       Facturatie bijwerken in Salesforce.
@@ -118,7 +123,7 @@ channels:
           durable: true
 
   facturatieUserDeactivated:
-    address: facturatie.user.deactivated
+    address: crm.facturatie.user.deactivated
     description: >-
       Contract 26 — Facturatie → CRM: bestaande CRM-linked user soft-deactiveren
       in Salesforce.
@@ -132,7 +137,7 @@ channels:
           durable: true
 
   facturatieCompanyCreated:
-    address: facturatie.company.created
+    address: crm.facturatie.company.created
     description: >-
       Contract 33 (v1.9.0) — Facturatie → CRM: nieuw bedrijf aangemaakt in
       FOSSBilling. Queue bindt aan de `company.topic` exchange (eigenaar:
@@ -155,7 +160,7 @@ channels:
           durable: true
 
   facturatieCompanyUpdated:
-    address: facturatie.company.updated
+    address: crm.facturatie.company.updated
     description: >-
       Contract 34 (v1.9.0) — Facturatie → CRM: bestaand CRM-gekoppeld bedrijf
       volledig bijwerken. Resolveert strikt op `CRM_ID__c`; onbekend →
@@ -176,7 +181,7 @@ channels:
           durable: true
 
   facturatieCompanyDeactivated:
-    address: facturatie.company.deactivated
+    address: crm.facturatie.company.deactivated
     description: >-
       Contract 35 (v1.9.0) — Facturatie → CRM: bedrijf deactiveren. Resolveert
       op `CRM_ID__c`, voert soft delete uit via `IsActive__c` (dynamic
@@ -200,7 +205,7 @@ channels:
   # ============================================================
 
   mailingUserCreated:
-    address: mailing.user.created
+    address: crm.mailing.user.created
     description: >-
       Contract 27 — Mailing → CRM: nieuwe Mailing-user synchroniseren naar
       Salesforce. Payload volgt de Mailing XSD met verplichte velden id, email
@@ -276,7 +281,7 @@ channels:
   # ============================================================
 
   planningUserCreated:
-    address: planning.user.created
+    address: crm.planning.user.created
     description: >-
       Contract 30 — Planning → CRM: Planning-user synchroniseren naar
       Salesforce (Planning ref 21). Payload volgt de Planning XSD met
@@ -293,7 +298,7 @@ channels:
           durable: true
 
   planningUserUpdated:
-    address: planning.user.updated
+    address: crm.planning.user.updated
     description: >-
       Contract 31 — Planning → CRM: bestaande Planning-user bijwerken in
       Salesforce (Planning ref 22). Planning verstuurt een volledig object met
@@ -308,7 +313,7 @@ channels:
           durable: true
 
   planningUserDeactivated:
-    address: planning.user.deactivated
+    address: crm.planning.user.deactivated
     description: >-
       Contract 32 — Planning → CRM: bestaande Planning-user soft-deactiveren
       in Salesforce (Planning ref 23).

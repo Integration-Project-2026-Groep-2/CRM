@@ -174,10 +174,13 @@ async def test_facturatie_company_deactivated_flows_through_company_topic(_skip_
 @pytest.mark.asyncio
 async def test_receiver_inbound_exchange_map_includes_company_topic_entries():
     """Fast sanity check (no broker needed): _INBOUND_EXCHANGE maps all three
-    new queues to company.topic. Guards against accidental removal / rename.
+    consumer-prefixed queues to company.topic. Guards against accidental
+    removal / rename. Producers still publish with the old routing key; the
+    queue-name is prefixed with `crm.` to avoid collision with Facturatie's
+    own consumer-queues on company.topic.
     """
     from src.receiver import _INBOUND_EXCHANGE
 
-    assert _INBOUND_EXCHANGE["facturatie.company.created"] == "company.topic"
-    assert _INBOUND_EXCHANGE["facturatie.company.updated"] == "company.topic"
-    assert _INBOUND_EXCHANGE["facturatie.company.deactivated"] == "company.topic"
+    assert _INBOUND_EXCHANGE["crm.facturatie.company.created"] == "company.topic"
+    assert _INBOUND_EXCHANGE["crm.facturatie.company.updated"] == "company.topic"
+    assert _INBOUND_EXCHANGE["crm.facturatie.company.deactivated"] == "company.topic"

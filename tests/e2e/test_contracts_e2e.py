@@ -144,8 +144,8 @@ async def ensure_local_e2e_stack():
 
     await asyncio.to_thread(_compose_up_local_stack)
     await _wait_for_local_rabbitmq()
-    await _wait_for_receiver_queue("frontend.registration.created")
-    await _wait_for_receiver_queue("mailing.user.created")
+    await _wait_for_receiver_queue("crm.frontend.registration.created")
+    await _wait_for_receiver_queue("crm.mailing.user.created")
     await _wait_for_receiver_queue("crm.mailing.user.deactivated")
 
 
@@ -520,7 +520,7 @@ class TestContract27MailingUserCreated:
     async def test_new_mailing_user_produces_user_confirmed_without_mail_request(
         self, channel, inbound_exchanges, outbound_exchange, sf_client,
     ):
-        await _wait_for_receiver_queue("mailing.user.created")
+        await _wait_for_receiver_queue("crm.mailing.user.created")
         await _require_salesforce_contact_field(sf_client, "Mailing_ID__c")
 
         email = _unique_email()
@@ -564,7 +564,7 @@ class TestContract27MailingUserCreated:
     async def test_duplicate_email_with_different_data_produces_user_conflict(
         self, channel, inbound_exchanges, outbound_exchange, sf_client,
     ):
-        await _wait_for_receiver_queue("mailing.user.created")
+        await _wait_for_receiver_queue("crm.mailing.user.created")
         await _require_salesforce_contact_field(sf_client, "Mailing_ID__c")
 
         email = _unique_email()
@@ -631,7 +631,7 @@ class TestContract28MailingUserUpdated:
     async def test_existing_mailing_user_update_produces_user_updated(
         self, channel, inbound_exchanges, outbound_exchange, sf_client,
     ):
-        await _wait_for_receiver_queue("mailing.user.created")
+        await _wait_for_receiver_queue("crm.mailing.user.created")
         await _wait_for_receiver_queue("crm.mailing.user.updated")
         await _require_salesforce_contact_field(sf_client, "Mailing_ID__c")
 
@@ -700,8 +700,8 @@ class TestContract25FacturatieUserUpdated:
     async def test_existing_facturatie_user_update_produces_user_updated(
         self, channel, inbound_exchanges, outbound_exchange, sf_client,
     ):
-        await _wait_for_receiver_queue("facturatie.user.created")
-        await _wait_for_receiver_queue("facturatie.user.updated")
+        await _wait_for_receiver_queue("crm.facturatie.user.created")
+        await _wait_for_receiver_queue("crm.facturatie.user.updated")
 
         email = _unique_email()
         registration_id = f"REG-E2E-FACT-{random.randint(100000, 999999)}"
@@ -786,8 +786,8 @@ class TestContract26FacturatieUserDeactivated:
     async def test_existing_facturatie_user_deactivated_produces_user_deactivated(
         self, channel, inbound_exchanges, outbound_exchange, sf_client,
     ):
-        await _wait_for_receiver_queue("facturatie.user.created")
-        await _wait_for_receiver_queue("facturatie.user.deactivated")
+        await _wait_for_receiver_queue("crm.facturatie.user.created")
+        await _wait_for_receiver_queue("crm.facturatie.user.deactivated")
 
         email = _unique_email()
         registration_id = f"REG-E2E-FACT-{random.randint(100000, 999999)}"
@@ -850,7 +850,7 @@ class TestContract29MailingUserDeactivated:
     async def test_existing_mailing_user_deactivated_produces_user_deactivated(
         self, channel, inbound_exchanges, outbound_exchange, sf_client,
     ):
-        await _wait_for_receiver_queue("mailing.user.created")
+        await _wait_for_receiver_queue("crm.mailing.user.created")
         await _wait_for_receiver_queue("crm.mailing.user.deactivated")
         await _require_salesforce_contact_field(sf_client, "Mailing_ID__c")
 
@@ -912,8 +912,8 @@ class TestContract32PlanningUserDeactivated:
     async def test_existing_planning_user_deactivated_produces_user_deactivated(
         self, channel, inbound_exchanges, outbound_exchange, sf_client,
     ):
-        await _wait_for_receiver_queue("planning.user.created")
-        await _wait_for_receiver_queue("planning.user.deactivated")
+        await _wait_for_receiver_queue("crm.planning.user.created")
+        await _wait_for_receiver_queue("crm.planning.user.deactivated")
         await _require_salesforce_contact_field(sf_client, "Planning_ID__c")
 
         email = _unique_email()

@@ -43,10 +43,17 @@ async def main() -> None:
         print(f"FAIL — {e}")
         sys.exit(1)
 
-    # --- Step 1b: Declare queue (in productie doet het consuming team dit) ---
-    print("Declaring queue crm.user.updated (durable=true)...")
-    queue = await channel.declare_queue("crm.user.updated", durable=True)
-    print(f"PASS — Queue ready ({queue.declaration_result.message_count} existing messages)\n")
+    # --- Step 1b: Observation queue for this test (in productie doet het consuming team dit) ---
+    print("Declaring exclusive observation queue bound to contact.topic with routing key crm.user.updated...")
+    from aio_pika import ExchangeType
+    contact_exchange = await channel.declare_exchange(
+        "contact.topic", ExchangeType.TOPIC, durable=True,
+    )
+    queue = await channel.declare_queue(
+        "crm.debug.c18-test.user.updated", exclusive=True, auto_delete=True,
+    )
+    await queue.bind(contact_exchange, routing_key="crm.user.updated")
+    print("PASS — Queue ready (exclusive, auto-delete)\n")
 
     # --- Step 2: Publish with required fields only ---
     print("=" * 50)
