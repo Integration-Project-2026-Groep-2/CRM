@@ -25,9 +25,20 @@ async def main():
     async with connection:
         channel = await connection.channel()
         user_exchange = await channel.declare_exchange("user.topic", ExchangeType.TOPIC, durable=True)
+        contact_exchange = await channel.declare_exchange(
+            "contact.topic", ExchangeType.TOPIC, durable=True,
+        )
 
-        updated_q = await channel.declare_queue("crm.user.updated", durable=True)
-        deactivated_q = await channel.declare_queue("crm.user.deactivated", durable=True)
+        # Exclusive observation queues — auto-deleted on disconnect, isolated
+        # from real consumer queues that other teams may maintain.
+        updated_q = await channel.declare_queue(
+            "crm.debug.docker-test.user.updated", exclusive=True, auto_delete=True,
+        )
+        await updated_q.bind(contact_exchange, routing_key="crm.user.updated")
+        deactivated_q = await channel.declare_queue(
+            "crm.debug.docker-test.user.deactivated", exclusive=True, auto_delete=True,
+        )
+        await deactivated_q.bind(contact_exchange, routing_key="crm.user.deactivated")
 
         r = random.randint(1000, 9999)
         email = f"docker.test.user.{r}@example.com"
@@ -53,8 +64,13 @@ async def main():
         print("      Waiting 8 seconds for CRM to create contact in Salesforce...")
         await asyncio.sleep(8)
 
-        # Drain the crm.user.confirmed message to keep queues clean
-        confirmed_q = await channel.declare_queue("crm.user.confirmed", durable=True)
+        # Observe crm.user.confirmed so we know CRM received our registration.
+        # Exclusive queue — auto-deleted on disconnect to avoid collision with
+        # other teams' real consumer queues on contact.topic.
+        confirmed_q = await channel.declare_queue(
+            "crm.debug.docker-test.user.confirmed", exclusive=True, auto_delete=True,
+        )
+        await confirmed_q.bind(contact_exchange, routing_key="crm.user.confirmed")
         confirmed_msg = await confirmed_q.get(fail=False)
         if confirmed_msg:
             await confirmed_msg.ack()

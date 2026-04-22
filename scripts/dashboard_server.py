@@ -220,7 +220,14 @@ async def handle_post_event(request: web.Request) -> web.Response:
 # ---------------------------------------------------------------------------
 
 async def _rmq_startup(app: web.Application) -> None:
-    """Open persistent RabbitMQ connection and drain stale messages."""
+    """Open persistent RabbitMQ connection and declare observation queues.
+
+    Uses `exclusive=True, auto_delete=True` for the dashboard's own
+    observation queues bound to `contact.topic`. This prevents the dashboard
+    from accidentally sharing a durable queue with another team's real
+    consumer on the same routing key (which would cause round-robin
+    load-balancing and message loss).
+    """
     rmq_url = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost/")
     try:
         app["rmq_conn"] = await aio_pika.connect_robust(rmq_url)
@@ -229,20 +236,25 @@ async def _rmq_startup(app: web.Application) -> None:
         app["rmq_user_exchange"] = await app["rmq_channel"].declare_exchange(
             "user.topic", ExchangeType.TOPIC, durable=True,
         )
-
-        # Drain stale messages from response queues (once at startup)
         ch = app["rmq_channel"]
-        for q_name in ("crm.user.confirmed", "crm.user.updated", "crm.user.deactivated"):
-            q = await ch.declare_queue(q_name, durable=True)
-            drained = 0
-            while True:
-                msg = await q.get(fail=False)
-                if not msg:
-                    break
-                await msg.ack()
-                drained += 1
-            if drained:
-                logger.info("Drained %d stale message(s) from %s", drained, q_name)
+        contact_exchange = await ch.declare_exchange(
+            "contact.topic", ExchangeType.TOPIC, durable=True,
+        )
+        app["rmq_contact_exchange"] = contact_exchange
+
+        # Dashboard's own observation queues — exclusive to this connection,
+        # auto-deleted on disconnect, bound to contact.topic with the CRM
+        # outbound routing keys. Prefix `crm.dashboard.*` makes them easy to
+        # spot in the RabbitMQ UI without colliding with real consumers.
+        app["rmq_observation_queues"] = {}
+        for routing_key in ("crm.user.confirmed", "crm.user.updated", "crm.user.deactivated"):
+            q = await ch.declare_queue(
+                f"crm.dashboard.user.{routing_key.split('.')[-1]}",
+                exclusive=True,
+                auto_delete=True,
+            )
+            await q.bind(contact_exchange, routing_key=routing_key)
+            app["rmq_observation_queues"][routing_key] = q
     except Exception as exc:
         logger.warning("RabbitMQ connection failed: %s — CRUD buttons will be disabled", exc)
         app["rmq_conn"] = None
@@ -293,7 +305,7 @@ async def handle_crud_create(request: web.Request) -> web.Response:
     <phone>+3247{r}</phone>
 </Registration>""".encode("utf-8")
 
-    response_q = await ch.declare_queue("crm.user.confirmed", durable=True)
+    response_q = request.app["rmq_observation_queues"]["crm.user.confirmed"]
     user_exchange = request.app["rmq_user_exchange"]
     await user_exchange.publish(
         aio_pika.Message(body=xml, delivery_mode=DeliveryMode.PERSISTENT),
@@ -334,7 +346,7 @@ async def handle_crud_update(request: web.Request) -> web.Response:
     </updatedFields>
 </RegistrationChange>""".encode("utf-8")
 
-    response_q = await ch.declare_queue("crm.user.updated", durable=True)
+    response_q = request.app["rmq_observation_queues"]["crm.user.updated"]
     user_exchange = request.app["rmq_user_exchange"]
     await user_exchange.publish(
         aio_pika.Message(body=xml, delivery_mode=DeliveryMode.PERSISTENT),
@@ -368,7 +380,7 @@ async def handle_crud_delete(request: web.Request) -> web.Response:
     <changeType>cancelled</changeType>
 </RegistrationChange>""".encode("utf-8")
 
-    response_q = await ch.declare_queue("crm.user.deactivated", durable=True)
+    response_q = request.app["rmq_observation_queues"]["crm.user.deactivated"]
     user_exchange = request.app["rmq_user_exchange"]
     await user_exchange.publish(
         aio_pika.Message(body=xml, delivery_mode=DeliveryMode.PERSISTENT),

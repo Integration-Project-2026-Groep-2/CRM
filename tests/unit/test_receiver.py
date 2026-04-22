@@ -370,11 +370,8 @@ def _registration_patches(
 
     return (
         patch("src.xml_validator.validate", return_value=parsed_xml),
-        patch("src.receiver.has_session_registration_object", return_value=True),
         patch("src.receiver.get_contact_by_email", return_value=existing_contact),
-        patch("src.receiver.get_session_registration_by_registration_id", return_value=None),
         patch("src.receiver.create_contact", return_value=created_contact),
-        patch("src.receiver.upsert_session_registration"),
         patch("src.sender.publish_user_confirmed"),
         patch("src.sender.publish_mail_requested"),
     )
@@ -391,8 +388,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_publishes_user_confirmed(self, sf_mock):
-        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
-        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish as mock_publish, p_mail:
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -400,8 +397,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_publishes_mail_requested_with_correct_args(self, sf_mock):
-        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
-        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail as mock_mail_publish:
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish, p_mail as mock_mail_publish:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -414,8 +411,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_id(self, sf_mock):
-        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
-        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish as mock_publish, p_mail:
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -424,8 +421,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_email(self, sf_mock):
-        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
-        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish as mock_publish, p_mail:
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -434,8 +431,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_names(self, sf_mock):
-        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
-        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish as mock_publish, p_mail:
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -445,8 +442,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_role(self, sf_mock):
-        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
-        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish as mock_publish, p_mail:
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -455,8 +452,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_gdpr_consent(self, sf_mock):
-        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
-        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish as mock_publish, p_mail:
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -465,8 +462,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_confirmed_at(self, sf_mock):
-        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
-        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish as mock_publish, p_mail:
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -475,8 +472,8 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_user_data_is_active(self, sf_mock):
-        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
-        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish as mock_publish, p_mail:
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish as mock_publish, p_mail:
             from src.receiver import handle_registration
 
             await handle_registration(_make_message(VALID_REG_XML), sf_mock)
@@ -485,12 +482,32 @@ class TestHandleRegistration:
 
     @pytest.mark.asyncio
     async def test_registration_acks_message(self, sf_mock):
-        p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail = _registration_patches()
-        with p_val, p_obj, p_get, p_get_reg, p_create, p_upsert, p_publish, p_mail:
+        p_val, p_get, p_create, p_publish, p_mail = _registration_patches()
+        with p_val, p_get, p_create, p_publish, p_mail:
             from src.receiver import handle_registration
 
             msg = _make_message(VALID_REG_XML)
             await handle_registration(msg, sf_mock)
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_registration_does_not_require_session_registration_object(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_REG_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_session_registration_object", side_effect=AssertionError("should not be called")),
+            patch("src.receiver.get_contact_by_email", return_value=None),
+            patch("src.receiver.create_contact", return_value=CONTACT_RETURN),
+            patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_mail_requested") as mock_mail,
+        ):
+            from src.receiver import handle_registration
+
+            msg = _make_message(VALID_REG_XML)
+            await handle_registration(msg, sf_mock)
+
+            mock_publish.assert_called_once()
+            mock_mail.assert_called_once()
             msg.ack.assert_called_once()
 
     # ------------------------------------------------------------------
@@ -505,9 +522,7 @@ class TestHandleRegistration:
 
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.get_contact_by_email", return_value=None),
-            patch("src.receiver.upsert_session_registration"),
             patch("src.receiver.create_contact", return_value=CONTACT_RETURN) as mock_create,
             patch("src.sender.publish_user_confirmed"),
             patch("src.sender.publish_mail_requested"),
@@ -532,7 +547,6 @@ class TestHandleRegistration:
         parsed_xml = etree.fromstring(VALID_REG_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
             patch(
                 "src.receiver.get_contact_by_email",
                 return_value={
@@ -543,9 +557,7 @@ class TestHandleRegistration:
                     "Role__c": "VISITOR",
                 },
             ),
-            patch("src.receiver.get_session_registration_by_registration_id", return_value=None),
             patch("src.receiver.create_contact") as mock_create,
-            patch("src.receiver.upsert_session_registration") as mock_upsert,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested"),
             caplog.at_level(logging.WARNING),
@@ -556,7 +568,6 @@ class TestHandleRegistration:
             await handle_registration(msg, sf_mock)
 
             mock_create.assert_not_called()
-            mock_upsert.assert_not_called()
             mock_publish.assert_not_called()
             msg.ack.assert_called_once()
             assert "incompatible person fields" in caplog.text
@@ -571,11 +582,8 @@ class TestHandleRegistration:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.get_contact_by_email", return_value=existing_contact),
-            patch("src.receiver.get_session_registration_by_registration_id", return_value=None),
             patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
-            patch("src.receiver.upsert_session_registration") as mock_upsert,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested") as mock_mail,
         ):
@@ -588,12 +596,6 @@ class TestHandleRegistration:
                 sf_mock,
                 existing_contact,
                 registration_id="REG-12345",
-            )
-            mock_upsert.assert_called_once_with(
-                sf_mock,
-                registration_id="REG-12345",
-                session_id="SESS-001",
-                contact_id="003000000000001",
             )
             mock_publish.assert_called_once()
             mock_mail.assert_called_once()
@@ -609,14 +611,8 @@ class TestHandleRegistration:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.get_contact_by_email", return_value=existing_contact),
-            patch(
-                "src.receiver.get_session_registration_by_registration_id",
-                return_value={"Id": "a01", "Registration_ID__c": "REG-12345", "Is_Active__c": False},
-            ),
             patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
-            patch("src.receiver.upsert_session_registration") as mock_upsert,
             patch("src.receiver.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested") as mock_mail,
@@ -632,12 +628,6 @@ class TestHandleRegistration:
                 existing_contact,
                 registration_id="REG-12345",
             )
-            mock_upsert.assert_called_once_with(
-                sf_mock,
-                registration_id="REG-12345",
-                session_id="SESS-001",
-                contact_id="003000000000001",
-            )
             mock_publish.assert_called_once()
             mock_mail.assert_called_once()
             msg.ack.assert_called_once()
@@ -647,9 +637,7 @@ class TestHandleRegistration:
         parsed_xml = etree.fromstring(VALID_REG_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.get_contact_by_email", return_value=None),
-            patch("src.receiver.upsert_session_registration"),
             patch("src.receiver.create_contact", side_effect=Exception("SF Create Down")),
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested"),
@@ -693,13 +681,11 @@ class TestHandleRegistration:
         parsed_xml = etree.fromstring(VALID_REG_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.get_contact_by_email", return_value={
                 "CRM_ID__c": "123e4567-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
                 "Email": "john.doe@example.com",
                 "Registration_ID__c": "REG-12345",
             }),
-            patch("src.receiver.get_session_registration_by_registration_id", return_value={"Id": "a01"}),
             patch("src.receiver.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested") as mock_mail_publish,
@@ -728,9 +714,7 @@ class TestHandleRegistration:
 
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.get_contact_by_email", return_value=None),
-            patch("src.receiver.upsert_session_registration"),
             patch("src.receiver.create_contact", return_value=CONTACT_RETURN),
             patch("src.sender.publish_user_confirmed"),
             patch("src.sender.publish_mail_requested"),
@@ -754,9 +738,7 @@ class TestHandleRegistration:
 
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.get_contact_by_email", return_value=None),
-            patch("src.receiver.upsert_session_registration"),
             patch("src.receiver.create_contact", return_value=contact_no_phone),
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested"),
@@ -778,13 +760,11 @@ class TestHandleRegistration:
 
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
             patch("src.receiver.get_contact_by_email", return_value={
                 "CRM_ID__c": "123e4567-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
                 "Email": "john.doe@example.com",
                 "Registration_ID__c": "REG-12345",
             }),
-            patch("src.receiver.get_session_registration_by_registration_id", return_value={"Id": "a01"}),
             patch("src.receiver.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed", side_effect=Exception("Publish failed")),
             patch("src.sender.publish_mail_requested"),
@@ -5154,9 +5134,9 @@ class TestRunReceiver:
 
         queues, mock_declare, sf_client = await self._run_receiver()
 
-        self._assert_declared_queue(mock_declare, "frontend.registration.created", durable=True)
+        self._assert_declared_queue(mock_declare, "crm.frontend.registration.created", durable=True)
         self._assert_partial_callback(
-            queues["frontend.registration.created"], handle_registration, sf_client
+            queues["crm.frontend.registration.created"], handle_registration, sf_client
         )
 
     @pytest.mark.asyncio
@@ -5165,9 +5145,9 @@ class TestRunReceiver:
 
         queues, mock_declare, sf_client = await self._run_receiver()
 
-        self._assert_declared_queue(mock_declare, "frontend.registration.updated", durable=True)
+        self._assert_declared_queue(mock_declare, "crm.frontend.registration.updated", durable=True)
         self._assert_partial_callback(
-            queues["frontend.registration.updated"], handle_registration_updated, sf_client
+            queues["crm.frontend.registration.updated"], handle_registration_updated, sf_client
         )
 
     @pytest.mark.asyncio
@@ -5176,9 +5156,9 @@ class TestRunReceiver:
 
         queues, mock_declare, sf_client = await self._run_receiver()
 
-        self._assert_declared_queue(mock_declare, "facturatie.user.created", durable=True)
+        self._assert_declared_queue(mock_declare, "crm.facturatie.user.created", durable=True)
         self._assert_partial_callback(
-            queues["facturatie.user.created"], handle_facturatie_user_created, sf_client
+            queues["crm.facturatie.user.created"], handle_facturatie_user_created, sf_client
         )
 
     @pytest.mark.asyncio
@@ -5187,9 +5167,9 @@ class TestRunReceiver:
 
         queues, mock_declare, sf_client = await self._run_receiver()
 
-        self._assert_declared_queue(mock_declare, "facturatie.user.updated", durable=True)
+        self._assert_declared_queue(mock_declare, "crm.facturatie.user.updated", durable=True)
         self._assert_partial_callback(
-            queues["facturatie.user.updated"], handle_facturatie_user_updated, sf_client
+            queues["crm.facturatie.user.updated"], handle_facturatie_user_updated, sf_client
         )
 
     @pytest.mark.asyncio
@@ -5198,9 +5178,9 @@ class TestRunReceiver:
 
         queues, mock_declare, sf_client = await self._run_receiver()
 
-        self._assert_declared_queue(mock_declare, "facturatie.user.deactivated", durable=True)
+        self._assert_declared_queue(mock_declare, "crm.facturatie.user.deactivated", durable=True)
         self._assert_partial_callback(
-            queues["facturatie.user.deactivated"], handle_facturatie_user_deactivated, sf_client
+            queues["crm.facturatie.user.deactivated"], handle_facturatie_user_deactivated, sf_client
         )
 
     @pytest.mark.asyncio
@@ -5242,9 +5222,9 @@ class TestRunReceiver:
 
         queues, mock_declare, sf_client = await self._run_receiver()
 
-        self._assert_declared_queue(mock_declare, "mailing.user.created", durable=True)
+        self._assert_declared_queue(mock_declare, "crm.mailing.user.created", durable=True)
         self._assert_partial_callback(
-            queues["mailing.user.created"], handle_mailing_user_created, sf_client
+            queues["crm.mailing.user.created"], handle_mailing_user_created, sf_client
         )
 
     @pytest.mark.asyncio
@@ -5275,9 +5255,9 @@ class TestRunReceiver:
 
         queues, mock_declare, sf_client = await self._run_receiver()
 
-        self._assert_declared_queue(mock_declare, "planning.user.created", durable=True)
+        self._assert_declared_queue(mock_declare, "crm.planning.user.created", durable=True)
         self._assert_partial_callback(
-            queues["planning.user.created"], handle_planning_user_created, sf_client
+            queues["crm.planning.user.created"], handle_planning_user_created, sf_client
         )
 
     @pytest.mark.asyncio
@@ -5286,9 +5266,9 @@ class TestRunReceiver:
 
         queues, mock_declare, sf_client = await self._run_receiver()
 
-        self._assert_declared_queue(mock_declare, "planning.user.deactivated", durable=True)
+        self._assert_declared_queue(mock_declare, "crm.planning.user.deactivated", durable=True)
         self._assert_partial_callback(
-            queues["planning.user.deactivated"], handle_planning_user_deactivated, sf_client
+            queues["crm.planning.user.deactivated"], handle_planning_user_deactivated, sf_client
         )
 
     @pytest.mark.asyncio
