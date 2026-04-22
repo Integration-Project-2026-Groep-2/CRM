@@ -299,7 +299,7 @@ async def publish_person_lookup_responded(request_id: str, person_data: dict[str
     Optional keys (only if found=True):
         id, companyName, companyId (only if linkedToCompany=True)
     """
-    root = etree.Element("PersonResponse")
+    root = etree.Element("PersonLookupResponse")
 
     etree.SubElement(root, "requestId").text = str(request_id)
     found = person_data["found"]

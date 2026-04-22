@@ -508,8 +508,9 @@
   <!-- ============================================================
        CONTRACT 10a — Kassa → CRM: persoonscheck request
        Queue: kassa.person.lookup.requested | durable: true
+       Root: <PersonLookupRequest> (aligned met Kassa XSD 2026-04-22)
   ============================================================ -->
-  <xs:element name="PersonLookup">
+  <xs:element name="PersonLookupRequest">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="requestId" type="xs:string"/>
@@ -521,8 +522,13 @@
   <!-- ============================================================
        CONTRACT 10b — CRM → Kassa: persoonscheck response
        Queue: crm.person.lookup.responded | durable: false
+       Root: <PersonLookupResponse> (aligned met Kassa XSD 2026-04-22)
+
+       Application-level regels (afgedwongen in sender.py):
+       - linkedToCompany moet false zijn als found=false
+       - id/companyName/companyId alleen aanwezig als found=true
   ============================================================ -->
-  <xs:element name="PersonResponse">
+  <xs:element name="PersonLookupResponse">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="requestId"       type="xs:string"/>
