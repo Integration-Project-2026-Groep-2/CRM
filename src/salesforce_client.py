@@ -764,7 +764,7 @@ async def count_active_session_registrations(sf: Salesforce, contact_id: str) ->
 async def get_contact_by_email(
     sf: Salesforce, email: str
 ) -> dict[str, Any] | None:
-    """Look up a Contact by email (Contracts 5a, 10a, 20).
+    """Look up a Contact by email (Contracts 5a, 20).
 
     Args:
         sf: Authenticated Salesforce client.
@@ -791,6 +791,43 @@ async def get_contact_by_email(
             return None
     except SalesforceError as e:
         logger.error("Failed to get contact by email %s: %s", email, str(e))
+        raise
+
+
+async def get_contact_for_person_lookup(
+    sf: Salesforce, email: str
+) -> dict[str, Any] | None:
+    """Look up a Contact by email for Contract 10a (kassa.person.lookup.requested).
+
+    Returns Contact with Account relationship fields expanded so the
+    handler can build the PersonLookupResponse in one round-trip.
+
+    Args:
+        sf: Authenticated Salesforce client.
+        email: Contact email to search for.
+
+    Returns:
+        Record with ``Id``, ``CRM_ID__c``, ``AccountId`` and (when the Contact
+        is linked to an Account) a nested ``Account`` dict with ``Name`` and
+        ``CRM_ID__c``. Returns ``None`` if no Contact matches the email.
+
+    Raises:
+        SalesforceError: If the SOQL query fails.
+    """
+    try:
+        escaped_email = _escape_soql(email)
+        query = (
+            "SELECT Id, CRM_ID__c, AccountId, Account.Name, Account.CRM_ID__c "
+            f"FROM Contact WHERE Email = '{escaped_email}'"
+        )
+        result = await asyncio.to_thread(sf.query, query)
+        if result["totalSize"] == 0:
+            logger.info("Person lookup — no Contact for email %s", email)
+            return None
+        logger.info("Person lookup — found Contact for email %s", email)
+        return result["records"][0]
+    except SalesforceError as e:
+        logger.error("Person lookup query failed for %s: %s", email, str(e))
         raise
 
 
