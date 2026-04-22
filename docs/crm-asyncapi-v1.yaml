@@ -370,8 +370,8 @@ channels:
       Contract 10 (request) — Kassa → CRM: persoonscheck op basis van e-mail
       (US-47 | R1)
     messages:
-      personLookup:
-        $ref: "#/components/messages/PersonLookup"
+      personLookupRequest:
+        $ref: "#/components/messages/PersonLookupRequest"
     bindings:
       amqp:
         is: queue
@@ -384,8 +384,8 @@ channels:
       Contract 10 (response) — CRM → Kassa: resultaat persoonscheck inclusief
       UUID (US-47 | R1). UUID + companyId toegevoegd v1.3.0.
     messages:
-      personResponse:
-        $ref: "#/components/messages/PersonResponse"
+      personLookupResponse:
+        $ref: "#/components/messages/PersonLookupResponse"
     bindings:
       amqp:
         is: queue
@@ -912,13 +912,13 @@ operations:
     channel:
       $ref: "#/channels/kassaPersonLookupRequested"
     messages:
-      - $ref: "#/channels/kassaPersonLookupRequested/messages/personLookup"
+      - $ref: "#/channels/kassaPersonLookupRequested/messages/personLookupRequest"
     summary: Ontvang persoonscheck-verzoek van Kassa en stuur response terug inclusief UUID
     reply:
       channel:
         $ref: "#/channels/crmPersonLookupResponded"
       messages:
-        - $ref: "#/components/messages/PersonResponse"
+        - $ref: "#/components/messages/PersonLookupResponse"
     tags:
       - name: kassa
       - name: release-1
@@ -1223,8 +1223,8 @@ components:
               <email>els.peeters@example.com</email>
               <phone>+32470111222</phone>
               <role>COMPANY_CONTACT</role>
-              <isActive>true</isActive>
               <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
+              <isActive>true</isActive>
               <createdAt>2026-04-15T09:30:00Z</createdAt>
             </UserCreated>
 
@@ -1258,7 +1258,6 @@ components:
               <role>COMPANY_CONTACT</role>
               <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
               <isActive>true</isActive>
-              <gdprConsent>true</gdprConsent>
               <updatedAt>2026-04-15T10:15:00Z</updatedAt>
             </UserUpdated>
 
@@ -1316,7 +1315,9 @@ components:
       title: Mailing user bijgewerkt
       summary: >-
         Mailing stuurt een volledig update-object voor een user die al in CRM
-        gekend is of gekoppeld moet blijven aan dezelfde UUID.
+        gekend is. Het `<id>`-veld bevat de CRM master UUID die Mailing in
+        `crm.user.confirmed` heeft ontvangen (Option 2 UUID-strategie); CRM
+        zoekt het Contact strict op `CRM_ID__c`.
       contentType: application/xml
       tags:
         - name: mailing
@@ -1341,7 +1342,10 @@ components:
       title: Mailing user gedeactiveerd
       summary: >-
         Mailing vraagt CRM om een bestaande user soft te deactiveren zodat de
-        CRM master data en mailinglijsten GDPR-consistent blijven.
+        CRM master data en mailinglijsten GDPR-consistent blijven. Het
+        `<id>`-veld bevat de CRM master UUID die Mailing in `crm.user.confirmed`
+        heeft ontvangen (Option 2 UUID-strategie); CRM zoekt het Contact
+        strict op `CRM_ID__c`.
       contentType: application/xml
       tags:
         - name: mailing
@@ -1706,8 +1710,8 @@ components:
               <type>statusCheck</type>
             </Warning>
 
-    PersonLookup:
-      name: PersonLookup
+    PersonLookupRequest:
+      name: PersonLookupRequest
       title: Persoonscheck verzoek van Kassa
       contentType: application/xml
       correlationId:
@@ -1716,18 +1720,18 @@ components:
       tags:
         - name: US-47
       payload:
-        $ref: "#/components/schemas/PersonLookup"
+        $ref: "#/components/schemas/PersonLookupRequest"
       examples:
         - name: lookup
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <PersonLookup>
+            <PersonLookupRequest>
               <requestId>LOOKUP-001</requestId>
               <email>jan.janssen@example.com</email>
-            </PersonLookup>
+            </PersonLookupRequest>
 
-    PersonResponse:
-      name: PersonResponse
+    PersonLookupResponse:
+      name: PersonLookupResponse
       title: Persoonscheck response van CRM
       contentType: application/xml
       correlationId:
@@ -1736,36 +1740,36 @@ components:
       tags:
         - name: US-47
       payload:
-        $ref: "#/components/schemas/PersonResponse"
+        $ref: "#/components/schemas/PersonLookupResponse"
       examples:
         - name: gevonden_met_bedrijf
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <PersonResponse>
+            <PersonLookupResponse>
               <requestId>LOOKUP-001</requestId>
               <found>true</found>
               <linkedToCompany>true</linkedToCompany>
               <id>b2c3d4e5-f6a7-4890-8c12-de3456fa7890</id>
               <companyName>Bedrijf NV</companyName>
               <companyId>c3d4e5f6-a7b8-4901-8d23-ef4567ab8901</companyId>
-            </PersonResponse>
+            </PersonLookupResponse>
         - name: gevonden_zonder_bedrijf
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <PersonResponse>
+            <PersonLookupResponse>
               <requestId>LOOKUP-001</requestId>
               <found>true</found>
               <linkedToCompany>false</linkedToCompany>
               <id>a1b2c3d4-e5f6-4789-ab01-cd2345ef6789</id>
-            </PersonResponse>
+            </PersonLookupResponse>
         - name: niet_gevonden
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
-            <PersonResponse>
+            <PersonLookupResponse>
               <requestId>LOOKUP-001</requestId>
               <found>false</found>
               <linkedToCompany>false</linkedToCompany>
-            </PersonResponse>
+            </PersonLookupResponse>
 
     SessionUpdate:
       name: SessionUpdate
@@ -2256,8 +2260,12 @@ components:
           description: Optioneel — doorgegeven als er al een registratiereferentie bestaat.
         firstName:
           type: string
+          minLength: 1
+          description: Verplicht niet-leeg (NonEmptyStringType sinds 2026-04-21).
         lastName:
           type: string
+          minLength: 1
+          description: Verplicht niet-leeg (NonEmptyStringType sinds 2026-04-21).
         email:
           type: string
           format: email
@@ -2274,14 +2282,14 @@ components:
             - CASHIER
             - BAR_STAFF
             - ADMIN
-        isActive:
-          type: boolean
-          description: Verplicht — Facturatie-side state. CRM mirrors dit naar de Contact active-flag in Salesforce.
         companyId:
           type: string
           format: uuid
           pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
           description: Optioneel — UUID v4 van gekoppeld bedrijf indien al gekend in Facturatie.
+        isActive:
+          type: boolean
+          description: Verplicht — Facturatie-side state. CRM mirrors dit naar de Contact active-flag in Salesforce.
         createdAt:
           type: string
           format: date-time
@@ -2295,12 +2303,15 @@ components:
         - lastName
         - role
         - isActive
-        - gdprConsent
         - updatedAt
       description: >-
         Facturatie stuurt een volledig update-object voor een user die al een
-        CRM UUID heeft. Routing key en richting onderscheiden dit contract van
-        het outbound CRM event met dezelfde XML-root.
+        CRM UUID heeft. XML-root `<UserUpdated>` (gedeeld met C18 outbound;
+        het onderscheid tussen inbound en outbound semantiek gebeurt via
+        queue + handler). Facturatie kent `gdprConsent` en `badgeCode` niet;
+        die velden zijn op XSD-niveau optional. CRM leest `GDPR_Consent__c`
+        en `Badge_Code__c` uit Salesforce bij het opstellen van de outbound
+        C18 payload.
       properties:
         id:
           type: string
@@ -2311,8 +2322,12 @@ components:
           format: email
         firstName:
           type: string
+          minLength: 1
+          description: Verplicht niet-leeg (NonEmptyStringType sinds 2026-04-21).
         lastName:
           type: string
+          minLength: 1
+          description: Verplicht niet-leeg (NonEmptyStringType sinds 2026-04-21).
         phone:
           type: string
           description: Optioneel — internationaal formaat (+32...)
@@ -2343,8 +2358,6 @@ components:
           pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
         isActive:
           type: boolean
-        gdprConsent:
-          type: boolean
         updatedAt:
           type: string
           format: date-time
@@ -2357,7 +2370,8 @@ components:
         - deactivatedAt
       description: >-
         Facturatie vraagt CRM om een bestaande CRM-linked user soft te
-        deactiveren.
+        deactiveren. XML-root `<UserDeactivated>` (gedeeld met C22 outbound;
+        velden zijn identiek tussen C22 en C26).
       properties:
         id:
           type: string
@@ -2417,6 +2431,11 @@ components:
           type: string
           format: uuid
           pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          description: >-
+            CRM master UUID (Option 2 UUID-strategie) die Mailing in
+            `crm.user.confirmed` heeft ontvangen. CRM resolvet strict op
+            `CRM_ID__c`; `Mailing_ID__c` blijft als provenance-veld bewaard
+            maar wordt niet gebruikt voor lookup.
         email:
           type: string
           format: email
@@ -2449,6 +2468,10 @@ components:
           type: string
           format: uuid
           pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          description: >-
+            CRM master UUID (Option 2 UUID-strategie) die Mailing in
+            `crm.user.confirmed` heeft ontvangen. CRM resolvet strict op
+            `CRM_ID__c`.
         email:
           type: string
           format: email
@@ -2837,7 +2860,7 @@ components:
             - statusCheck
             - user
 
-    PersonLookup:
+    PersonLookupRequest:
       type: object
       required:
         - requestId
@@ -2849,7 +2872,7 @@ components:
           type: string
           format: email
 
-    PersonResponse:
+    PersonLookupResponse:
       type: object
       required:
         - requestId

@@ -16,6 +16,9 @@ class Config:
     salesforce_domain: str
     heartbeat_interval_seconds: int
     system_name: str
+    polling_interval_seconds: int
+    polling_state_path: str
+    polling_integration_user_id: str | None
     log_level: str
 
 
@@ -44,6 +47,9 @@ def load_config() -> Config:
         salesforce_domain=os.getenv("SALESFORCE_DOMAIN", "login"),
         heartbeat_interval_seconds=int(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "1")),
         system_name=os.getenv("SYSTEM_NAME", "CRM"),
+        polling_interval_seconds=int(os.getenv("POLLING_INTERVAL_SECONDS", "60")),
+        polling_state_path=os.getenv("POLLING_STATE_PATH", "/tmp/polling_checkpoint.json"),
+        polling_integration_user_id=os.getenv("POLLING_INTEGRATION_USER_ID") or None,
         log_level=os.getenv("LOG_LEVEL", "INFO"),
     )
 

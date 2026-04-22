@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from simple_salesforce import Salesforce, SalesforceError
+from simple_salesforce.exceptions import SalesforceAuthenticationFailed
 
 from src.config import Config
 
@@ -38,10 +39,69 @@ logger = logging.getLogger(__name__)
 
 _PAYMENT_TIMESTAMP_FIELD = "Paid_At__c"
 
+# Startup retry configuration for Salesforce login. Mirrors the RabbitMQ
+# connect retry pattern in src/connection.py so a transient Salesforce
+# outage (SERVER_UNAVAILABLE / network blip) does not leave the receiver
+# task silently dead while heartbeat keeps the container "alive".
+_SF_STARTUP_DELAY: float = 1.0
+_SF_STARTUP_MAX_DELAY: float = 60.0
+_TRANSIENT_SF_AUTH_CODES = frozenset({"SERVER_UNAVAILABLE", "SERVICE_UNAVAILABLE"})
 
-def _escape_soql(value: str) -> str:
+
+def escape_soql(value: str) -> str:
     """Escape single quotes for SOQL to prevent injection attacks."""
     return value.replace("'", "''")
+
+
+# Backwards-compatibility alias — existing callers in this module use the
+# private form; remove once everyone has migrated.
+_escape_soql = escape_soql
+
+
+def coerce_is_active(raw_value: Any) -> bool:
+    """Normalize an active-flag value from Salesforce into a bool.
+
+    Salesforce custom active fields come in multiple forms across orgs:
+    - Boolean (`IsActive__c` / `Is_Active__c`) → True / False / None
+    - Picklist (`Active__c`) → "Yes" / "No"
+    - Text → "true" / "false" / empty string
+
+    Python's `bool()` treats any non-empty string as True, so `bool("No")`
+    is True — exactly the opposite of what we want for a picklist field.
+    Callers should always route active-field values through this helper.
+
+    Missing (`None`) defaults to True: records without a flag are treated as
+    active. This mirrors the receiver's legacy behaviour.
+    """
+    if raw_value is None:
+        return True
+    if isinstance(raw_value, bool):
+        return raw_value
+    if isinstance(raw_value, (int, float)):
+        return bool(raw_value)
+    text = str(raw_value).strip().lower()
+    if text in ("yes", "true", "1", "y"):
+        return True
+    if text in ("no", "false", "0", "n", ""):
+        return False
+    # Unknown non-empty string → best-effort fall-through.
+    return bool(raw_value)
+
+
+def is_rate_limit_error(exc: Exception) -> bool:
+    """Detect Salesforce REQUEST_LIMIT_EXCEEDED via content attribute or message.
+
+    Shared between the receiver (drop-and-sleep on rate limit) and the polling
+    task (skip cycle on rate limit). The Salesforce REST API surfaces the error
+    both as a structured `content` attribute on SalesforceError subclasses and
+    occasionally as a plain message, hence both checks.
+    """
+    content = getattr(exc, "content", None)
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("errorCode") == "REQUEST_LIMIT_EXCEEDED":
+                return True
+    return "REQUEST_LIMIT_EXCEEDED" in str(exc)
 
 
 def _normalize_uuid_v4(value: Any) -> str | None:
@@ -72,25 +132,99 @@ def _parse_iso_datetime_utc(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-async def get_salesforce_client(config: Config) -> Salesforce:
-    """Create an authenticated Salesforce client.
+async def _wait_retry_or_shutdown(
+    delay: float, shutdown_event: asyncio.Event | None = None,
+) -> bool:
+    """Sleep for `delay` seconds unless shutdown fires first.
+
+    Returns True when shutdown was requested during the wait, False otherwise.
+    Mirrors the helper in src/connection.py so both retry loops behave the
+    same way (see plan: feature/sf-startup-retry).
+    """
+    if shutdown_event is None:
+        await asyncio.sleep(delay)
+        return False
+
+    try:
+        await asyncio.wait_for(shutdown_event.wait(), timeout=delay)
+        return True
+    except asyncio.TimeoutError:
+        return False
+
+
+async def get_salesforce_client(
+    config: Config, shutdown_event: asyncio.Event | None = None,
+) -> Salesforce:
+    """Create an authenticated Salesforce client, retrying transient failures.
+
+    Retries with exponential backoff (1s → 60s cap) on transient Salesforce
+    auth codes (SERVER_UNAVAILABLE, SERVICE_UNAVAILABLE) and on generic
+    network errors. Honours `shutdown_event` so a graceful shutdown during
+    the retry backoff does not hang the container.
+
+    Permanent authentication errors (INVALID_LOGIN, PASSWORD_LOCKOUT, bad
+    security token) are re-raised immediately so the receiver task crashes
+    visibly and the operator can tell the difference between "Salesforce is
+    flaky" and "credentials are wrong".
 
     Args:
         config: Application configuration with SF credentials.
+        shutdown_event: Optional event that aborts the retry loop when set.
 
     Returns:
         Authenticated Salesforce instance.
+
+    Raises:
+        SalesforceAuthenticationFailed: Permanent auth failure (bad creds).
+        RuntimeError: Shutdown fired during the retry backoff.
     """
-    logger.info("Connecting to Salesforce as %s...", config.salesforce_username)
-    sf = await asyncio.to_thread(
-        Salesforce,
-        username=config.salesforce_username,
-        password=config.salesforce_password,
-        security_token=config.salesforce_security_token,
-        domain=config.salesforce_domain,
-    )
-    logger.info("Connected to Salesforce.")
-    return sf
+    delay = _SF_STARTUP_DELAY
+    while True:
+        if shutdown_event is not None and shutdown_event.is_set():
+            raise RuntimeError(
+                "Salesforce connection cancelled by shutdown signal",
+            )
+
+        try:
+            logger.info(
+                "Connecting to Salesforce as %s...", config.salesforce_username,
+            )
+            sf = await asyncio.to_thread(
+                Salesforce,
+                username=config.salesforce_username,
+                password=config.salesforce_password,
+                security_token=config.salesforce_security_token,
+                domain=config.salesforce_domain,
+            )
+            logger.info("Connected to Salesforce.")
+            return sf
+        except SalesforceAuthenticationFailed as exc:
+            if exc.code not in _TRANSIENT_SF_AUTH_CODES:
+                logger.error(
+                    "Salesforce authentication failed permanently "
+                    "(code=%s): %s",
+                    exc.code, exc,
+                )
+                raise
+            logger.warning(
+                "Salesforce transient auth failure (code=%s); "
+                "retrying in %.1fs",
+                exc.code, delay,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Salesforce connection failed (%s); retrying in %.1fs",
+                exc, delay,
+            )
+
+        shutdown_requested = await _wait_retry_or_shutdown(
+            delay, shutdown_event,
+        )
+        if shutdown_requested:
+            raise RuntimeError(
+                "Salesforce connection cancelled by shutdown signal",
+            )
+        delay = min(delay * 2, _SF_STARTUP_MAX_DELAY)
 
 
 async def create_contact(sf: Salesforce, data: dict[str, Any]) -> dict[str, Any]:
@@ -630,7 +764,7 @@ async def count_active_session_registrations(sf: Salesforce, contact_id: str) ->
 async def get_contact_by_email(
     sf: Salesforce, email: str
 ) -> dict[str, Any] | None:
-    """Look up a Contact by email (Contracts 5a, 10a, 20).
+    """Look up a Contact by email (Contracts 5a, 20).
 
     Args:
         sf: Authenticated Salesforce client.
@@ -657,6 +791,43 @@ async def get_contact_by_email(
             return None
     except SalesforceError as e:
         logger.error("Failed to get contact by email %s: %s", email, str(e))
+        raise
+
+
+async def get_contact_for_person_lookup(
+    sf: Salesforce, email: str
+) -> dict[str, Any] | None:
+    """Look up a Contact by email for Contract 10a (kassa.person.lookup.requested).
+
+    Returns Contact with Account relationship fields expanded so the
+    handler can build the PersonLookupResponse in one round-trip.
+
+    Args:
+        sf: Authenticated Salesforce client.
+        email: Contact email to search for.
+
+    Returns:
+        Record with ``Id``, ``CRM_ID__c``, ``AccountId`` and (when the Contact
+        is linked to an Account) a nested ``Account`` dict with ``Name`` and
+        ``CRM_ID__c``. Returns ``None`` if no Contact matches the email.
+
+    Raises:
+        SalesforceError: If the SOQL query fails.
+    """
+    try:
+        escaped_email = _escape_soql(email)
+        query = (
+            "SELECT Id, CRM_ID__c, AccountId, Account.Name, Account.CRM_ID__c "
+            f"FROM Contact WHERE Email = '{escaped_email}'"
+        )
+        result = await asyncio.to_thread(sf.query, query)
+        if result["totalSize"] == 0:
+            logger.info("Person lookup — no Contact for email %s", email)
+            return None
+        logger.info("Person lookup — found Contact for email %s", email)
+        return result["records"][0]
+    except SalesforceError as e:
+        logger.error("Person lookup query failed for %s: %s", email, str(e))
         raise
 
 
@@ -764,6 +935,33 @@ async def get_contact_match_by_planning_id(
         return "unique", contact_record
     except SalesforceError as e:
         logger.error("Failed to get contact match by Planning_ID__c %s: %s", planning_id, str(e))
+        raise
+
+
+async def get_contact_match_by_crm_id(
+    sf: Salesforce, crm_id: str
+) -> tuple[Literal["none", "unique", "ambiguous"], dict[str, Any] | None]:
+    """Classify a CRM master UUID lookup as no match, unique match, or ambiguous match.
+
+    Used by update/deactivate handlers where consumers send back the canonical
+    CRM UUID received in `crm.user.confirmed` (Option 2 UUID strategy).
+    """
+    try:
+        escaped_crm_id = _escape_soql(crm_id)
+        query = f"SELECT Id FROM Contact WHERE CRM_ID__c = '{escaped_crm_id}'"
+        result = await asyncio.to_thread(sf.query, query)
+
+        if result["totalSize"] == 0:
+            return "none", None
+        if result["totalSize"] > 1:
+            return "ambiguous", None
+
+        contact_id = result["records"][0]["Id"]
+        contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        logger.info("Found unique Contact by CRM_ID__c: %s", crm_id)
+        return "unique", contact_record
+    except SalesforceError as e:
+        logger.error("Failed to get contact match by CRM_ID__c %s: %s", crm_id, str(e))
         raise
 
 
@@ -1014,6 +1212,102 @@ async def update_planning_contact(
     await asyncio.to_thread(sf.Contact.update, contact_id, updates)
     logger.info(
         "Updated Planning Contact %s fields: %s",
+        contact_id,
+        ", ".join(sorted(updates.keys())),
+    )
+    return await asyncio.to_thread(sf.Contact.get, contact_id)
+
+
+_SPECIALIZED_ROLES = frozenset(
+    {"ADMIN", "SPEAKER", "EVENT_MANAGER", "CASHIER", "BAR_STAFF"}
+)
+
+
+async def update_facturatie_contact(
+    sf: Salesforce,
+    contact: dict[str, Any],
+    *,
+    email: str,
+    first_name: str,
+    last_name: str,
+    phone: str | None,
+    street: str | None,
+    house_number: str | None,
+    postal_code: str | None,
+    city: str | None,
+    country: str | None,
+    role: str,
+    company_id: str | None,
+) -> dict[str, Any]:
+    """Authoritatively update Facturatie-owned fields on an existing Contact.
+
+    Contract 25 sends the full Facturatie-side user object. CRM overwrites the
+    Facturatie-owned fields to match, while preserving CRM-owned identifiers
+    and GDPR state. A specialized existing role (ADMIN/SPEAKER/EVENT_MANAGER/
+    CASHIER/BAR_STAFF) protects both Role__c and Company_ID__c from being
+    overwritten — Facturatie should not demote admins or unlink specialized
+    users from their companies.
+    """
+    updates: dict[str, Any] = {}
+    existing_role = _normalize_optional_field_value(contact.get("Role__c"))
+    can_manage_role_and_company = existing_role not in _SPECIALIZED_ROLES
+
+    if contact.get("Email") != email:
+        updates["Email"] = email
+
+    if _normalize_optional_field_value(contact.get("FirstName")) != _normalize_optional_field_value(first_name):
+        updates["FirstName"] = first_name
+
+    if _normalize_optional_field_value(contact.get("LastName")) != _normalize_optional_field_value(last_name):
+        updates["LastName"] = last_name
+
+    if _normalize_optional_field_value(contact.get("Phone")) != _normalize_optional_field_value(phone):
+        updates["Phone"] = phone
+
+    if _normalize_optional_field_value(contact.get("MailingStreet")) != _normalize_optional_field_value(street):
+        updates["MailingStreet"] = street
+
+    if _normalize_optional_field_value(contact.get("House_Number__c")) != _normalize_optional_field_value(house_number):
+        updates["House_Number__c"] = house_number
+
+    if _normalize_optional_field_value(contact.get("MailingPostalCode")) != _normalize_optional_field_value(postal_code):
+        updates["MailingPostalCode"] = postal_code
+
+    if _normalize_optional_field_value(contact.get("MailingCity")) != _normalize_optional_field_value(city):
+        updates["MailingCity"] = city
+
+    if _normalize_optional_field_value(contact.get("MailingCountry")) != _normalize_optional_field_value(country):
+        updates["MailingCountry"] = country
+
+    if can_manage_role_and_company:
+        if _normalize_optional_field_value(contact.get("Role__c")) != _normalize_optional_field_value(role):
+            updates["Role__c"] = role
+        if (
+            _normalize_optional_field_value(contact.get("Company_ID__c"))
+            != _normalize_optional_field_value(company_id)
+        ):
+            updates["Company_ID__c"] = company_id
+    elif existing_role != _normalize_optional_field_value(role) or (
+        _normalize_optional_field_value(contact.get("Company_ID__c"))
+        != _normalize_optional_field_value(company_id)
+    ):
+        logger.warning(
+            "Facturatie update skipped Role__c/Company_ID__c overwrite on Contact %s "
+            "(existing role=%s, incoming role=%s, incoming company=%s); specialized "
+            "roles are protected from Facturatie changes",
+            contact.get("Id"),
+            existing_role,
+            role,
+            company_id,
+        )
+
+    if not updates:
+        return contact
+
+    contact_id = contact["Id"]
+    await asyncio.to_thread(sf.Contact.update, contact_id, updates)
+    logger.info(
+        "Updated Facturatie Contact %s fields: %s",
         contact_id,
         ", ".join(sorted(updates.keys())),
     )

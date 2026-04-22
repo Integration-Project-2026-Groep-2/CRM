@@ -11,10 +11,11 @@ from src.main import main
 
 
 @pytest.mark.asyncio
-async def test_main_starts_two_tasks_concurrently(monkeypatch: pytest.MonkeyPatch) -> None:
-    """main() starts heartbeat and receiver tasks concurrently."""
+async def test_main_starts_three_tasks_concurrently(monkeypatch: pytest.MonkeyPatch) -> None:
+    """main() starts heartbeat, receiver, and polling tasks concurrently."""
     heartbeat_started = asyncio.Event()
     receiver_started = asyncio.Event()
+    polling_started = asyncio.Event()
     never = asyncio.Event()
 
     async def fake_run_heartbeat(*_args: object, **_kwargs: object) -> None:
@@ -23,6 +24,10 @@ async def test_main_starts_two_tasks_concurrently(monkeypatch: pytest.MonkeyPatc
 
     async def fake_run_receiver(*_args: object, **_kwargs: object) -> None:
         receiver_started.set()
+        await never.wait()
+
+    async def fake_run_polling(*_args: object, **_kwargs: object) -> None:
+        polling_started.set()
         await never.wait()
 
     mock_connection = AsyncMock()
@@ -39,6 +44,9 @@ async def test_main_starts_two_tasks_concurrently(monkeypatch: pytest.MonkeyPatc
         salesforce_domain="login",
         heartbeat_interval_seconds=1,
         system_name="CRM",
+        polling_interval_seconds=60,
+        polling_state_path="/tmp/polling_checkpoint_test.json",
+        polling_integration_user_id=None,
         log_level="INFO",
     )
 
@@ -53,14 +61,17 @@ async def test_main_starts_two_tasks_concurrently(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr("src.main.sender.init", mock_sender_init)
     monkeypatch.setattr("src.main.run_heartbeat", fake_run_heartbeat)
     monkeypatch.setattr("src.main.run_receiver", fake_run_receiver)
+    monkeypatch.setattr("src.main.run_polling", fake_run_polling)
 
     main_task = asyncio.create_task(main())
     try:
         await asyncio.wait_for(heartbeat_started.wait(), timeout=1.0)
         await asyncio.wait_for(receiver_started.wait(), timeout=1.0)
+        await asyncio.wait_for(polling_started.wait(), timeout=1.0)
 
         assert heartbeat_started.is_set()
         assert receiver_started.is_set()
+        assert polling_started.is_set()
         assert not main_task.done()
     finally:
         main_task.cancel()
