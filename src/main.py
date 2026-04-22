@@ -1,8 +1,7 @@
 """CRM integration service entrypoint.
 
-Runs 4 asyncio tasks concurrently:
+Runs 3 asyncio tasks concurrently:
 - heartbeat: XML heartbeat every second (Contract 7)
-- status: CPU/mem/disk status to Controlroom (Contract 8)
 - receiver: listens on the configured inbound RabbitMQ queues
 - polling: detects out-of-band Salesforce UI edits, publishes
   crm.user.* / crm.company.* contracts so other teams stay in sync
@@ -24,7 +23,6 @@ from src.connection import get_rabbitmq_connection
 from src.heartbeat import run_heartbeat
 from src.polling import run_polling
 from src.receiver import run_receiver
-from src.status import run_status
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +72,6 @@ async def main() -> None:
     # liveness signals.
     tasks = [
         asyncio.create_task(_supervised_task("heartbeat", lambda: run_heartbeat(connection, config))),
-        asyncio.create_task(_supervised_task("status", lambda: run_status(connection, config))),
         asyncio.create_task(_supervised_task("receiver", lambda: run_receiver(connection, config, shutdown_event))),
         asyncio.create_task(_supervised_task("polling", lambda: run_polling(config, shutdown_event))),
     ]
