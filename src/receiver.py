@@ -15,6 +15,8 @@ from lxml import etree
 from src import sender, xml_validator
 from src.config import Config
 from src.salesforce_client import (
+    _resolve_account_country_field,
+    _resolve_account_email_field,
     apply_account_is_active,
     apply_is_active,
     backfill_mailing_contact_fields,
@@ -2092,8 +2094,15 @@ async def handle_facturatie_user_deactivated(
 # ---------------------------------------------------------------------------
 
 
-def _build_facturatie_account_data(xml: etree._Element) -> dict[str, Any]:
+async def _build_facturatie_account_data(
+    xml: etree._Element, sf: "Salesforce"
+) -> dict[str, Any]:
     """Map Facturatie inbound company XML to an Account-create payload.
+
+    Dynamically resolves org-specific field names:
+    - Email lands on `Email__c` or standard `Email` depending on what exists.
+    - Country lands on `BillingCountryCode` (State & Country Picklists enabled,
+      ISO-2 expected) or `BillingCountry` (picklists disabled, free text).
 
     houseNumber is intentionally NOT persisted — Account has no standard
     House_Number__c field. See update_facturatie_account for the same policy.
@@ -2104,13 +2113,13 @@ def _build_facturatie_account_data(xml: etree._Element) -> dict[str, Any]:
     vat_number = _normalize_optional_text(xml.findtext("vatNumber"))
     if vat_number:
         data["VAT_Number__c"] = vat_number
+
     email = _normalize_optional_text(xml.findtext("email"))
     if email:
-        # The account email custom field (Email__c) is the preferred target,
-        # but legacy orgs may only have standard Email. Storing under Email__c
-        # is safe because sf.Account.create will raise INVALID_FIELD if the
-        # field does not exist, and the receiver handler catches that.
-        data["Email__c"] = email
+        email_field = await _resolve_account_email_field(sf)
+        if email_field is not None:
+            data[email_field] = email
+
     phone = _normalize_optional_text(xml.findtext("phone"))
     if phone:
         data["Phone"] = phone
@@ -2119,12 +2128,16 @@ def _build_facturatie_account_data(xml: etree._Element) -> dict[str, Any]:
         "street": "BillingStreet",
         "postalCode": "BillingPostalCode",
         "city": "BillingCity",
-        "country": "BillingCountry",
     }
     for xml_field, sf_field in address_mapping.items():
         value = _normalize_optional_text(xml.findtext(xml_field))
         if value:
             data[sf_field] = value
+
+    country = _normalize_optional_text(xml.findtext("country"))
+    if country:
+        country_field = await _resolve_account_country_field(sf)
+        data[country_field] = country
 
     return data
 
@@ -2156,7 +2169,7 @@ async def handle_facturatie_company_created(
         email = xml.findtext("email") or ""
         name = xml.findtext("name") or ""
 
-        account_data = _build_facturatie_account_data(xml)
+        account_data = await _build_facturatie_account_data(xml, sf)
 
         if vat_number:
             account = await upsert_account_by_vat(sf, vat_number, account_data)

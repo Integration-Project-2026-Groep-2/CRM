@@ -1750,6 +1750,20 @@ class TestHandleFacturatieCompanyCreated:
     def sf_mock(self):
         return AsyncMock()
 
+    @pytest.fixture(autouse=True)
+    def _stub_field_resolvers(self):
+        """Stub the async field resolvers so tests don't have to mock describe().
+
+        _build_facturatie_account_data probes the org via resolvers; default
+        returns here match the patterns seen in prod (Email__c + BillingCountryCode
+        for picklist-enabled orgs).
+        """
+        with (
+            patch("src.receiver._resolve_account_email_field", new_callable=AsyncMock, return_value="Email__c"),
+            patch("src.receiver._resolve_account_country_field", new_callable=AsyncMock, return_value="BillingCountryCode"),
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_upserts_by_vat_and_publishes_confirmed(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_FACTURATIE_COMPANY_CREATED_XML)
