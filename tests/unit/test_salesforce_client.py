@@ -10,6 +10,7 @@ import src.salesforce_client as salesforce_client_module
 from src.salesforce_client import (
     backfill_mailing_contact_fields,
     backfill_planning_contact_fields,
+    count_active_contacts_for_company,
     count_active_session_registrations,
     create_account,
     create_contact,
@@ -531,6 +532,42 @@ async def test_count_active_session_registrations_returns_total_size(sf):
     result = await count_active_session_registrations(sf, "003000000000001")
 
     assert result == 2
+
+
+@pytest.mark.asyncio
+async def test_count_active_contacts_for_company_returns_count(sf):
+    sf.query.return_value = {"totalSize": 3}
+
+    result = await count_active_contacts_for_company(sf, "comp-uuid-001")
+
+    assert result == 3
+    query_arg = sf.query.call_args.args[0]
+    assert "Company_ID__c" in query_arg
+    assert "comp-uuid-001" in query_arg
+    assert "IsActive__c = true" in query_arg
+
+
+@pytest.mark.asyncio
+async def test_count_active_contacts_for_company_returns_zero_when_none_match(sf):
+    sf.query.return_value = {"totalSize": 0}
+
+    result = await count_active_contacts_for_company(sf, "comp-uuid-002")
+
+    assert result == 0
+
+
+@pytest.mark.asyncio
+async def test_count_active_contacts_for_company_omits_active_filter_when_no_field(sf):
+    sf.Contact.describe.return_value = {"fields": []}  # No active field
+
+    sf.query.return_value = {"totalSize": 1}
+
+    result = await count_active_contacts_for_company(sf, "comp-uuid-003")
+
+    assert result == 1
+    query_arg = sf.query.call_args.args[0]
+    assert "IsActive__c" not in query_arg
+    assert "Company_ID__c" in query_arg
 
 
 @pytest.mark.asyncio

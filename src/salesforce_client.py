@@ -793,6 +793,37 @@ async def count_active_session_registrations(sf: Salesforce, contact_id: str) ->
 
     return int(result["totalSize"])
 
+
+async def count_active_contacts_for_company(
+    sf: Salesforce, company_id: str
+) -> int:
+    """Return the number of active Contacts that share the given Company_ID__c.
+
+    Used as a sibling guard before deactivating an Account: if other active
+    Contacts still reference the same company, the Account must stay active.
+    """
+    active_field = await _resolve_contact_active_field_optional(sf)
+    escaped_company_id = _escape_soql(company_id)
+    query = (
+        "SELECT COUNT() FROM Contact "
+        f"WHERE Company_ID__c = '{escaped_company_id}'"
+    )
+    if active_field is not None:
+        query += f" AND {active_field} = true"
+
+    try:
+        result = await asyncio.to_thread(sf.query, query)
+    except SalesforceError as e:
+        logger.error(
+            "Failed to count active Contacts for Company_ID__c %s: %s",
+            company_id,
+            str(e),
+        )
+        raise
+
+    return int(result["totalSize"])
+
+
 async def get_contact_by_email(
     sf: Salesforce, email: str
 ) -> dict[str, Any] | None:
@@ -1613,32 +1644,6 @@ async def deactivate_contact_record(
         raise
 
 
-async def deactivate_contact_by_crm_id(
-    sf: Salesforce, crm_id: str
-) -> dict[str, Any] | None:
-    """Soft-delete a Contact by CRM UUID (Contract 26, GDPR)."""
-    contact = await get_contact_by_crm_id(sf, crm_id)
-    if contact is None:
-        logger.warning("Cannot deactivate — Contact not found for CRM_ID__c: %s", crm_id)
-        return None
-
-    contact_id = contact["Id"]
-
-    try:
-        active_field = await _resolve_contact_active_field(sf)
-
-        await asyncio.to_thread(
-            sf.Contact.update, contact_id, {active_field: False}
-        )
-        logger.info("Deactivated Contact %s (CRM_ID__c: %s)", contact_id, crm_id)
-
-        updated_record = await asyncio.to_thread(sf.Contact.get, contact_id)
-        if active_field != "IsActive__c" and "IsActive__c" not in updated_record:
-            updated_record["IsActive__c"] = updated_record.get(active_field, False)
-        return updated_record
-    except SalesforceError as e:
-        logger.error("Failed to deactivate contact %s: %s", crm_id, str(e))
-        raise
 
 
 async def get_account_by_crm_id(

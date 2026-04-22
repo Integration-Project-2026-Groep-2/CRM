@@ -891,3 +891,35 @@ class TestPublishCompanyDeactivated:
         await sender.publish_company_deactivated(self.BASE_DATA)
         xml = _get_published_xml(setup_sender)
         xml_validator.validate(etree.tostring(xml))
+
+    @pytest.mark.asyncio
+    async def test_integration_contract_23_full_roundtrip(self, setup_sender):
+        """H4 — Contract 23 integration: no mocked validator, verify XML content and schema."""
+        from src import xml_validator
+
+        data = {
+            "id": "770e8400-e29b-41d4-a716-446655440099",
+            "vatNumber": "BE9999999999",
+            "deactivatedAt": "2026-04-22T10:00:00Z",
+        }
+        await sender.publish_company_deactivated(data)
+
+        xml = _get_published_xml(setup_sender)
+
+        # Schema validation (real XSD, no mock)
+        xml_validator.validate(etree.tostring(xml))
+
+        # Content validation
+        assert xml.tag == "CompanyDeactivated"
+        assert xml.findtext("id") == "770e8400-e29b-41d4-a716-446655440099"
+        assert xml.findtext("vatNumber") == "BE9999999999"
+        assert xml.findtext("deactivatedAt") == "2026-04-22T10:00:00Z"
+
+        # Field order per XSD xs:sequence
+        tags = [child.tag for child in xml]
+        assert tags == ["id", "vatNumber", "deactivatedAt"]
+
+        # Routing and persistence
+        assert _get_routing_key(setup_sender) == "crm.company.deactivated"
+        from aio_pika import DeliveryMode
+        assert _get_delivery_mode(setup_sender) == DeliveryMode.PERSISTENT
