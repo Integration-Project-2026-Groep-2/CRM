@@ -1720,6 +1720,402 @@ class TestHandleFacturatieUserDeactivated:
 
 
 # ==========================================================================
+# Contracts 33/34/35: facturatie.company.{created,updated,deactivated}
+# ==========================================================================
+
+
+VALID_FACTURATIE_COMPANY_CREATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<FacturatieCompanyCreated>
+    <name>Acme NV</name>
+    <vatNumber>BE0123456789</vatNumber>
+    <email>billing@acme.example</email>
+    <phone>+32 2 123 45 67</phone>
+    <street>Kerkstraat</street>
+    <houseNumber>12</houseNumber>
+    <postalCode>1000</postalCode>
+    <city>Brussels</city>
+    <country>BE</country>
+    <createdAt>2026-04-22T09:30:00Z</createdAt>
+</FacturatieCompanyCreated>"""
+
+VALID_FACTURATIE_COMPANY_UPDATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<FacturatieCompanyUpdated>
+    <id>d1e2f3a4-b5c6-4701-8d23-ef4567ab8501</id>
+    <vatNumber>BE0123456789</vatNumber>
+    <name>Acme Updated NV</name>
+    <email>new@acme.example</email>
+    <isActive>true</isActive>
+    <updatedAt>2026-04-22T10:00:00Z</updatedAt>
+</FacturatieCompanyUpdated>"""
+
+VALID_FACTURATIE_COMPANY_DEACTIVATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
+<FacturatieCompanyDeactivated>
+    <id>d1e2f3a4-b5c6-4701-8d23-ef4567ab8501</id>
+    <email>billing@acme.example</email>
+    <deactivatedAt>2026-04-22T11:00:00Z</deactivatedAt>
+</FacturatieCompanyDeactivated>"""
+
+FACTURATIE_ACCOUNT_RETURN = {
+    "Id": "001000000000500",
+    "CRM_ID__c": "d1e2f3a4-b5c6-4701-8d23-ef4567ab8501",
+    "Name": "Acme NV",
+    "VAT_Number__c": "BE0123456789",
+    "Email__c": "billing@acme.example",
+    "IsActive__c": True,
+}
+
+
+class TestHandleFacturatieCompanyCreated:
+    @pytest.fixture
+    def sf_mock(self):
+        return AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_upserts_by_vat_and_publishes_confirmed(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_COMPANY_CREATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.upsert_account_by_vat", return_value=FACTURATIE_ACCOUNT_RETURN) as mock_upsert,
+            patch("src.receiver.get_account_match_by_email") as mock_email_match,
+            patch("src.receiver.create_account") as mock_create,
+            patch("src.sender.publish_company_confirmed") as mock_publish,
+        ):
+            from src.receiver import handle_facturatie_company_created
+
+            msg = _make_message(VALID_FACTURATIE_COMPANY_CREATED_XML)
+            await handle_facturatie_company_created(msg, sf_mock)
+
+            mock_upsert.assert_called_once()
+            vat_arg = mock_upsert.call_args.args[1]
+            assert vat_arg == "BE0123456789"
+            mock_email_match.assert_not_called()
+            mock_create.assert_not_called()
+            mock_publish.assert_called_once()
+            payload = mock_publish.call_args.args[0]
+            assert payload["id"] == FACTURATIE_ACCOUNT_RETURN["CRM_ID__c"]
+            assert payload["vatNumber"] == "BE0123456789"
+            assert payload["email"] == "billing@acme.example"
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_vat_falls_back_to_email_match_create(self, sf_mock):
+        no_vat_xml = VALID_FACTURATIE_COMPANY_CREATED_XML.replace(
+            b"<vatNumber>BE0123456789</vatNumber>\n    ",
+            b"",
+        )
+        parsed_xml = etree.fromstring(no_vat_xml)
+        created_account = {**FACTURATIE_ACCOUNT_RETURN, "VAT_Number__c": None}
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.upsert_account_by_vat") as mock_upsert,
+            patch("src.receiver.get_account_match_by_email", return_value=("none", None)),
+            patch("src.receiver.create_account", return_value=created_account) as mock_create,
+            patch("src.sender.publish_company_confirmed") as mock_publish,
+        ):
+            from src.receiver import handle_facturatie_company_created
+
+            msg = _make_message(no_vat_xml)
+            await handle_facturatie_company_created(msg, sf_mock)
+
+            mock_upsert.assert_not_called()
+            mock_create.assert_called_once()
+            mock_publish.assert_called_once()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_vat_ambiguous_email_acked_without_publish(self, sf_mock, caplog):
+        no_vat_xml = VALID_FACTURATIE_COMPANY_CREATED_XML.replace(
+            b"<vatNumber>BE0123456789</vatNumber>\n    ",
+            b"",
+        )
+        parsed_xml = etree.fromstring(no_vat_xml)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_account_match_by_email", return_value=("ambiguous", None)),
+            patch("src.receiver.create_account") as mock_create,
+            patch("src.sender.publish_company_confirmed") as mock_publish,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_facturatie_company_created
+
+            msg = _make_message(no_vat_xml)
+            await handle_facturatie_company_created(msg, sf_mock)
+
+            mock_create.assert_not_called()
+            mock_publish.assert_not_called()
+            msg.ack.assert_called_once()
+            assert "ambiguous email billing@acme.example" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_no_vat_email_match_refuses_to_hijack_vat_linked_account(self, sf_mock, caplog):
+        """Security regression — H3 from 2026-04-22 review.
+
+        When Facturatie sends a company without vatNumber and email matches
+        an existing Account that DOES have a VAT_Number__c, refuse to bind.
+        Binding would let Facturatie take over the CRM_ID__c of an unrelated
+        company originally registered via Frontend C3.
+        """
+        no_vat_xml = VALID_FACTURATIE_COMPANY_CREATED_XML.replace(
+            b"<vatNumber>BE0123456789</vatNumber>\n    ",
+            b"",
+        )
+        parsed_xml = etree.fromstring(no_vat_xml)
+        # Existing Account has a VAT — created via authoritative path.
+        existing_vat_linked = {
+            **FACTURATIE_ACCOUNT_RETURN,
+            "Name": "Big Unrelated Corp",
+            "VAT_Number__c": "BE0999999999",
+            "Email__c": "billing@acme.example",  # collision with payload
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch(
+                "src.receiver.get_account_match_by_email",
+                return_value=("unique", existing_vat_linked),
+            ),
+            patch("src.receiver.create_account") as mock_create,
+            patch("src.sender.publish_company_confirmed") as mock_publish,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_facturatie_company_created
+
+            msg = _make_message(no_vat_xml)
+            await handle_facturatie_company_created(msg, sf_mock)
+
+            mock_create.assert_not_called()
+            mock_publish.assert_not_called()
+            msg.ack.assert_called_once()
+            assert "refusing to bind" in caplog.text
+            assert "BE0999999999" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_no_vat_email_match_reuses_vat_less_account(self, sf_mock):
+        """Counterpart to the hijack guard — email match WITH no existing VAT
+        is safe to reuse (matches Facturatie's own earlier sync without VAT).
+        """
+        no_vat_xml = VALID_FACTURATIE_COMPANY_CREATED_XML.replace(
+            b"<vatNumber>BE0123456789</vatNumber>\n    ",
+            b"",
+        )
+        parsed_xml = etree.fromstring(no_vat_xml)
+        existing_vat_less = {
+            **FACTURATIE_ACCOUNT_RETURN,
+            "VAT_Number__c": None,
+            "Email__c": "billing@acme.example",
+        }
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch(
+                "src.receiver.get_account_match_by_email",
+                return_value=("unique", existing_vat_less),
+            ),
+            patch("src.receiver.create_account") as mock_create,
+            patch("src.sender.publish_company_confirmed") as mock_publish,
+        ):
+            from src.receiver import handle_facturatie_company_created
+
+            msg = _make_message(no_vat_xml)
+            await handle_facturatie_company_created(msg, sf_mock)
+
+            mock_create.assert_not_called()
+            mock_publish.assert_called_once()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_invalid_xml_rejected(self, sf_mock):
+        with patch("src.xml_validator.validate", side_effect=ValueError("Bad XML")):
+            from src.receiver import handle_facturatie_company_created
+
+            msg = _make_message(INVALID_XML)
+            await handle_facturatie_company_created(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+
+
+class TestHandleFacturatieCompanyUpdated:
+    @pytest.fixture
+    def sf_mock(self):
+        sf = AsyncMock()
+        sf.Account = AsyncMock()
+        return sf
+
+    @pytest.mark.asyncio
+    async def test_unique_crm_id_updates_and_publishes_c19(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_COMPANY_UPDATED_XML)
+        existing = {**FACTURATIE_ACCOUNT_RETURN}
+        updated = {**existing, "Name": "Acme Updated NV"}
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_account_match_by_crm_id", return_value=("unique", existing)),
+            patch("src.receiver.update_facturatie_account", return_value=updated) as mock_update,
+            patch("src.receiver.apply_is_active", return_value={}),
+            patch("src.sender.publish_company_updated") as mock_publish,
+        ):
+            from src.receiver import handle_facturatie_company_updated
+
+            msg = _make_message(VALID_FACTURATIE_COMPANY_UPDATED_XML)
+            await handle_facturatie_company_updated(msg, sf_mock)
+
+            mock_update.assert_called_once()
+            mock_publish.assert_called_once()
+            payload = mock_publish.call_args.args[0]
+            assert payload["id"] == FACTURATIE_ACCOUNT_RETURN["CRM_ID__c"]
+            assert payload["name"] == "Acme Updated NV"
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_inactive_deactivates_and_publishes_c23(self, sf_mock):
+        inactive_xml = VALID_FACTURATIE_COMPANY_UPDATED_XML.replace(
+            b"<isActive>true</isActive>",
+            b"<isActive>false</isActive>",
+        )
+        parsed_xml = etree.fromstring(inactive_xml)
+        existing = {**FACTURATIE_ACCOUNT_RETURN}
+        deactivated = {**existing, "IsActive__c": False}
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_account_match_by_crm_id", return_value=("unique", existing)),
+            patch("src.receiver.deactivate_account_record", return_value=deactivated) as mock_deact,
+            patch("src.sender.publish_company_deactivated") as mock_publish,
+            patch("src.sender.publish_company_updated") as mock_updated_publish,
+        ):
+            from src.receiver import handle_facturatie_company_updated
+
+            msg = _make_message(inactive_xml)
+            await handle_facturatie_company_updated(msg, sf_mock)
+
+            mock_deact.assert_called_once()
+            mock_publish.assert_called_once()
+            mock_updated_publish.assert_not_called()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_unknown_crm_id_is_requeued(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_COMPANY_UPDATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_account_match_by_crm_id", return_value=("none", None)),
+            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
+            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+            patch("src.sender.publish_company_updated") as mock_publish,
+        ):
+            from src.receiver import handle_facturatie_company_updated
+
+            msg = _make_message(VALID_FACTURATIE_COMPANY_UPDATED_XML)
+            await handle_facturatie_company_updated(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            mock_republish.assert_awaited_once_with(msg, 1)
+
+    @pytest.mark.asyncio
+    async def test_invalid_xml_rejected(self, sf_mock):
+        with patch("src.xml_validator.validate", side_effect=ValueError("Bad XML")):
+            from src.receiver import handle_facturatie_company_updated
+
+            msg = _make_message(INVALID_XML)
+            await handle_facturatie_company_updated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+
+
+class TestHandleFacturatieCompanyDeactivated:
+    @pytest.fixture
+    def sf_mock(self):
+        return AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_unique_crm_id_deactivates_and_publishes(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_COMPANY_DEACTIVATED_XML)
+        existing = {**FACTURATIE_ACCOUNT_RETURN}
+        deactivated = {**existing, "IsActive__c": False}
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_account_match_by_crm_id", return_value=("unique", existing)),
+            patch("src.receiver.deactivate_account_record", return_value=deactivated) as mock_deact,
+            patch("src.sender.publish_company_deactivated") as mock_publish,
+        ):
+            from src.receiver import handle_facturatie_company_deactivated
+
+            msg = _make_message(VALID_FACTURATIE_COMPANY_DEACTIVATED_XML)
+            await handle_facturatie_company_deactivated(msg, sf_mock)
+
+            mock_deact.assert_called_once()
+            mock_publish.assert_called_once()
+            payload = mock_publish.call_args.args[0]
+            assert payload["id"] == FACTURATIE_ACCOUNT_RETURN["CRM_ID__c"]
+            assert payload["vatNumber"] == "BE0123456789"
+            assert payload["deactivatedAt"] == "2026-04-22T11:00:00Z"
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_unknown_crm_id_is_requeued(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_COMPANY_DEACTIVATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_account_match_by_crm_id", return_value=("none", None)),
+            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
+            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+            patch("src.sender.publish_company_deactivated") as mock_publish,
+        ):
+            from src.receiver import handle_facturatie_company_deactivated
+
+            msg = _make_message(VALID_FACTURATIE_COMPANY_DEACTIVATED_XML)
+            await handle_facturatie_company_deactivated(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            mock_republish.assert_awaited_once_with(msg, 1)
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_crm_id_is_acked(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_COMPANY_DEACTIVATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_account_match_by_crm_id", return_value=("ambiguous", None)),
+            patch("src.sender.publish_company_deactivated") as mock_publish,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_facturatie_company_deactivated
+
+            msg = _make_message(VALID_FACTURATIE_COMPANY_DEACTIVATED_XML)
+            await handle_facturatie_company_deactivated(msg, sf_mock)
+
+            mock_publish.assert_not_called()
+            msg.ack.assert_called_once()
+            assert "ambiguous CRM_ID__c" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_email_mismatch_logs_but_proceeds(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_COMPANY_DEACTIVATED_XML)
+        existing = {**FACTURATIE_ACCOUNT_RETURN, "Email__c": "renamed@acme.example"}
+        deactivated = {**existing, "IsActive__c": False}
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.get_account_match_by_crm_id", return_value=("unique", existing)),
+            patch("src.receiver.deactivate_account_record", return_value=deactivated),
+            patch("src.sender.publish_company_deactivated") as mock_publish,
+            caplog.at_level(logging.WARNING),
+        ):
+            from src.receiver import handle_facturatie_company_deactivated
+
+            msg = _make_message(VALID_FACTURATIE_COMPANY_DEACTIVATED_XML)
+            await handle_facturatie_company_deactivated(msg, sf_mock)
+
+            mock_publish.assert_called_once()
+            msg.ack.assert_called_once()
+            assert "email mismatch" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_invalid_xml_rejected(self, sf_mock):
+        with patch("src.xml_validator.validate", side_effect=ValueError("Bad XML")):
+            from src.receiver import handle_facturatie_company_deactivated
+
+            msg = _make_message(INVALID_XML)
+            await handle_facturatie_company_deactivated(msg, sf_mock)
+
+            msg.reject.assert_called_once_with(requeue=False)
+
+
+# ==========================================================================
 # Contract 27 + 13 + 15: mailing.user.created
 # ==========================================================================
 
