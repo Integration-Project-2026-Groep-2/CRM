@@ -1780,6 +1780,11 @@ async def upsert_account_by_vat(
     """
     data = {**data}
 
+    # Salesforce v59+ rejects the external-ID field in the body when it is
+    # already specified in the URL path. Strip it — the value on the URL is
+    # authoritative for the upsert target.
+    data.pop("VAT_Number__c", None)
+
     existing = await get_account_by_vat(sf, vat_number)
     if existing and existing.get("CRM_ID__c"):
         data["CRM_ID__c"] = existing["CRM_ID__c"]
