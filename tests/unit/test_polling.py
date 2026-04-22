@@ -30,7 +30,6 @@ def make_config(tmp_path: Path, polling_integration_user_id: str | None = None) 
         salesforce_domain="login",
         heartbeat_interval_seconds=0,
         system_name="CRM",
-        status_check_interval_seconds=30,
         polling_interval_seconds=0,
         polling_state_path=str(tmp_path / "checkpoint.json"),
         polling_integration_user_id=polling_integration_user_id,

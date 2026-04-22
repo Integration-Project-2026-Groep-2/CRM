@@ -57,7 +57,6 @@ async def test_main_stops_on_shutdown_signal(monkeypatch: pytest.MonkeyPatch) ->
         salesforce_domain="login",
         heartbeat_interval_seconds=1,
         system_name="CRM",
-        status_check_interval_seconds=30,
         polling_interval_seconds=60,
         polling_state_path="/tmp/polling_checkpoint_test.json",
         polling_integration_user_id=None,
@@ -66,9 +65,6 @@ async def test_main_stops_on_shutdown_signal(monkeypatch: pytest.MonkeyPatch) ->
     never = asyncio.Event()
 
     async def fake_run_heartbeat(*_args: object, **_kwargs: object) -> None:
-        await never.wait()
-
-    async def fake_run_status(*_args: object, **_kwargs: object) -> None:
         await never.wait()
 
     async def fake_run_receiver(*_args: object, **_kwargs: object) -> None:
@@ -97,7 +93,6 @@ async def test_main_stops_on_shutdown_signal(monkeypatch: pytest.MonkeyPatch) ->
     )
     monkeypatch.setattr("src.main.sender.init", AsyncMock())
     monkeypatch.setattr("src.main.run_heartbeat", fake_run_heartbeat)
-    monkeypatch.setattr("src.main.run_status", fake_run_status)
     monkeypatch.setattr("src.main.run_receiver", fake_run_receiver)
     monkeypatch.setattr("src.main.run_polling", fake_run_polling)
 

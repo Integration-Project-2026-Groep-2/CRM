@@ -42,13 +42,12 @@ E2E_AUTO_START_LOCAL_STACK=1 pytest tests/e2e -v
 
 ## Architectuur
 
-Eén Docker container → één Python process → 4 asyncio tasks + sender utility:
+Eén Docker container → één Python process → 3 asyncio tasks + sender utility:
 
 | Module | Verantwoordelijkheid |
 |---|---|
 | `heartbeat.py` | XML heartbeat elke seconde → `heartbeat.direct` exchange (Contract 7) |
-| `status.py` | CPU/mem/disk → `crm.status.checked` (Contract 8) |
-| `receiver.py` | Luistert op 22 queues van andere teams |
+| `receiver.py` | Luistert op inbound queues van andere teams |
 | `polling.py` | Polt Salesforce periodiek op out-of-band Contact/Account wijzigingen (admin in SF UI); publiceert contracts 13/14/18/19/22/23 |
 | `sender.py` | Utility module — receiver én polling handlers roepen publish functies aan |
 
