@@ -334,6 +334,8 @@ _mailing_id_field_supported_cache: bool | None = None
 _account_active_field_cache: str | None = None
 _planning_id_field_supported_cache: bool | None = None
 _session_registration_object_supported_cache: bool | None = None
+_account_email_field_cache: str | None = None
+_account_country_field_cache: str | None = None
 
 
 def _normalize_optional_field_value(value: Any) -> str | None:
@@ -1848,13 +1850,45 @@ async def get_account_by_vat(
 
 
 async def _resolve_account_email_field(sf: Salesforce) -> str | None:
-    """Probe which email field exists on Account, preferring Email__c over Email."""
+    """Probe which email field exists on Account, preferring Email__c over Email.
+
+    Cached after first call — custom field layouts don't change at runtime.
+    """
+    global _account_email_field_cache  # noqa: PLW0603
+    if _account_email_field_cache is not None:
+        return _account_email_field_cache
+
     describe = await asyncio.to_thread(sf.Account.describe)
     available = {field["name"] for field in describe.get("fields", [])}
     for candidate in ("Email__c", "Email"):
         if candidate in available:
+            _account_email_field_cache = candidate
             return candidate
     return None
+
+
+async def _resolve_account_country_field(sf: Salesforce) -> str:
+    """Probe whether this Salesforce org has State & Country Picklists enabled.
+
+    When picklists are enabled, `BillingCountry` is a read-only derived label
+    and writes must target `BillingCountryCode` (ISO-2 code). When picklists
+    are disabled, only `BillingCountry` exists as a free-text field.
+
+    Writing the wrong one yields `FIELD_INTEGRITY_EXCEPTION` — regression
+    caught in production 2026-04-22. Cached after first call.
+    """
+    global _account_country_field_cache  # noqa: PLW0603
+    if _account_country_field_cache is not None:
+        return _account_country_field_cache
+
+    describe = await asyncio.to_thread(sf.Account.describe)
+    available = {field["name"] for field in describe.get("fields", [])}
+    for candidate in ("BillingCountryCode", "BillingCountry"):
+        if candidate in available:
+            _account_country_field_cache = candidate
+            return candidate
+    # Safe default — every standard Account has BillingCountry even without picklists.
+    return "BillingCountry"
 
 
 async def get_account_match_by_crm_id(
@@ -1976,8 +2010,13 @@ async def update_facturatie_account(
     if _normalize_optional_field_value(account.get("BillingCity")) != _normalize_optional_field_value(city):
         updates["BillingCity"] = city
 
-    if _normalize_optional_field_value(account.get("BillingCountry")) != _normalize_optional_field_value(country):
-        updates["BillingCountry"] = country
+    # Use the org-appropriate country field: BillingCountryCode when State &
+    # Country Picklists are enabled (BillingCountry is read-only then),
+    # BillingCountry otherwise. Compare against whichever one exists on the
+    # fetched record to avoid spurious updates.
+    country_field = await _resolve_account_country_field(sf)
+    if _normalize_optional_field_value(account.get(country_field)) != _normalize_optional_field_value(country):
+        updates[country_field] = country
 
     if house_number:
         logger.debug(
