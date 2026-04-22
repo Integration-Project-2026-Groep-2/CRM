@@ -1270,3 +1270,101 @@ class TestContract17UnpaidRequested:
         unpaid_person = next(person for person in persons if person.findtext("email") == unpaid_email)
         assert unpaid_person.findtext("firstName") == "Unpaid"
         assert unpaid_person.findtext("lastName") == "Person"
+
+
+# ---------------------------------------------------------------------------
+# Contract 10 — Person Lookup Request → Response with Salesforce resolution
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.salesforce
+class TestContract10PersonLookup:
+    """C10: kassa.person.lookup.requested returns CRM's canonical Contact id."""
+
+    @pytest.mark.asyncio
+    async def test_person_lookup_returns_found_for_registered_contact(
+        self, channel, inbound_exchanges, outbound_exchange, sf_client,
+    ):
+        """Happy path: registered Contact produces found=true with CRM UUID."""
+        email = _unique_email()
+        registration_id = f"REG-E2E-LOOKUP-{random.randint(100000, 999999)}"
+
+        q_confirmed = await _create_temp_queue(channel, outbound_exchange, "crm.user.confirmed")
+        q_lookup = await _create_temp_queue(channel, outbound_exchange, "crm.person.lookup.responded")
+        await _drain_queue(q_confirmed)
+        await _drain_queue(q_lookup)
+
+        registration_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<Registration>
+    <registrationId>{registration_id}</registrationId>
+    <firstName>Lookup</firstName>
+    <lastName>Found</lastName>
+    <email>{email}</email>
+    <sessionId>SESS-E2E-010A</sessionId>
+    <role>VISITOR</role>
+    <gdprConsent>true</gdprConsent>
+</Registration>"""
+
+        await _publish(inbound_exchanges["user.topic"], "frontend.registration.created", registration_xml)
+
+        confirmed = await _consume_one(q_confirmed)
+        assert confirmed is not None, "Prerequisite: C1 must produce UserConfirmed first"
+        expected_id = confirmed.findtext("id")
+        assert expected_id is not None, "UserConfirmed missing canonical id"
+
+        lookup_queue_name = "kassa.person.lookup.requested"
+        lookup_queue = await channel.declare_queue(lookup_queue_name, durable=True)
+        await lookup_queue.bind(inbound_exchanges["payment.topic"], routing_key=lookup_queue_name)
+        await _drain_queue(lookup_queue)
+
+        request_id = f"LOOKUP-E2E-{random.randint(100000, 999999)}"
+        lookup_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<PersonLookupRequest>
+    <requestId>{request_id}</requestId>
+    <email>{email}</email>
+</PersonLookupRequest>"""
+
+        await _publish(inbound_exchanges["payment.topic"], lookup_queue_name, lookup_xml)
+
+        response = await _consume_one(q_lookup)
+        assert response is not None, "Contract 10b response was not published"
+        assert response.findtext("requestId") == request_id
+        assert response.findtext("found") == "true"
+        assert response.findtext("linkedToCompany") == "false"
+        assert response.findtext("id") == expected_id
+
+        remaining = await _queue_message_count(channel, lookup_queue_name)
+        assert remaining == 0, f"PersonLookupRequest still in queue (count={remaining})"
+
+    @pytest.mark.asyncio
+    async def test_person_lookup_returns_found_false_for_unknown_email(
+        self, channel, inbound_exchanges, outbound_exchange,
+    ):
+        """Negative path: unknown email produces found=false, linkedToCompany=false."""
+        unknown_email = _unique_email()
+
+        q_lookup = await _create_temp_queue(channel, outbound_exchange, "crm.person.lookup.responded")
+        await _drain_queue(q_lookup)
+
+        lookup_queue_name = "kassa.person.lookup.requested"
+        lookup_queue = await channel.declare_queue(lookup_queue_name, durable=True)
+        await lookup_queue.bind(inbound_exchanges["payment.topic"], routing_key=lookup_queue_name)
+        await _drain_queue(lookup_queue)
+
+        request_id = f"LOOKUP-E2E-MISS-{random.randint(100000, 999999)}"
+        lookup_xml = f"""<?xml version='1.0' encoding='utf-8'?>
+<PersonLookupRequest>
+    <requestId>{request_id}</requestId>
+    <email>{unknown_email}</email>
+</PersonLookupRequest>"""
+
+        await _publish(inbound_exchanges["payment.topic"], lookup_queue_name, lookup_xml)
+
+        response = await _consume_one(q_lookup)
+        assert response is not None, "Contract 10b response was not published"
+        assert response.findtext("requestId") == request_id
+        assert response.findtext("found") == "false"
+        assert response.findtext("linkedToCompany") == "false"
+        assert response.find("id") is None
+        assert response.find("companyName") is None
+        assert response.find("companyId") is None
