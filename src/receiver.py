@@ -695,8 +695,14 @@ def _build_user_deactivation_data(contact: dict, deactivated_at: str) -> dict[st
 
 def _build_company_deactivation_data(account: dict, deactivated_at: str) -> dict[str, str]:
     """Build the outbound Contract 23 payload from a Salesforce Account."""
+    crm_id = account.get("CRM_ID__c")
+    if not crm_id:
+        raise ValueError(
+            f"Account {account.get('Id')} has no CRM_ID__c — refusing to publish "
+            "crm.company.deactivated with a null canonical id.",
+        )
     return {
-        "id": account["CRM_ID__c"],
+        "id": crm_id,
         "vatNumber": account["VAT_Number__c"],
         "deactivatedAt": deactivated_at,
     }
@@ -725,6 +731,12 @@ def _build_company_data(account: dict) -> dict:
     Required XSD fields: id, vatNumber, name, email, isActive, confirmedAt.
     Phone/adres fields are not part of C14 (only C19/C5b carry them).
     """
+    crm_id = account.get("CRM_ID__c")
+    if not crm_id:
+        raise ValueError(
+            f"Account {account.get('Id')} has no CRM_ID__c — refusing to publish "
+            "crm.company.confirmed with a null canonical id.",
+        )
     email = _get_account_email(account)
     if email is None:
         raise ValueError(
@@ -733,7 +745,7 @@ def _build_company_data(account: dict) -> dict:
         )
 
     return {
-        "id": account["CRM_ID__c"],
+        "id": crm_id,
         "vatNumber": account["VAT_Number__c"],
         "name": account["Name"],
         "email": email,
@@ -747,8 +759,14 @@ def _build_updated_company_data(account: dict) -> dict:
 
     Consumers replace their local copy entirely — include all available fields.
     """
+    crm_id = account.get("CRM_ID__c")
+    if not crm_id:
+        raise ValueError(
+            f"Account {account.get('Id')} has no CRM_ID__c — refusing to publish "
+            "crm.company.updated with a null canonical id.",
+        )
     data: dict[str, Any] = {
-        "id": account["CRM_ID__c"],
+        "id": crm_id,
         "vatNumber": account["VAT_Number__c"],
         "name": account["Name"],
         "isActive": _get_account_is_active(account),
