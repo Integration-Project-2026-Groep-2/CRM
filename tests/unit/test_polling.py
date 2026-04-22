@@ -306,10 +306,8 @@ class TestResolveIntegrationUserId:
         evil_config = replace(config, salesforce_username="o'brien@example.com")
         await polling._resolve_integration_user_id(sf, evil_config)
         soql = sf.query.call_args_list[0].args[0]
-        # Single quote must be backslash-escaped (SOQL convention). Updated
-        # from the previous doubling-only escape after the 2026-04-22 review
-        # flagged that `\'` can close the literal on raw `\` input.
-        assert "o\\'brien@example.com" in soql
+        # Single quote must be doubled (SOQL escape), not un-escaped.
+        assert "o''brien@example.com" in soql
 
 
 class TestPollSoqlEscape:
@@ -324,9 +322,7 @@ class TestPollSoqlEscape:
         )
         await polling._poll_contacts(sf, state, "0051' OR '1'='1")
         soql = sf.query_all.call_args.args[0]
-        # Each inner single quote becomes `\'`; backslash-escape per SOQL spec
-        # (see src.salesforce_client.escape_soql, hardened 2026-04-22).
-        assert "'0051\\' OR \\'1\\'=\\'1'" in soql
+        assert "'0051'' OR ''1''=''1'" in soql
 
 
 class TestSkipDoesNotAdvanceCheckpoint:

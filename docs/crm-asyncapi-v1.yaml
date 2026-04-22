@@ -1,7 +1,7 @@
 asyncapi: 3.1.0
 info:
   title: Integratieproject 2026 — CRM (Salesforce) RabbitMQ Contracts
-  version: 1.9.0
+  version: 1.8.0
   description: >
     XML-contracten voor alle integraties waarbij het CRM-team (Salesforce)
     betrokken is.
@@ -128,70 +128,6 @@ channels:
     bindings:
       amqp:
         is: queue
-        queue:
-          durable: true
-
-  facturatieCompanyCreated:
-    address: facturatie.company.created
-    description: >-
-      Contract 33 (v1.9.0) — Facturatie → CRM: nieuw bedrijf aangemaakt in
-      FOSSBilling. Queue bindt aan de `company.topic` exchange (eigenaar:
-      Facturatie). CRM upsertet Account op `VAT_Number__c` (primair) of matcht
-      op email (fallback zonder vatNumber), en publiceert daarna C14
-      `crm.company.confirmed` via `contact.topic`. XSD root
-      `<FacturatieCompanyCreated>` vermijdt conflict met C3 frontend-inbound
-      `<CompanyCreated>`.
-    messages:
-      facturatieCompanyCreated:
-        $ref: "#/components/messages/FacturatieCompanyCreated"
-    bindings:
-      amqp:
-        is: queue
-        exchange:
-          name: company.topic
-          type: topic
-          durable: true
-        queue:
-          durable: true
-
-  facturatieCompanyUpdated:
-    address: facturatie.company.updated
-    description: >-
-      Contract 34 (v1.9.0) — Facturatie → CRM: bestaand CRM-gekoppeld bedrijf
-      volledig bijwerken. Resolveert strikt op `CRM_ID__c`; onbekend →
-      out-of-order deferral. `isActive=false` triggert soft delete +
-      C23 publish. Success publiceert C19 `crm.company.updated` via
-      `contact.topic`.
-    messages:
-      facturatieCompanyUpdated:
-        $ref: "#/components/messages/FacturatieCompanyUpdated"
-    bindings:
-      amqp:
-        is: queue
-        exchange:
-          name: company.topic
-          type: topic
-          durable: true
-        queue:
-          durable: true
-
-  facturatieCompanyDeactivated:
-    address: facturatie.company.deactivated
-    description: >-
-      Contract 35 (v1.9.0) — Facturatie → CRM: bedrijf deactiveren. Resolveert
-      op `CRM_ID__c`, voert soft delete uit via `IsActive__c` (dynamic
-      resolver), publiceert C23 `crm.company.deactivated` via `contact.topic`.
-      Email-mismatch logt warning maar gaat door — CRM_ID is leidend.
-    messages:
-      facturatieCompanyDeactivated:
-        $ref: "#/components/messages/FacturatieCompanyDeactivated"
-    bindings:
-      amqp:
-        is: queue
-        exchange:
-          name: company.topic
-          type: topic
-          durable: true
         queue:
           durable: true
 
@@ -1347,81 +1283,6 @@ components:
               <deactivatedAt>2026-04-15T16:00:00Z</deactivatedAt>
             </UserDeactivated>
 
-    FacturatieCompanyCreated:
-      name: FacturatieCompanyCreated
-      title: Facturatie bedrijf aangemaakt
-      summary: >-
-        Facturatie synchroniseert een nieuw bedrijf uit FOSSBilling naar CRM.
-      contentType: application/xml
-      tags:
-        - name: facturatie
-        - name: contract-33
-      payload:
-        $ref: "#/components/schemas/FacturatieCompanyCreated"
-      examples:
-        - name: creation
-          payload: |
-            <?xml version="1.0" encoding="UTF-8"?>
-            <FacturatieCompanyCreated>
-              <name>Acme NV</name>
-              <vatNumber>BE0123456789</vatNumber>
-              <email>billing@acme.example</email>
-              <phone>+32 2 123 45 67</phone>
-              <street>Kerkstraat</street>
-              <houseNumber>12</houseNumber>
-              <postalCode>1000</postalCode>
-              <city>Brussels</city>
-              <country>BE</country>
-              <createdAt>2026-04-22T09:30:00Z</createdAt>
-            </FacturatieCompanyCreated>
-
-    FacturatieCompanyUpdated:
-      name: FacturatieCompanyUpdated
-      title: Facturatie bedrijf bijgewerkt
-      summary: >-
-        Facturatie werkt een bestaand CRM-gekoppeld bedrijf bij met het volledige
-        object.
-      contentType: application/xml
-      tags:
-        - name: facturatie
-        - name: contract-34
-      payload:
-        $ref: "#/components/schemas/FacturatieCompanyUpdated"
-      examples:
-        - name: update
-          payload: |
-            <?xml version="1.0" encoding="UTF-8"?>
-            <FacturatieCompanyUpdated>
-              <id>d1e2f3a4-b5c6-4701-8d23-ef4567ab8501</id>
-              <vatNumber>BE0123456789</vatNumber>
-              <name>Acme Updated NV</name>
-              <email>new@acme.example</email>
-              <isActive>true</isActive>
-              <updatedAt>2026-04-22T10:00:00Z</updatedAt>
-            </FacturatieCompanyUpdated>
-
-    FacturatieCompanyDeactivated:
-      name: FacturatieCompanyDeactivated
-      title: Facturatie bedrijf gedeactiveerd
-      summary: >-
-        Facturatie vraagt CRM om een bestaand gekoppeld bedrijf soft te
-        deactiveren.
-      contentType: application/xml
-      tags:
-        - name: facturatie
-        - name: contract-35
-      payload:
-        $ref: "#/components/schemas/FacturatieCompanyDeactivated"
-      examples:
-        - name: deactivatie
-          payload: |
-            <?xml version="1.0" encoding="UTF-8"?>
-            <FacturatieCompanyDeactivated>
-              <id>d1e2f3a4-b5c6-4701-8d23-ef4567ab8501</id>
-              <email>billing@acme.example</email>
-              <deactivatedAt>2026-04-22T11:00:00Z</deactivatedAt>
-            </FacturatieCompanyDeactivated>
-
     MailingUserCreated:
       name: MailingUserCreated
       title: Mailing user aangemaakt
@@ -2511,120 +2372,6 @@ components:
         Facturatie vraagt CRM om een bestaande CRM-linked user soft te
         deactiveren. XML-root `<UserDeactivated>` (gedeeld met C22 outbound;
         velden zijn identiek tussen C22 en C26).
-      properties:
-        id:
-          type: string
-          format: uuid
-          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-        email:
-          type: string
-          format: email
-        deactivatedAt:
-          type: string
-          format: date-time
-
-    FacturatieCompanyCreated:
-      type: object
-      required:
-        - name
-        - email
-        - createdAt
-      description: >-
-        Facturatie synchroniseert een nieuw bedrijf uit FOSSBilling. XML-root
-        `<FacturatieCompanyCreated>` — dedicated naam om conflict met C3
-        frontend-inbound `<CompanyCreated>` te vermijden.
-      properties:
-        name:
-          type: string
-        vatNumber:
-          type: string
-          pattern: "^BE[0-9]{10}$"
-          nullable: true
-        email:
-          type: string
-          format: email
-        phone:
-          type: string
-          nullable: true
-        street:
-          type: string
-          nullable: true
-        houseNumber:
-          type: string
-          nullable: true
-        postalCode:
-          type: string
-          nullable: true
-        city:
-          type: string
-          nullable: true
-        country:
-          type: string
-          pattern: "^[A-Z]{2}$"
-          nullable: true
-        createdAt:
-          type: string
-          format: date-time
-
-    FacturatieCompanyUpdated:
-      type: object
-      required:
-        - id
-        - name
-        - email
-        - isActive
-        - updatedAt
-      description: >-
-        Facturatie werkt een bestaand CRM-gekoppeld bedrijf bij met het volledige
-        object. Resolveert strikt op `CRM_ID__c`.
-      properties:
-        id:
-          type: string
-          format: uuid
-          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-        vatNumber:
-          type: string
-          pattern: "^BE[0-9]{10}$"
-          nullable: true
-        name:
-          type: string
-        email:
-          type: string
-          format: email
-        phone:
-          type: string
-          nullable: true
-        street:
-          type: string
-          nullable: true
-        houseNumber:
-          type: string
-          nullable: true
-        postalCode:
-          type: string
-          nullable: true
-        city:
-          type: string
-          nullable: true
-        country:
-          type: string
-          pattern: "^[A-Z]{2}$"
-          nullable: true
-        isActive:
-          type: boolean
-        updatedAt:
-          type: string
-          format: date-time
-
-    FacturatieCompanyDeactivated:
-      type: object
-      required:
-        - id
-        - email
-        - deactivatedAt
-      description: >-
-        Facturatie vraagt CRM om een bestaand gekoppeld bedrijf soft te
-        deactiveren.
       properties:
         id:
           type: string

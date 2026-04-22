@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  CRM Master Schema — Alle contracts (1–35)
+  CRM Master Schema — Alle contracts (1–32)
   Integration Project 2025/2026 | Groep 2
-  Versie 1.5 — April 2026
+  Versie 1.4 — April 2026
 
   Bron: crm-asyncapi-v1.yaml (AsyncAPI 3.1.0, v1.8.0)
 
@@ -13,7 +13,7 @@
 -->
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
            elementFormDefault="unqualified"
-           version="1.5">
+           version="1.4">
 
   <!-- ============================================================
        GEDEELDE SIMPLE TYPES
@@ -838,65 +838,6 @@
       <xs:sequence>
         <xs:element name="id"            type="UUIDType"/>
         <xs:element name="vatNumber"     type="BelgianVatNumberType"/>
-        <xs:element name="deactivatedAt" type="ISO8601DateTimeType"/>
-      </xs:sequence>
-    </xs:complexType>
-  </xs:element>
-
-  <!-- ============================================================
-       CONTRACT 33 — Facturatie → CRM: nieuw bedrijf aangemaakt
-       Queue: facturatie.company.created | durable: true | Exchange: company.topic
-       Noot: dedicated root om conflict met C3 <CompanyCreated> te vermijden.
-  ============================================================ -->
-  <xs:element name="FacturatieCompanyCreated">
-    <xs:complexType>
-      <xs:sequence>
-        <xs:element name="name"        type="xs:string"/>
-        <xs:element name="vatNumber"   type="BelgianVatNumberType" minOccurs="0" nillable="true"/>
-        <xs:element name="email"       type="EmailType"/>
-        <xs:element name="phone"       type="xs:string"            minOccurs="0" nillable="true"/>
-        <xs:element name="street"      type="xs:string"            minOccurs="0" nillable="true"/>
-        <xs:element name="houseNumber" type="xs:string"            minOccurs="0" nillable="true"/>
-        <xs:element name="postalCode"  type="xs:string"            minOccurs="0" nillable="true"/>
-        <xs:element name="city"        type="xs:string"            minOccurs="0" nillable="true"/>
-        <xs:element name="country"     type="CountryCodeType"      minOccurs="0" nillable="true"/>
-        <xs:element name="createdAt"   type="ISO8601DateTimeType"/>
-      </xs:sequence>
-    </xs:complexType>
-  </xs:element>
-
-  <!-- ============================================================
-       CONTRACT 34 — Facturatie → CRM: bestaand bedrijf bijgewerkt
-       Queue: facturatie.company.updated | durable: true | Exchange: company.topic
-  ============================================================ -->
-  <xs:element name="FacturatieCompanyUpdated">
-    <xs:complexType>
-      <xs:sequence>
-        <xs:element name="id"          type="UUIDType"/>
-        <xs:element name="vatNumber"   type="BelgianVatNumberType" minOccurs="0" nillable="true"/>
-        <xs:element name="name"        type="xs:string"/>
-        <xs:element name="email"       type="EmailType"/>
-        <xs:element name="phone"       type="xs:string"            minOccurs="0" nillable="true"/>
-        <xs:element name="street"      type="xs:string"            minOccurs="0" nillable="true"/>
-        <xs:element name="houseNumber" type="xs:string"            minOccurs="0" nillable="true"/>
-        <xs:element name="postalCode"  type="xs:string"            minOccurs="0" nillable="true"/>
-        <xs:element name="city"        type="xs:string"            minOccurs="0" nillable="true"/>
-        <xs:element name="country"     type="CountryCodeType"      minOccurs="0" nillable="true"/>
-        <xs:element name="isActive"    type="xs:boolean"/>
-        <xs:element name="updatedAt"   type="ISO8601DateTimeType"/>
-      </xs:sequence>
-    </xs:complexType>
-  </xs:element>
-
-  <!-- ============================================================
-       CONTRACT 35 — Facturatie → CRM: bedrijf deactiveren
-       Queue: facturatie.company.deactivated | durable: true | Exchange: company.topic
-  ============================================================ -->
-  <xs:element name="FacturatieCompanyDeactivated">
-    <xs:complexType>
-      <xs:sequence>
-        <xs:element name="id"            type="UUIDType"/>
-        <xs:element name="email"         type="EmailType"/>
         <xs:element name="deactivatedAt" type="ISO8601DateTimeType"/>
       </xs:sequence>
     </xs:complexType>
