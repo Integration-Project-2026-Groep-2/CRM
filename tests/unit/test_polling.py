@@ -644,10 +644,22 @@ class TestDispatchAccount:
         record = _account_record(
             CreatedDate="2026-04-20T10:00:00.000+0000",
             SystemModstamp="2026-04-20T10:00:00.000+0000",
+            Phone="+32 2 555 12 34",
+            BillingStreet="Main Street",
+            BillingPostalCode="1000",
+            BillingCity="Brussels",
+            BillingCountry="BE",
         )
         previous = datetime(2026, 4, 19, 0, 0, tzinfo=timezone.utc)
         await polling._dispatch_account(record, previous)
         sender_init["company_confirmed"].assert_awaited_once()
+        payload = sender_init["company_confirmed"].await_args.args[0]
+        assert payload["email"] == "info@acme.be"
+        assert payload["phone"] == "+32 2 555 12 34"
+        assert payload["street"] == "Main Street"
+        assert payload["postalCode"] == "1000"
+        assert payload["city"] == "Brussels"
+        assert payload["country"] == "BE"
 
     @pytest.mark.asyncio
     async def test_edited_existing_publishes_company_updated(self, sender_init):
