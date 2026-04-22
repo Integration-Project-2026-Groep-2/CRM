@@ -2011,7 +2011,6 @@ async def handle_registration(message: aio_pika.IncomingMessage, sf: "Salesforce
     try:
         email = xml.findtext("email")
         registration_id = xml.findtext("registrationId") or ""
-        session_id = xml.findtext("sessionId") or ""
 
         gdpr_text = xml.findtext("gdprConsent")
         if gdpr_text not in ("true", "1"):
