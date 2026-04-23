@@ -471,6 +471,7 @@ _planning_id_field_supported_cache: bool | None = None
 _session_registration_object_supported_cache: bool | None = None
 _account_email_field_cache: str | None = None
 _account_country_field_cache: str | None = None
+_account_house_number_field_supported_cache: bool | None = None
 
 
 def _normalize_optional_field_value(value: Any) -> str | None:
@@ -630,6 +631,18 @@ async def has_session_registration_object(sf: Salesforce) -> bool:
     }
     _session_registration_object_supported_cache = "Session_Registration__c" in available_objects
     return _session_registration_object_supported_cache
+
+
+async def has_account_house_number_field(sf: Salesforce) -> bool:
+    """Return whether the Salesforce org exposes Account.House_Number__c."""
+    global _account_house_number_field_supported_cache  # noqa: PLW0603
+    if _account_house_number_field_supported_cache is not None:
+        return _account_house_number_field_supported_cache
+
+    describe = await asyncio.to_thread(sf.Account.describe)
+    available_fields = {field["name"] for field in describe.get("fields", [])}
+    _account_house_number_field_supported_cache = "House_Number__c" in available_fields
+    return _account_house_number_field_supported_cache
 
 
 async def _get_session_registration_by_id(
@@ -2122,9 +2135,7 @@ async def update_facturatie_account(
     the Facturatie-owned fields to match, while preserving CRM-owned identifiers
     (CRM_ID__c). Only writes to Salesforce when at least one field differs.
 
-    `house_number` is currently not persisted on Account (no standard SF field
-    for it). Included in the signature for XSD-field completeness but logged
-    as a debug trace if present; persist by adding House_Number__c on Account.
+    `house_number` is persisted when the org exposes Account.House_Number__c.
     """
     email_field = await _resolve_account_email_field(sf)
 
@@ -2160,6 +2171,10 @@ async def update_facturatie_account(
     if _normalize_optional_field_value(account.get("BillingCity")) != _normalize_optional_field_value(city):
         updates["BillingCity"] = city
 
+    if await has_account_house_number_field(sf):
+        if _normalize_optional_field_value(account.get("House_Number__c")) != _normalize_optional_field_value(house_number):
+            updates["House_Number__c"] = house_number
+
     # Use the org-appropriate country field: BillingCountryCode when State &
     # Country Picklists are enabled (BillingCountry is read-only then),
     # BillingCountry otherwise. Compare against whichever one exists on the
@@ -2167,14 +2182,6 @@ async def update_facturatie_account(
     country_field = await _resolve_account_country_field(sf)
     if _normalize_optional_field_value(account.get(country_field)) != _normalize_optional_field_value(country):
         updates[country_field] = country
-
-    if house_number:
-        logger.debug(
-            "Facturatie update for Account %s received houseNumber=%s but Account has "
-            "no House_Number__c field; value not persisted",
-            account.get("Id"),
-            house_number,
-        )
 
     if not updates:
         return account

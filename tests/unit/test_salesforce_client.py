@@ -58,6 +58,7 @@ def sf(monkeypatch):
     salesforce_client_module._session_registration_object_supported_cache = None
     salesforce_client_module._account_email_field_cache = None
     salesforce_client_module._account_country_field_cache = None
+    salesforce_client_module._account_house_number_field_supported_cache = None
 
     async def immediate_to_thread(func, /, *args, **kwargs):
         return func(*args, **kwargs)
@@ -2017,6 +2018,49 @@ async def test_update_facturatie_account_writes_to_resolved_country_field(sf):
     sf.Account.update.assert_called_once()
     updates = sf.Account.update.call_args[0][1]
     assert updates == {"BillingCountryCode": "NL"}
+
+
+@pytest.mark.asyncio
+async def test_update_facturatie_account_writes_house_number_when_field_exists(sf):
+    sf.Account.describe.return_value = {
+        "fields": [
+            {"name": "Email__c"},
+            {"name": "Name"},
+            {"name": "BillingCountry"},
+            {"name": "House_Number__c"},
+        ]
+    }
+    account = {
+        "Id": "001000000000401",
+        "Name": "Acme",
+        "VAT_Number__c": "BE0123456789",
+        "Email__c": "a@b.c",
+        "Phone": None,
+        "BillingStreet": None,
+        "House_Number__c": None,
+        "BillingPostalCode": None,
+        "BillingCity": None,
+        "BillingCountry": "BE",
+    }
+    sf.Account.get.return_value = {**account, "House_Number__c": "12"}
+
+    await update_facturatie_account(
+        sf,
+        account,
+        vat_number="BE0123456789",
+        name="Acme",
+        email="a@b.c",
+        phone=None,
+        street=None,
+        house_number="12",
+        postal_code=None,
+        city=None,
+        country="BE",
+    )
+
+    sf.Account.update.assert_called_once()
+    updates = sf.Account.update.call_args[0][1]
+    assert updates == {"House_Number__c": "12"}
 
 
 @pytest.mark.asyncio

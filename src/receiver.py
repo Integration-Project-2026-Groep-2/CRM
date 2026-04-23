@@ -44,6 +44,7 @@ from src.salesforce_client import (
     get_contact_match_by_planning_id,
     get_salesforce_client,
     get_unpaid_contacts,
+    has_account_house_number_field,
     has_contact_mailing_id_field,
     has_contact_planning_id_field,
     has_session_registration_object,
@@ -855,6 +856,7 @@ def _build_updated_company_data(account: dict) -> dict:
 
     address_mapping = {
         "BillingStreet": "street",
+        "House_Number__c": "houseNumber",
         "BillingPostalCode": "postalCode",
         "BillingCity": "city",
         "BillingCountry": "country",
@@ -2198,8 +2200,6 @@ async def _build_facturatie_account_data(
     - Country lands on `BillingCountryCode` (State & Country Picklists enabled,
       ISO-2 expected) or `BillingCountry` (picklists disabled, free text).
 
-    houseNumber is intentionally NOT persisted — Account has no standard
-    House_Number__c field. See update_facturatie_account for the same policy.
     """
     data: dict[str, Any] = {
         "Name": xml.findtext("name") or "",
@@ -2220,10 +2220,13 @@ async def _build_facturatie_account_data(
 
     address_mapping = {
         "street": "BillingStreet",
+        "houseNumber": "House_Number__c",
         "postalCode": "BillingPostalCode",
         "city": "BillingCity",
     }
     for xml_field, sf_field in address_mapping.items():
+        if sf_field == "House_Number__c" and not await has_account_house_number_field(sf):
+            continue
         value = _normalize_optional_text(xml.findtext(xml_field))
         if value:
             data[sf_field] = value
