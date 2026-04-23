@@ -295,7 +295,7 @@ _ACCOUNT_REQUIRED_FIELDS = [
 
 _ACCOUNT_OPTIONAL_FIELDS = [
     "Phone", "Email__c", "Email",
-    "BillingStreet", "BillingPostalCode", "BillingCity", "BillingCountry",
+    "BillingStreet", "House_Number__c", "BillingPostalCode", "BillingCity", "BillingCountry",
 ]
 
 
@@ -420,6 +420,25 @@ def _account_email(account: dict) -> str | None:
     return account.get("Email__c") or account.get("Email")
 
 
+def _account_company_fields(account: dict) -> dict[str, Any]:
+    data: dict[str, Any] = {}
+    if account.get("Phone"):
+        data["phone"] = account["Phone"]
+
+    address_mapping = {
+        "BillingStreet": "street",
+        "House_Number__c": "houseNumber",
+        "BillingPostalCode": "postalCode",
+        "BillingCity": "city",
+        "BillingCountry": "country",
+    }
+    for sf_field, xml_field in address_mapping.items():
+        value = account.get(sf_field)
+        if value:
+            data[xml_field] = value
+    return data
+
+
 def _build_company_confirmed_data(account: dict) -> dict:
     data = {
         "id": account["CRM_ID__c"],
@@ -429,6 +448,7 @@ def _build_company_confirmed_data(account: dict) -> dict:
         "isActive": _get_account_is_active(account),
         "confirmedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+    data.update(_account_company_fields(account))
     return data
 
 
@@ -443,19 +463,7 @@ def _build_company_updated_data(account: dict) -> dict:
     email = _account_email(account)
     if email:
         data["email"] = email
-    if account.get("Phone"):
-        data["phone"] = account["Phone"]
-
-    address_mapping = {
-        "BillingStreet": "street",
-        "BillingPostalCode": "postalCode",
-        "BillingCity": "city",
-        "BillingCountry": "country",
-    }
-    for sf_field, xml_field in address_mapping.items():
-        value = account.get(sf_field)
-        if value:
-            data[xml_field] = value
+    data.update(_account_company_fields(account))
     return data
 
 
