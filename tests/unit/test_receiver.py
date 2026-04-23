@@ -1773,6 +1773,22 @@ class TestBuildCompanyPayloadGuards:
         with pytest.raises(ValueError, match="no CRM_ID__c"):
             _build_company_deactivation_data(account, "2026-04-22T11:00:00Z")
 
+    def test_build_updated_company_data_includes_house_number_when_present(self):
+        from src.receiver import _build_updated_company_data
+
+        account = {
+            **FACTURATIE_ACCOUNT_RETURN,
+            "House_Number__c": "12A",
+            "BillingStreet": "Kerkstraat",
+            "BillingPostalCode": "1000",
+            "BillingCity": "Brussels",
+            "BillingCountry": "BE",
+        }
+
+        payload = _build_updated_company_data(account)
+
+        assert payload["houseNumber"] == "12A"
+
 
 class TestHandleFacturatieCompanyCreated:
     @pytest.fixture
@@ -1790,6 +1806,7 @@ class TestHandleFacturatieCompanyCreated:
         with (
             patch("src.receiver._resolve_account_email_field", new_callable=AsyncMock, return_value="Email__c"),
             patch("src.receiver._resolve_account_country_field", new_callable=AsyncMock, return_value="BillingCountryCode"),
+            patch("src.receiver.has_account_house_number_field", new_callable=AsyncMock, return_value=False),
         ):
             yield
 
@@ -1819,6 +1836,23 @@ class TestHandleFacturatieCompanyCreated:
             assert payload["vatNumber"] == "BE0123456789"
             assert payload["email"] == "billing@acme.example"
             msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_upsert_payload_includes_house_number_when_account_field_supported(self, sf_mock):
+        parsed_xml = etree.fromstring(VALID_FACTURATIE_COMPANY_CREATED_XML)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.receiver.has_account_house_number_field", new_callable=AsyncMock, return_value=True),
+            patch("src.receiver.upsert_account_by_vat", return_value=FACTURATIE_ACCOUNT_RETURN) as mock_upsert,
+            patch("src.sender.publish_company_confirmed"),
+        ):
+            from src.receiver import handle_facturatie_company_created
+
+            msg = _make_message(VALID_FACTURATIE_COMPANY_CREATED_XML)
+            await handle_facturatie_company_created(msg, sf_mock)
+
+            upsert_payload = mock_upsert.call_args.args[2]
+            assert upsert_payload["House_Number__c"] == "12"
 
     @pytest.mark.asyncio
     async def test_no_vat_falls_back_to_email_match_create(self, sf_mock):
