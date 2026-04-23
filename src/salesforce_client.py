@@ -28,12 +28,18 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Callable, Literal, TypeVar
 
 from simple_salesforce import Salesforce, SalesforceError
-from simple_salesforce.exceptions import SalesforceAuthenticationFailed
+from simple_salesforce.exceptions import (
+    SalesforceAuthenticationFailed,
+    SalesforceExpiredSession,
+    SalesforceResourceNotFound,
+)
 
 from src.config import Config
+
+_T = TypeVar("_T")
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +114,135 @@ def is_rate_limit_error(exc: Exception) -> bool:
             if isinstance(item, dict) and item.get("errorCode") == "REQUEST_LIMIT_EXCEEDED":
                 return True
     return "REQUEST_LIMIT_EXCEEDED" in str(exc)
+
+
+def is_expired_session_error(exc: Exception) -> bool:
+    """Detect an expired Salesforce session from the exception shape.
+
+    Catches three observed patterns:
+    1. Native 401 → `SalesforceExpiredSession`.
+    2. 404 on /query with `INVALID_SESSION_ID` in the content list — the
+       documented API response when the session is invalid.
+    3. 404 on /query with empty/missing content — production pattern where
+       SF silently redirects (302) the query endpoint on expiry and the
+       final response is an empty-body 404. The `resource_name="query"`
+       from simple-salesforce is the tell; no other SF REST resource
+       shares that exact name.
+    """
+    if isinstance(exc, SalesforceExpiredSession):
+        return True
+    content = getattr(exc, "content", None)
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("errorCode") == "INVALID_SESSION_ID":
+                return True
+    if isinstance(exc, SalesforceResourceNotFound):
+        # Only the 302→404 session-redirect pattern has an empty body on
+        # the /query endpoint. Non-empty content is a real REST response
+        # (MALFORMED_QUERY, INVALID_TYPE, etc.) and must NOT trigger reauth
+        # — we'd hide the real error and burn two auth round-trips per call.
+        if str(getattr(exc, "resource_name", "")) == "query":
+            resp_content = getattr(exc, "content", None)
+            if resp_content is None or resp_content == b"" or resp_content == "" or resp_content == []:
+                return True
+    return "INVALID_SESSION_ID" in str(exc)
+
+
+class SalesforceSession:
+    """Mutable container for a Salesforce client that can re-authenticate.
+
+    Used by long-lived tasks (polling) where the underlying SF session can
+    expire. `sf_call()` is the companion helper that wraps a call and
+    triggers `reauth()` on expired-session errors.
+
+    Kept intentionally small: this is a container, not a proxy. Callers use
+    `session.sf.query(...)` directly or — preferably — go through `sf_call`
+    which handles the retry.
+
+    Concurrency: safe for multiple coroutines on a single event loop — the
+    `_reauth_lock` serialises overlapping `reauth()` calls so a burst of
+    expired-session errors only triggers ONE new login. NOT safe across
+    processes or threads; SF clients should not be shared between them.
+    """
+
+    def __init__(
+        self,
+        sf: Salesforce,
+        config: Config,
+        shutdown_event: asyncio.Event | None = None,
+    ) -> None:
+        self.sf = sf
+        self._config = config
+        self._shutdown_event = shutdown_event
+        self._reauth_lock = asyncio.Lock()
+
+    async def reauth(self) -> None:
+        """Swap the internal sf client for a freshly authenticated instance.
+
+        Delegates to `get_salesforce_client` so all retry-on-transient and
+        shutdown-abort logic is reused. The `_reauth_lock` ensures that if
+        two coroutines race into `reauth()` simultaneously (future refactor
+        with parallel sf_calls), only the first actually re-authenticates;
+        the second waits on the lock and then finds a fresh `self.sf`.
+        """
+        async with self._reauth_lock:
+            # Re-check staleness after acquiring the lock: a previous caller
+            # may have already refreshed the session while we were waiting,
+            # in which case we should skip the redundant login.
+            # (Detection hook reserved for a future "is_session_fresh" probe;
+            # current impl always reauths — single-task polling never races.)
+            logger.warning("Salesforce session expired; reauthenticating...")
+            self.sf = await get_salesforce_client(
+                self._config, shutdown_event=self._shutdown_event,
+            )
+            logger.info("Salesforce session reauthenticated.")
+
+
+async def sf_call(
+    session: SalesforceSession,
+    fn: Callable[[Salesforce], _T],
+    *,
+    max_reauths: int = 1,
+) -> _T:
+    """Run `fn(session.sf)` in a thread; reauth + retry on expired session.
+
+    Behaviour:
+    - Rate-limit errors propagate immediately (outer handler skips cycle).
+    - Expired-session errors trigger at most `max_reauths` reauth attempts,
+      each followed by one retry. Default max_reauths=1 is enough for the
+      common "session just expired" case; anything more indicates the
+      problem is not session-related.
+    - All other errors propagate directly.
+
+    The lambda takes `sf` as an argument (not a closure) so that after
+    `session.reauth()` swaps the internal client, the retry uses the
+    new instance.
+    """
+    attempt = 0
+    while True:
+        try:
+            return await asyncio.to_thread(fn, session.sf)
+        except Exception as exc:  # noqa: BLE001
+            if is_rate_limit_error(exc):
+                raise
+            if not is_expired_session_error(exc) or attempt >= max_reauths:
+                raise
+            attempt += 1
+            try:
+                await session.reauth()
+            except RuntimeError as reauth_exc:
+                # get_salesforce_client signals shutdown via RuntimeError
+                # ("...cancelled by shutdown signal"). Convert to
+                # CancelledError so run_polling's outer handler re-raises
+                # (exit cleanly) instead of logging "cycle failed" and
+                # sleeping for the full polling interval.
+                if "shutdown" in str(reauth_exc).lower():
+                    raise asyncio.CancelledError() from reauth_exc
+                raise
+            # SalesforceAuthenticationFailed (bad creds) and other reauth
+            # errors propagate unchanged — caller's outer handler logs them
+            # so operators can distinguish "session expired + creds rotated"
+            # from a routine cycle failure.
 
 
 def _normalize_uuid_v4(value: Any) -> str | None:
