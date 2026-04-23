@@ -52,10 +52,16 @@ from src.receiver import (  # Private helpers reused to keep record→dict mappi
     _build_user_deactivation_data,
     _get_contact_is_active,
 )
-from src.salesforce_client import coerce_is_active, escape_soql, is_rate_limit_error
+from src.salesforce_client import (
+    SalesforceSession,
+    coerce_is_active,
+    escape_soql,
+    is_rate_limit_error,
+    sf_call,
+)
 
 if TYPE_CHECKING:
-    from simple_salesforce import Salesforce
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -101,14 +107,14 @@ def _format_sf_timestamp(value: datetime) -> str:
     return utc.strftime(_SF_TIMESTAMP_FORMAT)
 
 
-async def _seed_last_seen_from_sf(sf: "Salesforce", sobject: str) -> datetime:
+async def _seed_last_seen_from_sf(session: SalesforceSession, sobject: str) -> datetime:
     """Query Salesforce for the most-recent SystemModstamp on a given object.
 
     Falls back to `now()` in UTC when the org is empty (so cold start on an
     empty demo org still works). Always returns tz-aware UTC.
     """
     query = f"SELECT SystemModstamp FROM {sobject} ORDER BY SystemModstamp DESC LIMIT 1"
-    result = await asyncio.to_thread(sf.query, query)
+    result = await sf_call(session, lambda sf: sf.query(query))
     records = result.get("records") or []
     if not records:
         logger.warning("Polling: %s table is empty, seeding last_seen = now(UTC).", sobject)
@@ -146,7 +152,7 @@ def _try_load_checkpoint_file(state_path: str) -> PollingState | None:
         return None
 
 
-async def _load_or_seed_state(sf: "Salesforce", state_path: str) -> PollingState:
+async def _load_or_seed_state(session: SalesforceSession, state_path: str) -> PollingState:
     """Load persisted checkpoint or seed from Salesforce on cold start.
 
     NOTE: for bootstrap resilience, `run_polling` does NOT call this directly;
@@ -159,8 +165,8 @@ async def _load_or_seed_state(sf: "Salesforce", state_path: str) -> PollingState
     file_state = _try_load_checkpoint_file(state_path)
     if file_state is not None:
         return file_state
-    contact_ts = await _seed_last_seen_from_sf(sf, "Contact")
-    account_ts = await _seed_last_seen_from_sf(sf, "Account")
+    contact_ts = await _seed_last_seen_from_sf(session, "Contact")
+    account_ts = await _seed_last_seen_from_sf(session, "Account")
     return PollingState(contact_last_seen=contact_ts, account_last_seen=account_ts)
 
 
@@ -193,7 +199,7 @@ async def _persist_state(state: PollingState, state_path: str) -> None:
 # Integration user resolution
 # ---------------------------------------------------------------------------
 
-async def _resolve_integration_user_id(sf: "Salesforce", config: Config) -> str:
+async def _resolve_integration_user_id(session: SalesforceSession, config: Config) -> str:
     """Look up the integration account's Salesforce User Id.
 
     Used to exclude receiver-induced writes from the polling cycle via a
@@ -214,7 +220,7 @@ async def _resolve_integration_user_id(sf: "Salesforce", config: Config) -> str:
 
     username = config.salesforce_username
     soql = f"SELECT Id FROM User WHERE Username = '{escape_soql(username)}' LIMIT 1"
-    result = await asyncio.to_thread(sf.query, soql)
+    result = await sf_call(session, lambda sf: sf.query(soql))
     records = result.get("records") or []
     if not records:
         raise RuntimeError(
@@ -226,21 +232,30 @@ async def _resolve_integration_user_id(sf: "Salesforce", config: Config) -> str:
     # Warn operators when admin == integration user. In that case the filter
     # `LastModifiedById != uid` will also exclude admin UI edits → polling
     # detects nothing. Best-effort; never fails startup on this check.
-    await _warn_if_admin_is_integration_user(sf, uid)
+    await _warn_if_admin_is_integration_user(session, uid)
     return uid
 
 
-async def _warn_if_admin_is_integration_user(sf: "Salesforce", uid: str) -> None:
+async def _warn_if_admin_is_integration_user(session: SalesforceSession, uid: str) -> None:
     """Best-effort: emit a WARNING when the resolved integration user id is
     the same user the SF session is logged in as. This typically happens in
     dev/sandbox where the admin account IS the integration account — polling
     cannot distinguish receiver writes from admin UI writes and will silently
     detect zero out-of-band changes.
+
+    The probe itself is best-effort (swallow transient network / 5xx errors)
+    but permanent credential failures must NOT be swallowed — otherwise a
+    rotated/revoked integration user would run the polling task forever with
+    a dead client, hiding the real root cause until the first real query.
     """
+    from simple_salesforce.exceptions import SalesforceAuthenticationFailed
+
     try:
-        userinfo = await asyncio.to_thread(sf.restful, "chatter/users/me")
+        userinfo = await sf_call(session, lambda sf: sf.restful("chatter/users/me"))
+    except (SalesforceAuthenticationFailed, asyncio.CancelledError):
+        raise  # Permanent auth fail / shutdown — operator-visible, not swallowable
     except Exception:  # noqa: BLE001
-        return  # userinfo probe is optional — do not fail startup
+        return  # transient probe failure — best-effort, skip warning
     session_uid = (userinfo or {}).get("id") or ""
     # SF returns 18-char canonical ids; compare the stable 15-char prefix.
     if session_uid[:15] and session_uid[:15] == uid[:15]:
@@ -307,21 +322,21 @@ def _pick_boolean_active_field(describe: dict) -> str:
     raise RuntimeError("Polling: no IsActive/Active/Is_Active custom field on this SObject.")
 
 
-async def _resolve_contact_active_field(sf: "Salesforce") -> str:
+async def _resolve_contact_active_field(session: SalesforceSession) -> str:
     """Probe which active-style custom field Contact uses, preferring boolean type."""
-    describe = await _describe_cached(sf, "Contact")
+    describe = await _describe_cached(session, "Contact")
     return _pick_boolean_active_field(describe)
 
 
-async def _resolve_account_active_field(sf: "Salesforce") -> str:
+async def _resolve_account_active_field(session: SalesforceSession) -> str:
     """Probe which active-style custom field Account uses, preferring boolean type."""
-    describe = await _describe_cached(sf, "Account")
+    describe = await _describe_cached(session, "Account")
     return _pick_boolean_active_field(describe)
 
 
-async def _resolve_account_email_field(sf: "Salesforce") -> str | None:
+async def _resolve_account_email_field(session: SalesforceSession) -> str | None:
     """Probe which email field exists on Account, if any."""
-    describe = await _describe_cached(sf, "Account")
+    describe = await _describe_cached(session, "Account")
     available = {field["name"] for field in describe.get("fields", [])}
     for name in ("Email__c", "Email"):
         if name in available:
@@ -335,28 +350,28 @@ async def _resolve_account_email_field(sf: "Salesforce") -> str | None:
 _describe_cache: dict[str, dict] = {}
 
 
-async def _describe_cached(sf: "Salesforce", sobject: str) -> dict:
+async def _describe_cached(session: SalesforceSession, sobject: str) -> dict:
     cached = _describe_cache.get(sobject)
     if cached is not None:
         return cached
-    describe = await asyncio.to_thread(getattr(sf, sobject).describe)
+    describe = await sf_call(session, lambda sf: getattr(sf, sobject).describe())
     _describe_cache[sobject] = describe
     return describe
 
 
-async def _available_fields(sf: "Salesforce", sobject: str) -> set[str]:
+async def _available_fields(session: SalesforceSession, sobject: str) -> set[str]:
     """Return the set of field API names that actually exist on the SObject.
 
     Used to filter the polling SELECT list so that missing optional custom
     fields (Company_ID__c, Mailing_ID__c, …) do not cause SOQL INVALID_FIELD
     errors — the CRM_UUID field spec varies per org and release.
     """
-    describe = await _describe_cached(sf, sobject)
+    describe = await _describe_cached(session, sobject)
     return {field["name"] for field in describe.get("fields", [])}
 
 
-async def _build_contact_select_fields(sf: "Salesforce") -> list[str]:
-    available = await _available_fields(sf, "Contact")
+async def _build_contact_select_fields(session: SalesforceSession) -> list[str]:
+    available = await _available_fields(session, "Contact")
     fields = [name for name in _CONTACT_REQUIRED_FIELDS if name in available]
     missing_required = set(_CONTACT_REQUIRED_FIELDS) - available
     if missing_required:
@@ -366,14 +381,14 @@ async def _build_contact_select_fields(sf: "Salesforce") -> list[str]:
     for name in _CONTACT_OPTIONAL_FIELDS:
         if name in available and name not in fields:
             fields.append(name)
-    active = await _resolve_contact_active_field(sf)
+    active = await _resolve_contact_active_field(session)
     if active not in fields:
         fields.append(active)
     return fields
 
 
-async def _build_account_select_fields(sf: "Salesforce") -> list[str]:
-    available = await _available_fields(sf, "Account")
+async def _build_account_select_fields(session: SalesforceSession) -> list[str]:
+    available = await _available_fields(session, "Account")
     fields = [name for name in _ACCOUNT_REQUIRED_FIELDS if name in available]
     missing_required = set(_ACCOUNT_REQUIRED_FIELDS) - available
     if missing_required:
@@ -383,7 +398,7 @@ async def _build_account_select_fields(sf: "Salesforce") -> list[str]:
     for name in _ACCOUNT_OPTIONAL_FIELDS:
         if name in available and name not in fields:
             fields.append(name)
-    active = await _resolve_account_active_field(sf)
+    active = await _resolve_account_active_field(session)
     if active not in fields:
         fields.append(active)
     return fields
@@ -497,11 +512,11 @@ def _clear_pending_crm_id(sf_id: str | None) -> None:
         _pending_crm_ids.pop(sf_id, None)
 
 
-async def _persist_contact_crm_id(sf: "Salesforce", contact: dict) -> None:
+async def _persist_contact_crm_id(session: SalesforceSession, contact: dict) -> None:
     """Write `CRM_ID__c` back to Salesforce after a successful Contact publish."""
-    await asyncio.to_thread(
-        sf.Contact.update, contact["Id"], {"CRM_ID__c": contact["CRM_ID__c"]},
-    )
+    contact_id = contact["Id"]
+    crm_id = contact["CRM_ID__c"]
+    await sf_call(session, lambda sf: sf.Contact.update(contact_id, {"CRM_ID__c": crm_id}))
     _clear_pending_crm_id(contact.get("Id"))
     logger.info(
         "Polling: stamped CRM_ID__c=%s on Contact %s (post-publish)",
@@ -509,11 +524,11 @@ async def _persist_contact_crm_id(sf: "Salesforce", contact: dict) -> None:
     )
 
 
-async def _persist_account_crm_id(sf: "Salesforce", account: dict) -> None:
+async def _persist_account_crm_id(session: SalesforceSession, account: dict) -> None:
     """Write `CRM_ID__c` back to Salesforce after a successful Account publish."""
-    await asyncio.to_thread(
-        sf.Account.update, account["Id"], {"CRM_ID__c": account["CRM_ID__c"]},
-    )
+    account_id = account["Id"]
+    crm_id = account["CRM_ID__c"]
+    await sf_call(session, lambda sf: sf.Account.update(account_id, {"CRM_ID__c": crm_id}))
     _clear_pending_crm_id(account.get("Id"))
     logger.info(
         "Polling: stamped CRM_ID__c=%s on Account %s (post-publish)",
@@ -614,12 +629,12 @@ async def _dispatch_account(
 # ---------------------------------------------------------------------------
 
 async def _poll_contacts(
-    sf: "Salesforce",
+    session: SalesforceSession,
     state: PollingState,
     integration_user_id: str,
 ) -> PollingState:
     """Query Contact changes since last_seen and dispatch each record."""
-    fields = await _build_contact_select_fields(sf)
+    fields = await _build_contact_select_fields(session)
     since = _format_sf_timestamp(state.contact_last_seen)
     soql = (
         f"SELECT {', '.join(fields)} FROM Contact "
@@ -627,7 +642,7 @@ async def _poll_contacts(
         f"AND LastModifiedById != '{escape_soql(integration_user_id)}' "
         f"ORDER BY SystemModstamp ASC"
     )
-    result = await asyncio.to_thread(sf.query_all, soql)
+    result = await sf_call(session, lambda sf: sf.query_all(soql))
     records = result.get("records") or []
     if not records:
         return state
@@ -646,7 +661,7 @@ async def _poll_contacts(
             record, needs_stamp = _assign_local_crm_id(record)
             dispatched = await _dispatch_contact(record, previous_last_seen)
             if dispatched and needs_stamp:
-                await _persist_contact_crm_id(sf, record)
+                await _persist_contact_crm_id(session, record)
             if dispatched:
                 if record_ts > latest:
                     latest = record_ts
@@ -677,12 +692,12 @@ async def _poll_contacts(
 
 
 async def _poll_accounts(
-    sf: "Salesforce",
+    session: SalesforceSession,
     state: PollingState,
     integration_user_id: str,
 ) -> PollingState:
     """Query Account changes since last_seen and dispatch each record."""
-    fields = await _build_account_select_fields(sf)
+    fields = await _build_account_select_fields(session)
     since = _format_sf_timestamp(state.account_last_seen)
     soql = (
         f"SELECT {', '.join(fields)} FROM Account "
@@ -690,7 +705,7 @@ async def _poll_accounts(
         f"AND LastModifiedById != '{escape_soql(integration_user_id)}' "
         f"ORDER BY SystemModstamp ASC"
     )
-    result = await asyncio.to_thread(sf.query_all, soql)
+    result = await sf_call(session, lambda sf: sf.query_all(soql))
     records = result.get("records") or []
     if not records:
         return state
@@ -704,7 +719,7 @@ async def _poll_accounts(
             record, needs_stamp = _assign_local_crm_id(record)
             dispatched = await _dispatch_account(record, previous_last_seen)
             if dispatched and needs_stamp:
-                await _persist_account_crm_id(sf, record)
+                await _persist_account_crm_id(session, record)
             if dispatched:
                 if record_ts > latest:
                     latest = record_ts
@@ -763,6 +778,11 @@ async def run_polling(
     from src.salesforce_client import get_salesforce_client
 
     sf = await get_salesforce_client(config, shutdown_event=shutdown_event)
+    # Wrap in a SalesforceSession so sf_call can auto-reauth on expired
+    # sessions (401 INVALID_SESSION_ID or observed 302→404 on /query endpoint).
+    # All helper calls take `session` and route through sf_call; the underlying
+    # sf client is swapped in-place on reauth.
+    session = SalesforceSession(sf, config, shutdown_event)
 
     # Bootstrap (state + integration user) lives INSIDE the retry loop so a
     # transient SF outage during startup doesn't permanently kill the polling
@@ -787,15 +807,15 @@ async def run_polling(
                 # Cold-start SF seed, per-object. Each call is cached on its
                 # own so a failure on Account doesn't force Contact to re-seed.
                 if contact_seed is None:
-                    contact_seed = await _seed_last_seen_from_sf(sf, "Contact")
+                    contact_seed = await _seed_last_seen_from_sf(session, "Contact")
                 if account_seed is None:
-                    account_seed = await _seed_last_seen_from_sf(sf, "Account")
+                    account_seed = await _seed_last_seen_from_sf(session, "Account")
                 state = PollingState(
                     contact_last_seen=contact_seed,
                     account_last_seen=account_seed,
                 )
             if integration_user_id is None:
-                integration_user_id = await _resolve_integration_user_id(sf, config)
+                integration_user_id = await _resolve_integration_user_id(session, config)
                 user_id_resolved_at = time.monotonic()
                 logger.info(
                     "Polling started: interval=%ss, integration_user_id=%s, checkpoint=%s",
@@ -804,16 +824,16 @@ async def run_polling(
                 )
 
             if time.monotonic() - user_id_resolved_at > _USER_ID_REFRESH_SECONDS:
-                integration_user_id = await _resolve_integration_user_id(sf, config)
+                integration_user_id = await _resolve_integration_user_id(session, config)
                 user_id_resolved_at = time.monotonic()
 
             # Persist after EACH object's cycle — a crash between
             # _poll_contacts and _poll_accounts would otherwise discard the
             # Contact advance and re-publish every Contact on restart.
             assert state is not None and integration_user_id is not None  # bootstrapped
-            state = await _poll_contacts(sf, state, integration_user_id)
+            state = await _poll_contacts(session, state, integration_user_id)
             await _persist_state(state, config.polling_state_path)
-            state = await _poll_accounts(sf, state, integration_user_id)
+            state = await _poll_accounts(session, state, integration_user_id)
             await _persist_state(state, config.polling_state_path)
         except asyncio.CancelledError:
             raise
