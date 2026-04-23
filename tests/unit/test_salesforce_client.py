@@ -2772,3 +2772,335 @@ class TestCoerceIsActive:
         from src.salesforce_client import coerce_is_active
 
         assert coerce_is_active(raw) is expected
+
+
+# ---------------------------------------------------------------------------
+# is_expired_session_error — detects expired SF session for auto-reauth
+# ---------------------------------------------------------------------------
+
+class TestIsExpiredSessionError:
+    """Detector for expired SF sessions used by sf_call auto-reauth wrapper.
+
+    Catches both the canonical 401 path (SalesforceExpiredSession) and the
+    observed production 302→404 path where SF redirects the query endpoint
+    and simple-salesforce reports it as SalesforceResourceNotFound with
+    resource_name='query' or INVALID_SESSION_ID in the error content.
+    """
+
+    def test_detects_native_expired_session(self):
+        from simple_salesforce.exceptions import SalesforceExpiredSession
+
+        from src.salesforce_client import is_expired_session_error
+
+        exc = SalesforceExpiredSession(
+            "https://example.salesforce.com/services/data/v59.0/query/",
+            401,
+            "query",
+            b'[{"errorCode":"INVALID_SESSION_ID","message":"Session expired"}]',
+        )
+        assert is_expired_session_error(exc) is True
+
+    def test_detects_invalid_session_id_in_content(self):
+        from simple_salesforce.exceptions import SalesforceResourceNotFound
+
+        from src.salesforce_client import is_expired_session_error
+
+        exc = SalesforceResourceNotFound(
+            "https://example.salesforce.com/services/data/v59.0/query/",
+            404,
+            "query",
+            [{"errorCode": "INVALID_SESSION_ID", "message": "Session expired or invalid"}],
+        )
+        assert is_expired_session_error(exc) is True
+
+    def test_detects_query_resource_404_empty_body(self):
+        """Production pattern: 302 redirect → 404 empty body on /query endpoint.
+
+        This is the real-world symptom: SF returns an empty-body 404 after
+        silently redirecting a request on an expired session. The content
+        list is empty, but resource_name="query" is the tell.
+        """
+        from simple_salesforce.exceptions import SalesforceResourceNotFound
+
+        from src.salesforce_client import is_expired_session_error
+
+        exc = SalesforceResourceNotFound(
+            "https://example.salesforce.com/services/data/v59.0/query/",
+            404,
+            "query",
+            b"",
+        )
+        assert is_expired_session_error(exc) is True
+
+    def test_ignores_404_on_unrelated_resource(self):
+        """A genuine 404 (e.g. deleted custom endpoint) must NOT reauth-loop."""
+        from simple_salesforce.exceptions import SalesforceResourceNotFound
+
+        from src.salesforce_client import is_expired_session_error
+
+        exc = SalesforceResourceNotFound(
+            "https://example.salesforce.com/services/data/v59.0/sobjects/Nonexistent__c/",
+            404,
+            "sobjects/Nonexistent__c",
+            [{"errorCode": "NOT_FOUND", "message": "The requested resource does not exist"}],
+        )
+        assert is_expired_session_error(exc) is False
+
+    def test_ignores_generic_exception(self):
+        from src.salesforce_client import is_expired_session_error
+
+        assert is_expired_session_error(ValueError("bad value")) is False
+
+
+# ---------------------------------------------------------------------------
+# SalesforceSession + sf_call — auto-reauth wrapper for long-lived polling
+# ---------------------------------------------------------------------------
+
+class TestSfCall:
+    """sf_call wraps SF calls with one-shot reauth on expired session."""
+
+    @pytest.mark.asyncio
+    async def test_returns_result_on_first_try_success(self):
+        from src.salesforce_client import SalesforceSession, sf_call
+
+        fake_sf = MagicMock()
+        fake_sf.query.return_value = {"records": [{"Id": "001"}]}
+
+        session = SalesforceSession(
+            fake_sf, config=MagicMock(), shutdown_event=None,
+        )
+
+        result = await sf_call(session, lambda sf: sf.query("SELECT Id FROM Contact"))
+
+        assert result == {"records": [{"Id": "001"}]}
+        fake_sf.query.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_reauths_and_retries_once_on_expired_session(self, monkeypatch):
+        from simple_salesforce.exceptions import SalesforceResourceNotFound
+
+        from src.salesforce_client import SalesforceSession, sf_call
+
+        old_sf = MagicMock()
+        old_sf.query.side_effect = SalesforceResourceNotFound(
+            "https://example/query/", 404, "query", b"",
+        )
+
+        new_sf = MagicMock()
+        new_sf.query.return_value = {"records": []}
+
+        async def fake_get_client(config, shutdown_event=None):
+            return new_sf
+
+        monkeypatch.setattr(
+            "src.salesforce_client.get_salesforce_client", fake_get_client,
+        )
+
+        session = SalesforceSession(old_sf, config=MagicMock(), shutdown_event=None)
+
+        result = await sf_call(session, lambda sf: sf.query("SELECT Id FROM Contact"))
+
+        assert result == {"records": []}
+        assert session.sf is new_sf  # reauth mutated the container
+        old_sf.query.assert_called_once()
+        new_sf.query.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_propagates_rate_limit_without_reauth(self, monkeypatch):
+        from src.salesforce_client import SalesforceSession, sf_call
+
+        reauth_calls = []
+
+        async def fake_get_client(config, shutdown_event=None):
+            reauth_calls.append(1)
+            return MagicMock()
+
+        monkeypatch.setattr(
+            "src.salesforce_client.get_salesforce_client", fake_get_client,
+        )
+
+        fake_sf = MagicMock()
+        rate_limit_exc = Exception("REQUEST_LIMIT_EXCEEDED: daily API cap")
+        fake_sf.query.side_effect = rate_limit_exc
+
+        session = SalesforceSession(fake_sf, config=MagicMock(), shutdown_event=None)
+
+        with pytest.raises(Exception, match="REQUEST_LIMIT_EXCEEDED"):
+            await sf_call(session, lambda sf: sf.query("soql"))
+
+        # No reauth triggered — rate-limit must surface to outer handler
+        assert reauth_calls == []
+        fake_sf.query.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_propagates_non_session_error_without_reauth(self, monkeypatch):
+        from src.salesforce_client import SalesforceSession, sf_call
+
+        reauth_calls = []
+
+        async def fake_get_client(config, shutdown_event=None):
+            reauth_calls.append(1)
+            return MagicMock()
+
+        monkeypatch.setattr(
+            "src.salesforce_client.get_salesforce_client", fake_get_client,
+        )
+
+        fake_sf = MagicMock()
+        fake_sf.query.side_effect = ValueError("malformed SOQL")
+
+        session = SalesforceSession(fake_sf, config=MagicMock(), shutdown_event=None)
+
+        with pytest.raises(ValueError, match="malformed SOQL"):
+            await sf_call(session, lambda sf: sf.query("soql"))
+
+        assert reauth_calls == []
+
+    @pytest.mark.asyncio
+    async def test_propagates_after_second_expired_failure(self, monkeypatch):
+        """Max 1 reauth: if both try and retry fail with expired, propagate."""
+        from simple_salesforce.exceptions import SalesforceResourceNotFound
+
+        from src.salesforce_client import SalesforceSession, sf_call
+
+        persistent_exc = SalesforceResourceNotFound(
+            "https://example/query/", 404, "query", b"",
+        )
+
+        old_sf = MagicMock()
+        old_sf.query.side_effect = persistent_exc
+
+        new_sf = MagicMock()
+        new_sf.query.side_effect = persistent_exc
+
+        reauth_call_count = {"n": 0}
+
+        async def fake_get_client(config, shutdown_event=None):
+            reauth_call_count["n"] += 1
+            return new_sf
+
+        monkeypatch.setattr(
+            "src.salesforce_client.get_salesforce_client", fake_get_client,
+        )
+
+        session = SalesforceSession(old_sf, config=MagicMock(), shutdown_event=None)
+
+        with pytest.raises(SalesforceResourceNotFound):
+            await sf_call(session, lambda sf: sf.query("soql"))
+
+        assert reauth_call_count["n"] == 1  # exactly one reauth attempted
+        old_sf.query.assert_called_once()
+        new_sf.query.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_sf_call_converts_shutdown_runtime_error_to_cancelled(self, monkeypatch):
+        """Shutdown RuntimeError from get_salesforce_client → CancelledError.
+
+        Hardening for H1: if `get_salesforce_client` raises RuntimeError on
+        shutdown signal during reauth, sf_call must translate to
+        CancelledError so run_polling's outer `except asyncio.CancelledError`
+        re-raises cleanly instead of logging "cycle failed" and sleeping.
+        """
+        from simple_salesforce.exceptions import SalesforceResourceNotFound
+
+        from src.salesforce_client import SalesforceSession, sf_call
+
+        expired_exc = SalesforceResourceNotFound(
+            "https://example/query/", 404, "query", b"",
+        )
+
+        old_sf = MagicMock()
+        old_sf.query.side_effect = expired_exc
+
+        async def fake_reauth_shutdown(config, shutdown_event=None):
+            raise RuntimeError("Salesforce connection cancelled by shutdown signal")
+
+        monkeypatch.setattr(
+            "src.salesforce_client.get_salesforce_client", fake_reauth_shutdown,
+        )
+
+        session = SalesforceSession(old_sf, config=MagicMock(), shutdown_event=None)
+
+        with pytest.raises(asyncio.CancelledError):
+            await sf_call(session, lambda sf: sf.query("soql"))
+
+    @pytest.mark.asyncio
+    async def test_sf_call_propagates_reauth_auth_failure(self, monkeypatch):
+        """SalesforceAuthenticationFailed during reauth propagates unchanged.
+
+        Hardening for H1: when credentials are rotated mid-run, the first
+        expired-session triggers a reauth that raises AuthFailed. We must
+        let it propagate so run_polling's outer handler logs the real root
+        cause — not translate it silently.
+        """
+        from simple_salesforce.exceptions import (
+            SalesforceAuthenticationFailed,
+            SalesforceResourceNotFound,
+        )
+
+        from src.salesforce_client import SalesforceSession, sf_call
+
+        expired_exc = SalesforceResourceNotFound(
+            "https://example/query/", 404, "query", b"",
+        )
+
+        old_sf = MagicMock()
+        old_sf.query.side_effect = expired_exc
+
+        async def fake_reauth_bad_creds(config, shutdown_event=None):
+            raise SalesforceAuthenticationFailed("INVALID_LOGIN", "bad password")
+
+        monkeypatch.setattr(
+            "src.salesforce_client.get_salesforce_client", fake_reauth_bad_creds,
+        )
+
+        session = SalesforceSession(old_sf, config=MagicMock(), shutdown_event=None)
+
+        with pytest.raises(SalesforceAuthenticationFailed):
+            await sf_call(session, lambda sf: sf.query("soql"))
+
+
+class TestIsExpiredSessionErrorContentGuard:
+    """H3 hardening: restrict resource_name='query' fallback to empty body only."""
+
+    def test_ignores_query_404_with_non_session_errorcode(self):
+        """A real 404 response with MALFORMED_QUERY content is NOT expired."""
+        from simple_salesforce.exceptions import SalesforceResourceNotFound
+
+        from src.salesforce_client import is_expired_session_error
+
+        exc = SalesforceResourceNotFound(
+            "https://example/services/data/v59.0/query/",
+            404,
+            "query",
+            [{"errorCode": "MALFORMED_QUERY", "message": "unexpected token"}],
+        )
+        assert is_expired_session_error(exc) is False
+
+    def test_detects_empty_list_content(self):
+        """Empty list content is treated as empty body (defensive)."""
+        from simple_salesforce.exceptions import SalesforceResourceNotFound
+
+        from src.salesforce_client import is_expired_session_error
+
+        exc = SalesforceResourceNotFound(
+            "https://example/services/data/v59.0/query/",
+            404,
+            "query",
+            [],
+        )
+        assert is_expired_session_error(exc) is True
+
+    def test_detects_empty_string_content(self):
+        """Empty str (some lib versions return str not bytes)."""
+        from simple_salesforce.exceptions import SalesforceResourceNotFound
+
+        from src.salesforce_client import is_expired_session_error
+
+        exc = SalesforceResourceNotFound(
+            "https://example/services/data/v59.0/query/",
+            404,
+            "query",
+            "",
+        )
+        assert is_expired_session_error(exc) is True
