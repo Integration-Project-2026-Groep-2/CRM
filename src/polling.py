@@ -295,7 +295,7 @@ _ACCOUNT_REQUIRED_FIELDS = [
 
 _ACCOUNT_OPTIONAL_FIELDS = [
     "Phone", "Email__c", "Email",
-    "BillingStreet", "BillingPostalCode", "BillingCity", "BillingCountry",
+    "BillingStreet", "House_Number__c", "BillingPostalCode", "BillingCity", "BillingCountry",
 ]
 
 
@@ -427,6 +427,7 @@ def _account_company_fields(account: dict) -> dict[str, Any]:
 
     address_mapping = {
         "BillingStreet": "street",
+        "House_Number__c": "houseNumber",
         "BillingPostalCode": "postalCode",
         "BillingCity": "city",
         "BillingCountry": "country",
