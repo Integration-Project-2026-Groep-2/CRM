@@ -107,11 +107,11 @@ async def test_c33_handler_emits_full_address_on_c14_wire(
 
         with (
             patch(
-                "src.receiver.upsert_account_by_vat",
+                "src.handlers.facturatie_company_created.upsert_account_by_vat",
                 new=AsyncMock(return_value=account_return),
             ),
             patch(
-                "src.receiver._build_facturatie_account_data",
+                "src.handlers.facturatie_company_created._build_facturatie_account_data",
                 new=AsyncMock(return_value={}),
             ),
         ):

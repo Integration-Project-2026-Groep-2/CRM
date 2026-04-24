@@ -48,7 +48,7 @@ from typing import TYPE_CHECKING, Any
 from src import sender
 from src.config import Config
 from src.country_code import to_iso_alpha2
-from src.receiver import (  # Private helpers reused to keep record→dict mapping aligned with the receiver path.
+from src.salesforce.contacts import (
     _build_updated_user_data,
     _build_user_data,
     _build_user_deactivation_data,

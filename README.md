@@ -47,9 +47,16 @@ Eén Docker container → één Python process → 3 asyncio tasks + sender util
 | Module | Verantwoordelijkheid |
 |---|---|
 | `heartbeat.py` | XML heartbeat elke seconde → `heartbeat.direct` exchange (Contract 7) |
-| `receiver.py` | Luistert op inbound queues van andere teams |
+| `receiver.py` | Thin runner — declareert inbound queues en dispatcht naar handlers in `src/handlers/` via `QUEUE_REGISTRY` |
 | `polling.py` | Polt Salesforce periodiek op out-of-band Contact/Account wijzigingen (admin in SF UI); publiceert contracts 13/14/18/19/22/23 |
-| `sender.py` | Utility module — receiver én polling handlers roepen publish functies aan |
+| `sender.py` | Utility module — handlers én polling roepen `publish_*` functies aan |
+
+### Package-structuur (`src/`)
+
+- `handlers/` — 19 event-handler files + gedeelde helpers (`_transport.py`, `_helpers.py`, team-specifieke helpers) + `_registry.py` (queue → handler routing table)
+- `salesforce/` — per-SObject modules: `client.py` (auth + describe-cache), `contacts/` (sub-package met `client`, `mapping`, `matching`, `updates`), `accounts.py`, `sessions.py`, `payments.py`
+- `salesforce_client.py` — facade-shim die alle `salesforce/` exports herpubliceert voor backward-compat
+- `receiver.py`, `sender.py`, `polling.py`, `heartbeat.py`, `main.py`, `config.py`, `connection.py`, `xml_validator.py`, `country_code.py` — top-level modules
 
 ## Contracten
 
