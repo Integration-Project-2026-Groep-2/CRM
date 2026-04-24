@@ -791,10 +791,12 @@ def _account_record(**overrides):
         "VAT_Number__c": "BE0123456789",
         "Phone": None,
         "Email__c": "info@acme.be",
-        "BillingStreet": None,
-        "BillingPostalCode": None,
-        "BillingCity": None,
-        "BillingCountry": None,
+        "BillingStreet": "Kerkstraat",
+        "House_Number__c": "12",
+        "BillingPostalCode": "1000",
+        "BillingCity": "Brussel",
+        "BillingCountry": "Belgium",
+        "BillingCountryCode": "BE",
         "IsActive__c": True,
         "CreatedDate": "2026-04-15T10:00:00.000+0000",
         "SystemModstamp": "2026-04-20T10:00:00.000+0000",
@@ -884,16 +886,29 @@ class TestDispatchAccount:
         assert payload["country"] == "BE"
 
     @pytest.mark.asyncio
-    async def test_omits_country_when_both_unresolvable(self, sender_init):
+    async def test_raises_when_country_unresolvable(self, sender_init):
+        """Country is required on C14 — unresolvable name must fail fast
+        with a clear message, not silently drop the element."""
         record = _account_record(
             CreatedDate="2026-04-20T10:00:00.000+0000",
             BillingCountryCode="",
             BillingCountry="Atlantis",
         )
         previous = datetime(2026, 4, 19, 0, 0, tzinfo=timezone.utc)
-        await polling._dispatch_account(record, previous)
-        payload = sender_init["company_confirmed"].await_args.args[0]
-        assert "country" not in payload
+        with pytest.raises(ValueError, match="country"):
+            await polling._dispatch_account(record, previous)
+        sender_init["company_confirmed"].assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_raises_when_street_missing(self, sender_init):
+        record = _account_record(
+            CreatedDate="2026-04-20T10:00:00.000+0000",
+            BillingStreet=None,
+        )
+        previous = datetime(2026, 4, 19, 0, 0, tzinfo=timezone.utc)
+        with pytest.raises(ValueError, match="street"):
+            await polling._dispatch_account(record, previous)
+        sender_init["company_confirmed"].assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_rejects_invalid_alpha2_in_billing_country_code(self, sender_init):

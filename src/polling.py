@@ -470,6 +470,9 @@ def _account_company_fields(account: dict) -> dict[str, Any]:
     return data
 
 
+_C14_REQUIRED_ADDRESS_FIELDS = ("street", "houseNumber", "postalCode", "city", "country")
+
+
 def _build_company_confirmed_data(account: dict) -> dict:
     data = {
         "id": account["CRM_ID__c"],
@@ -480,6 +483,12 @@ def _build_company_confirmed_data(account: dict) -> dict:
         "confirmedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     data.update(_account_company_fields(account))
+    missing = [f for f in _C14_REQUIRED_ADDRESS_FIELDS if f not in data]
+    if missing:
+        raise ValueError(
+            f"Account {account.get('Id')}: cannot publish crm.company.confirmed — "
+            f"missing required address fields: {missing}",
+        )
     return data
 
 
