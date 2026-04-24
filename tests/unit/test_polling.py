@@ -677,6 +677,73 @@ class TestDispatchAccount:
         assert payload["isActive"] is True
 
     @pytest.mark.asyncio
+    async def test_prefers_billing_country_code_over_billing_country(self, sender_init):
+        """State & Country Picklists on: BillingCountry is a derived label
+        ("Belgium"), BillingCountryCode holds the ISO-2. Prefer the code."""
+        record = _account_record(
+            CreatedDate="2026-04-20T10:00:00.000+0000",
+            BillingCountryCode="BE",
+            BillingCountry="Belgium",
+        )
+        previous = datetime(2026, 4, 19, 0, 0, tzinfo=timezone.utc)
+        await polling._dispatch_account(record, previous)
+        payload = sender_init["company_confirmed"].await_args.args[0]
+        assert payload["country"] == "BE"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_billing_country_when_code_missing(self, sender_init):
+        """Picklists off or unsynced: BillingCountry holds the label, resolve
+        it to ISO-2 via pycountry."""
+        record = _account_record(
+            CreatedDate="2026-04-20T10:00:00.000+0000",
+            BillingCountryCode=None,
+            BillingCountry="Belgium",
+        )
+        previous = datetime(2026, 4, 19, 0, 0, tzinfo=timezone.utc)
+        await polling._dispatch_account(record, previous)
+        payload = sender_init["company_confirmed"].await_args.args[0]
+        assert payload["country"] == "BE"
+
+    @pytest.mark.asyncio
+    async def test_empty_billing_country_code_falls_back_to_name(self, sender_init):
+        """simple_salesforce sometimes returns '' for empty fields (not None)."""
+        record = _account_record(
+            CreatedDate="2026-04-20T10:00:00.000+0000",
+            BillingCountryCode="",
+            BillingCountry="Belgium",
+        )
+        previous = datetime(2026, 4, 19, 0, 0, tzinfo=timezone.utc)
+        await polling._dispatch_account(record, previous)
+        payload = sender_init["company_confirmed"].await_args.args[0]
+        assert payload["country"] == "BE"
+
+    @pytest.mark.asyncio
+    async def test_omits_country_when_both_unresolvable(self, sender_init):
+        record = _account_record(
+            CreatedDate="2026-04-20T10:00:00.000+0000",
+            BillingCountryCode="",
+            BillingCountry="Atlantis",
+        )
+        previous = datetime(2026, 4, 19, 0, 0, tzinfo=timezone.utc)
+        await polling._dispatch_account(record, previous)
+        payload = sender_init["company_confirmed"].await_args.args[0]
+        assert "country" not in payload
+
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_alpha2_in_billing_country_code(self, sender_init):
+        """Defense in depth: even BillingCountryCode is validated."""
+        record = _account_record(
+            CreatedDate="2026-04-20T10:00:00.000+0000",
+            BillingCountryCode="XX",
+            BillingCountry="Belgium",
+        )
+        previous = datetime(2026, 4, 19, 0, 0, tzinfo=timezone.utc)
+        await polling._dispatch_account(record, previous)
+        payload = sender_init["company_confirmed"].await_args.args[0]
+        # "XX" is rejected; fallback to BillingCountry="Belgium" → "BE".
+        assert payload["country"] == "BE"
+
+    @pytest.mark.asyncio
     async def test_inactive_publishes_company_deactivated(self, sender_init):
         record = _account_record(
             IsActive__c=False,

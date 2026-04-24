@@ -14,6 +14,7 @@ from lxml import etree
 
 from src import sender, xml_validator
 from src.config import Config
+from src.country_code import to_iso_alpha2
 from src.salesforce_client import (
     _resolve_account_country_field,
     _resolve_account_email_field,
@@ -859,12 +860,18 @@ def _build_updated_company_data(account: dict) -> dict:
         "House_Number__c": "houseNumber",
         "BillingPostalCode": "postalCode",
         "BillingCity": "city",
-        "BillingCountry": "country",
     }
     for sf_field, xml_field in address_mapping.items():
         value = account.get(sf_field)
         if value:
             data[xml_field] = value
+
+    country = (
+        to_iso_alpha2(account.get("BillingCountryCode"))
+        or to_iso_alpha2(account.get("BillingCountry"))
+    )
+    if country:
+        data["country"] = country
 
     return data
 
@@ -2650,12 +2657,18 @@ def _build_updated_user_data(contact: dict) -> dict:
         "House_Number__c": "houseNumber",
         "MailingPostalCode": "postalCode",
         "MailingCity": "city",
-        "MailingCountry": "country",
     }
     for sf_field, xml_field in address_mapping.items():
         value = contact.get(sf_field)
         if value:
             data[xml_field] = value
+
+    country = (
+        to_iso_alpha2(contact.get("MailingCountryCode"))
+        or to_iso_alpha2(contact.get("MailingCountry"))
+    )
+    if country:
+        data["country"] = country
 
     return data
 

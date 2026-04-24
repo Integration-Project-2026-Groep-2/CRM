@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any
 
 from src import sender
 from src.config import Config
+from src.country_code import to_iso_alpha2
 from src.receiver import (  # Private helpers reused to keep record→dict mapping aligned with the receiver path.
     _build_updated_user_data,
     _build_user_data,
@@ -284,7 +285,8 @@ _CONTACT_REQUIRED_FIELDS = [
 # field here is a dev/sandbox org that hasn't deployed all contracts yet.
 _CONTACT_OPTIONAL_FIELDS = [
     "Phone", "Role__c", "GDPR_Consent__c", "Badge_Code__c", "Company_ID__c",
-    "MailingStreet", "House_Number__c", "MailingPostalCode", "MailingCity", "MailingCountry",
+    "MailingStreet", "House_Number__c", "MailingPostalCode", "MailingCity",
+    "MailingCountry", "MailingCountryCode",
     "Mailing_ID__c", "Planning_ID__c",
 ]
 
@@ -295,7 +297,8 @@ _ACCOUNT_REQUIRED_FIELDS = [
 
 _ACCOUNT_OPTIONAL_FIELDS = [
     "Phone", "Email__c", "Email",
-    "BillingStreet", "House_Number__c", "BillingPostalCode", "BillingCity", "BillingCountry",
+    "BillingStreet", "House_Number__c", "BillingPostalCode", "BillingCity",
+    "BillingCountry", "BillingCountryCode",
 ]
 
 
@@ -430,12 +433,22 @@ def _account_company_fields(account: dict) -> dict[str, Any]:
         "House_Number__c": "houseNumber",
         "BillingPostalCode": "postalCode",
         "BillingCity": "city",
-        "BillingCountry": "country",
     }
     for sf_field, xml_field in address_mapping.items():
         value = account.get(sf_field)
         if value:
             data[xml_field] = value
+
+    # State & Country Picklists: BillingCountryCode holds ISO-2 (e.g. "BE"),
+    # BillingCountry is the derived label ("Belgium"). Prefer the code; fall
+    # back to the label through pycountry. Both paths reject invalid 2-letter
+    # strings like "XX" via `to_iso_alpha2`.
+    country = (
+        to_iso_alpha2(account.get("BillingCountryCode"))
+        or to_iso_alpha2(account.get("BillingCountry"))
+    )
+    if country:
+        data["country"] = country
     return data
 
 
