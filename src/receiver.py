@@ -92,6 +92,13 @@ async def run_receiver(
 
 
 # Transport re-exports for backward-compat (tests import these from src.receiver).
+# Helper re-exports for backward-compat (record-mapping helpers now live in
+# src.handlers._helpers and src.salesforce.contacts).
+from src.handlers._helpers import (  # noqa: E402, F401
+    _build_company_data,
+    _build_company_deactivation_data,
+    _build_updated_company_data,
+)
 from src.handlers._transport import (  # noqa: E402, F401
     _MAX_DEFERRAL_ATTEMPTS,
     _MAX_REQUEUE_ATTEMPTS,
@@ -102,13 +109,30 @@ from src.handlers._transport import (  # noqa: E402, F401
     _republish_with_retry_count,
 )
 
-# Helper re-exports for backward-compat (record-mapping helpers now live in
-# src.handlers._helpers and src.salesforce.contacts).
-from src.handlers._helpers import (  # noqa: E402, F401
-    _build_company_data,
-    _build_company_deactivation_data,
-    _build_updated_company_data,
+# Handler re-exports for backward-compat: existing test code does
+# `from src.receiver import handle_warning` etc. New code should import
+# the `handle` function directly from the src.handlers.<event> module.
+from src.handlers.controlroom_warning_issued import handle as handle_warning  # noqa: E402, F401
+from src.handlers.facturatie_company_created import handle as handle_facturatie_company_created  # noqa: E402, F401
+from src.handlers.facturatie_company_deactivated import (  # noqa: E402, F401
+    handle as handle_facturatie_company_deactivated,
 )
+from src.handlers.facturatie_company_updated import handle as handle_facturatie_company_updated  # noqa: E402, F401
+from src.handlers.facturatie_user_created import handle as handle_facturatie_user_created  # noqa: E402, F401
+from src.handlers.facturatie_user_deactivated import handle as handle_facturatie_user_deactivated  # noqa: E402, F401
+from src.handlers.facturatie_user_updated import handle as handle_facturatie_user_updated  # noqa: E402, F401
+from src.handlers.frontend_registration_created import handle as handle_registration  # noqa: E402, F401
+from src.handlers.frontend_registration_updated import handle as handle_registration_updated  # noqa: E402, F401
+from src.handlers.kassa_payment_confirmed import handle as handle_payment_confirmed  # noqa: E402, F401
+from src.handlers.kassa_person_lookup_requested import handle as handle_person_lookup  # noqa: E402, F401
+from src.handlers.kassa_unpaid_requested import handle as handle_unpaid_requested  # noqa: E402, F401
+from src.handlers.mailing_user_created import handle as handle_mailing_user_created  # noqa: E402, F401
+from src.handlers.mailing_user_deactivated import handle as handle_mailing_user_deactivated  # noqa: E402, F401
+from src.handlers.mailing_user_updated import handle as handle_mailing_user_updated  # noqa: E402, F401
+from src.handlers.planning_session_updated import handle as handle_session_updated  # noqa: E402, F401
+from src.handlers.planning_user_created import handle as handle_planning_user_created  # noqa: E402, F401
+from src.handlers.planning_user_deactivated import handle as handle_planning_user_deactivated  # noqa: E402, F401
+from src.handlers.planning_user_updated import handle as handle_planning_user_updated  # noqa: E402, F401
 from src.salesforce.contacts import (  # noqa: E402, F401
     _build_updated_user_data,
     _build_user_data,
@@ -121,6 +145,8 @@ from src.salesforce_client import (  # noqa: E402, F401
     apply_is_active,
     backfill_mailing_contact_fields,
     backfill_planning_contact_fields,
+    count_active_contacts_for_company,
+    count_active_session_registrations,
     create_account,
     create_contact,
     deactivate_account_by_crm_id,
@@ -150,29 +176,4 @@ from src.salesforce_client import (  # noqa: E402, F401
     update_planning_contact,
     upsert_account_by_vat,
     upsert_contact_by_email,
-    count_active_contacts_for_company,
-    count_active_session_registrations,
 )
-
-# Handler re-exports for backward-compat: existing test code does
-# `from src.receiver import handle_warning` etc. New code should import
-# the `handle` function directly from the src.handlers.<event> module.
-from src.handlers.controlroom_warning_issued import handle as handle_warning  # noqa: E402, F401
-from src.handlers.facturatie_company_created import handle as handle_facturatie_company_created  # noqa: E402, F401
-from src.handlers.facturatie_company_deactivated import handle as handle_facturatie_company_deactivated  # noqa: E402, F401
-from src.handlers.facturatie_company_updated import handle as handle_facturatie_company_updated  # noqa: E402, F401
-from src.handlers.facturatie_user_created import handle as handle_facturatie_user_created  # noqa: E402, F401
-from src.handlers.facturatie_user_deactivated import handle as handle_facturatie_user_deactivated  # noqa: E402, F401
-from src.handlers.facturatie_user_updated import handle as handle_facturatie_user_updated  # noqa: E402, F401
-from src.handlers.frontend_registration_created import handle as handle_registration  # noqa: E402, F401
-from src.handlers.frontend_registration_updated import handle as handle_registration_updated  # noqa: E402, F401
-from src.handlers.kassa_payment_confirmed import handle as handle_payment_confirmed  # noqa: E402, F401
-from src.handlers.kassa_person_lookup_requested import handle as handle_person_lookup  # noqa: E402, F401
-from src.handlers.kassa_unpaid_requested import handle as handle_unpaid_requested  # noqa: E402, F401
-from src.handlers.mailing_user_created import handle as handle_mailing_user_created  # noqa: E402, F401
-from src.handlers.mailing_user_deactivated import handle as handle_mailing_user_deactivated  # noqa: E402, F401
-from src.handlers.mailing_user_updated import handle as handle_mailing_user_updated  # noqa: E402, F401
-from src.handlers.planning_session_updated import handle as handle_session_updated  # noqa: E402, F401
-from src.handlers.planning_user_created import handle as handle_planning_user_created  # noqa: E402, F401
-from src.handlers.planning_user_deactivated import handle as handle_planning_user_deactivated  # noqa: E402, F401
-from src.handlers.planning_user_updated import handle as handle_planning_user_updated  # noqa: E402, F401

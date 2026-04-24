@@ -14,8 +14,6 @@ that assert binding infra independent of whether a handler is activated.
 
 from typing import Awaitable, Callable
 
-import aio_pika
-
 from src.handlers import (
     controlroom_warning_issued,
     facturatie_company_created,

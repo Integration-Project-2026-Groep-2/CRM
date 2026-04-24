@@ -4,7 +4,6 @@ Queue: crm.mailing.user.created (routing key: mailing.user.created)
 Exchange: user.topic | durable: true
 """
 
-import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING

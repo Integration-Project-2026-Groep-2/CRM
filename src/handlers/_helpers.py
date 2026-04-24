@@ -12,7 +12,6 @@ from lxml import etree
 from src.country_code import to_iso_alpha2
 from src.salesforce.client import coerce_is_active
 
-
 # ---------------------------------------------------------------------------
 # Text normalization
 # ---------------------------------------------------------------------------
