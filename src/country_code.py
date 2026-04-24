@@ -1,10 +1,4 @@
-"""Country value normalisation to ISO 3166-1 alpha-2.
-
-Used by polling and receiver builders to convert Salesforce country fields
-(BillingCountry/MailingCountry may hold derived labels like "Belgium",
-BillingCountryCode/MailingCountryCode hold ISO-2) into the "[A-Z]{2}" format
-required by the XSD CountryCodeType.
-"""
+"""Country value normalisation to ISO 3166-1 alpha-2 for XSD CountryCodeType."""
 from __future__ import annotations
 
 import logging
@@ -15,15 +9,10 @@ import pycountry
 logger = logging.getLogger(__name__)
 
 
+# @lru_cache also suppresses repeated warnings for the same unresolvable
+# input — polling reads the same "Belgium" every 60s and we want one log.
 @lru_cache(maxsize=256)
 def to_iso_alpha2(value: str | None) -> str | None:
-    """Normalize a country name or code to ISO 3166-1 alpha-2.
-
-    Returns None for empty or unresolvable input, and logs a warning on
-    unresolvable non-empty input. The @lru_cache means each distinct input
-    warns at most once per container lifetime — intended behavior, prevents
-    log spam from polling loops that re-read the same "Belgium" every 60s.
-    """
     if not value:
         return None
     text = str(value).strip()

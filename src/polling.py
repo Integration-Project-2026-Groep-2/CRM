@@ -72,13 +72,9 @@ logger = logging.getLogger(__name__)
 # doesn't silently let polling re-publish receiver-induced events.
 _USER_ID_REFRESH_SECONDS = 3600
 
-# Permanent-failure ERROR log dedup — production regression: when a record
-# fails dispatch deterministically (e.g. XSD validation on a malformed
-# country), the skip-and-cap checkpoint semantics correctly re-process the
-# record every cycle, but the full ERROR stacktrace per cycle drowns
-# operators in identical logs. Track (record_id, SystemModstamp) in an LRU
-# set so we log ERROR once per distinct failure. An admin fix bumps
-# SystemModstamp, producing a new tuple that logs once more if still failing.
+# Deduplicate ERROR logs for records that fail dispatch deterministically:
+# skip-and-cap still re-processes them every cycle, but we only want ONE log
+# per (id, modstamp). Admin fix → new modstamp → new tuple → one more log.
 _REPORTED_FAILURES_CAP = 1000
 _reported_failures: "collections.OrderedDict[tuple[str, str], None]" = (
     collections.OrderedDict()
@@ -86,7 +82,6 @@ _reported_failures: "collections.OrderedDict[tuple[str, str], None]" = (
 
 
 def _should_log_failure(record: dict) -> bool:
-    """Return True the first time we see a (record_id, modstamp); False after."""
     key = (str(record.get("Id")), str(record.get("SystemModstamp")))
     if key in _reported_failures:
         _reported_failures.move_to_end(key)
@@ -464,10 +459,8 @@ def _account_company_fields(account: dict) -> dict[str, Any]:
         if value:
             data[xml_field] = value
 
-    # State & Country Picklists: BillingCountryCode holds ISO-2 (e.g. "BE"),
-    # BillingCountry is the derived label ("Belgium"). Prefer the code; fall
-    # back to the label through pycountry. Both paths reject invalid 2-letter
-    # strings like "XX" via `to_iso_alpha2`.
+    # When State & Country Picklists are enabled, BillingCountry is the
+    # read-only localized label ("Belgium"); the ISO-2 lives in the *Code field.
     country = (
         to_iso_alpha2(account.get("BillingCountryCode"))
         or to_iso_alpha2(account.get("BillingCountry"))
