@@ -370,8 +370,8 @@ def _registration_patches(
 
     return (
         patch("src.xml_validator.validate", return_value=parsed_xml),
-        patch("src.receiver.get_contact_by_email", return_value=existing_contact),
-        patch("src.receiver.create_contact", return_value=created_contact),
+        patch("src.handlers.frontend_registration_created.get_contact_by_email", return_value=existing_contact),
+        patch("src.handlers.frontend_registration_created.create_contact", return_value=created_contact),
         patch("src.sender.publish_user_confirmed"),
         patch("src.sender.publish_mail_requested"),
     )
@@ -496,8 +496,8 @@ class TestHandleRegistration:
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.receiver.has_session_registration_object", side_effect=AssertionError("should not be called")),
-            patch("src.receiver.get_contact_by_email", return_value=None),
-            patch("src.receiver.create_contact", return_value=CONTACT_RETURN),
+            patch("src.handlers.frontend_registration_created.get_contact_by_email", return_value=None),
+            patch("src.handlers.frontend_registration_created.create_contact", return_value=CONTACT_RETURN),
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested") as mock_mail,
         ):
@@ -522,8 +522,8 @@ class TestHandleRegistration:
 
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_by_email", return_value=None),
-            patch("src.receiver.create_contact", return_value=CONTACT_RETURN) as mock_create,
+            patch("src.handlers.frontend_registration_created.get_contact_by_email", return_value=None),
+            patch("src.handlers.frontend_registration_created.create_contact", return_value=CONTACT_RETURN) as mock_create,
             patch("src.sender.publish_user_confirmed"),
             patch("src.sender.publish_mail_requested"),
         ):
@@ -548,7 +548,7 @@ class TestHandleRegistration:
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch(
-                "src.receiver.get_contact_by_email",
+                "src.handlers.frontend_registration_created.get_contact_by_email",
                 return_value={
                     "Id": "003xxx",
                     "Registration_ID__c": "OTHER",
@@ -557,7 +557,7 @@ class TestHandleRegistration:
                     "Role__c": "VISITOR",
                 },
             ),
-            patch("src.receiver.create_contact") as mock_create,
+            patch("src.handlers.frontend_registration_created.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested"),
             caplog.at_level(logging.WARNING),
@@ -582,8 +582,8 @@ class TestHandleRegistration:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
-            patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
+            patch("src.handlers.frontend_registration_created.get_contact_by_email", return_value=existing_contact),
+            patch("src.handlers.frontend_registration_created.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested") as mock_mail,
         ):
@@ -611,9 +611,9 @@ class TestHandleRegistration:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
-            patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
-            patch("src.receiver.create_contact") as mock_create,
+            patch("src.handlers.frontend_registration_created.get_contact_by_email", return_value=existing_contact),
+            patch("src.handlers.frontend_registration_created.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
+            patch("src.handlers.frontend_registration_created.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested") as mock_mail,
         ):
@@ -637,8 +637,8 @@ class TestHandleRegistration:
         parsed_xml = etree.fromstring(VALID_REG_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_by_email", return_value=None),
-            patch("src.receiver.create_contact", side_effect=Exception("SF Create Down")),
+            patch("src.handlers.frontend_registration_created.get_contact_by_email", return_value=None),
+            patch("src.handlers.frontend_registration_created.create_contact", side_effect=Exception("SF Create Down")),
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested"),
         ):
@@ -681,12 +681,12 @@ class TestHandleRegistration:
         parsed_xml = etree.fromstring(VALID_REG_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_by_email", return_value={
+            patch("src.handlers.frontend_registration_created.get_contact_by_email", return_value={
                 "CRM_ID__c": "123e4567-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
                 "Email": "john.doe@example.com",
                 "Registration_ID__c": "REG-12345",
             }),
-            patch("src.receiver.create_contact") as mock_create,
+            patch("src.handlers.frontend_registration_created.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested") as mock_mail_publish,
         ):
@@ -714,8 +714,8 @@ class TestHandleRegistration:
 
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_by_email", return_value=None),
-            patch("src.receiver.create_contact", return_value=CONTACT_RETURN),
+            patch("src.handlers.frontend_registration_created.get_contact_by_email", return_value=None),
+            patch("src.handlers.frontend_registration_created.create_contact", return_value=CONTACT_RETURN),
             patch("src.sender.publish_user_confirmed"),
             patch("src.sender.publish_mail_requested"),
             caplog.at_level(logging.WARNING),
@@ -738,8 +738,8 @@ class TestHandleRegistration:
 
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_by_email", return_value=None),
-            patch("src.receiver.create_contact", return_value=contact_no_phone),
+            patch("src.handlers.frontend_registration_created.get_contact_by_email", return_value=None),
+            patch("src.handlers.frontend_registration_created.create_contact", return_value=contact_no_phone),
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested"),
         ):
@@ -760,12 +760,12 @@ class TestHandleRegistration:
 
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_by_email", return_value={
+            patch("src.handlers.frontend_registration_created.get_contact_by_email", return_value={
                 "CRM_ID__c": "123e4567-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
                 "Email": "john.doe@example.com",
                 "Registration_ID__c": "REG-12345",
             }),
-            patch("src.receiver.create_contact") as mock_create,
+            patch("src.handlers.frontend_registration_created.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed", side_effect=Exception("Publish failed")),
             patch("src.sender.publish_mail_requested"),
         ):
@@ -796,8 +796,8 @@ class TestHandleFacturatieUserCreated:
         parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_CREATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.create_contact", return_value=FACTURATIE_CONTACT_RETURN) as mock_create,
+            patch("src.handlers.facturatie_user_created.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.facturatie_user_created.create_contact", return_value=FACTURATIE_CONTACT_RETURN) as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested") as mock_mail,
             patch("src.receiver.get_contact_by_email") as mock_fallback_lookup,
@@ -839,10 +839,10 @@ class TestHandlePlanningUserCreated:
         parsed_xml = etree.fromstring(VALID_PLANNING_USER_CREATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_planning_id", return_value=("none", None)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.create_contact", return_value=PLANNING_CONTACT_RETURN) as mock_create,
+            patch("src.handlers.planning_user_created.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_created.get_contact_match_by_planning_id", return_value=("none", None)),
+            patch("src.handlers.planning_user_created.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.planning_user_created.create_contact", return_value=PLANNING_CONTACT_RETURN) as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
         ):
@@ -872,11 +872,11 @@ class TestHandlePlanningUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_email") as mock_email_lookup,
-            patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
-            patch("src.receiver.backfill_planning_contact_fields", return_value=existing_contact) as mock_backfill,
+            patch("src.handlers.planning_user_created.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_created.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.planning_user_created.get_contact_match_by_email") as mock_email_lookup,
+            patch("src.handlers.planning_user_created.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
+            patch("src.handlers.planning_user_created.backfill_planning_contact_fields", return_value=existing_contact) as mock_backfill,
             patch("src.sender.publish_user_confirmed") as mock_publish,
         ):
             from src.receiver import handle_planning_user_created
@@ -912,14 +912,14 @@ class TestHandlePlanningUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_planning_id", return_value=("none", None)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
-            patch("src.receiver.backfill_planning_contact_fields", return_value=normalized_contact) as mock_backfill,
+            patch("src.handlers.planning_user_created.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_created.get_contact_match_by_planning_id", return_value=("none", None)),
+            patch("src.handlers.planning_user_created.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.handlers.planning_user_created.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.handlers.planning_user_created.backfill_planning_contact_fields", return_value=normalized_contact) as mock_backfill,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
-            patch("src.receiver.create_contact") as mock_create,
+            patch("src.handlers.planning_user_created.create_contact") as mock_create,
         ):
             from src.receiver import handle_planning_user_created
 
@@ -955,11 +955,11 @@ class TestHandlePlanningUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_planning_id", return_value=("none", None)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
-            patch("src.receiver.ensure_contact_identifiers") as mock_ensure,
-            patch("src.receiver.backfill_planning_contact_fields") as mock_backfill,
+            patch("src.handlers.planning_user_created.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_created.get_contact_match_by_planning_id", return_value=("none", None)),
+            patch("src.handlers.planning_user_created.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.handlers.planning_user_created.ensure_contact_identifiers") as mock_ensure,
+            patch("src.handlers.planning_user_created.backfill_planning_contact_fields") as mock_backfill,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
         ):
@@ -983,8 +983,8 @@ class TestHandlePlanningUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.planning_user_created.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_created.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
         ):
@@ -1002,8 +1002,8 @@ class TestHandlePlanningUserCreated:
         parsed_xml = etree.fromstring(VALID_PLANNING_USER_CREATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_planning_id", return_value=("ambiguous", None)),
+            patch("src.handlers.planning_user_created.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_created.get_contact_match_by_planning_id", return_value=("ambiguous", None)),
             patch("src.sender.publish_user_confirmed") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -1032,7 +1032,7 @@ class TestHandlePlanningUserCreated:
         parsed_xml = etree.fromstring(VALID_PLANNING_USER_CREATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=False),
+            patch("src.handlers.planning_user_created.has_contact_planning_id_field", return_value=False),
             caplog.at_level(logging.ERROR),
         ):
             from src.receiver import handle_planning_user_created
@@ -1056,9 +1056,9 @@ class TestHandlePlanningUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
-            patch("src.receiver.create_contact") as mock_create,
+            patch("src.handlers.facturatie_user_created.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.handlers.facturatie_user_created.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.handlers.facturatie_user_created.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested") as mock_mail,
         ):
@@ -1093,8 +1093,8 @@ class TestHandlePlanningUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.handlers.facturatie_user_created.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.handlers.facturatie_user_created.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
             patch("src.sender.publish_user_confirmed") as mock_publish,
         ):
             from src.receiver import handle_facturatie_user_created
@@ -1122,8 +1122,8 @@ class TestHandlePlanningUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact),
+            patch("src.handlers.facturatie_user_created.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.handlers.facturatie_user_created.ensure_contact_identifiers", return_value=normalized_contact),
             patch("src.sender.publish_user_confirmed") as mock_publish,
         ):
             from src.receiver import handle_facturatie_user_created
@@ -1140,8 +1140,8 @@ class TestHandlePlanningUserCreated:
         parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_CREATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_email", return_value=("ambiguous", None)),
-            patch("src.receiver.create_contact") as mock_create,
+            patch("src.handlers.facturatie_user_created.get_contact_match_by_email", return_value=("ambiguous", None)),
+            patch("src.handlers.facturatie_user_created.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -1175,9 +1175,9 @@ class TestHandlePlanningUserCreated:
         inactive_contact = {**FACTURATIE_CONTACT_RETURN, "IsActive__c": False}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.apply_is_active", side_effect=lambda _sf, data, flag: {**data, "IsActive__c": flag}),
-            patch("src.receiver.create_contact", return_value=inactive_contact) as mock_create,
+            patch("src.handlers.facturatie_user_created.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.facturatie_user_created.apply_is_active", side_effect=lambda _sf, data, flag: {**data, "IsActive__c": flag}),
+            patch("src.handlers.facturatie_user_created.create_contact", return_value=inactive_contact) as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_confirmed,
             caplog.at_level(logging.INFO),
         ):
@@ -1199,8 +1199,8 @@ class TestHandlePlanningUserCreated:
         parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_CREATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.create_contact", return_value=FACTURATIE_CONTACT_RETURN),
+            patch("src.handlers.facturatie_user_created.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.facturatie_user_created.create_contact", return_value=FACTURATIE_CONTACT_RETURN),
             patch("src.sender.publish_user_confirmed", side_effect=Exception("publish failed")),
         ):
             from src.receiver import handle_facturatie_user_created
@@ -1222,9 +1222,9 @@ class TestHandlePlanningUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=FACTURATIE_CONTACT_RETURN),
-            patch("src.receiver.create_contact") as mock_create,
+            patch("src.handlers.facturatie_user_created.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.handlers.facturatie_user_created.ensure_contact_identifiers", return_value=FACTURATIE_CONTACT_RETURN),
+            patch("src.handlers.facturatie_user_created.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.receiver.get_contact_by_email") as mock_fallback_lookup,
         ):
@@ -1255,9 +1255,9 @@ class TestHandleFacturatieUserUpdated:
         existing_contact = {**FACTURATIE_CONTACT_RETURN}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.update_facturatie_contact", return_value=FACTURATIE_UPDATED_CONTACT_RETURN) as mock_update,
+            patch("src.handlers.facturatie_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.facturatie_user_updated.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.facturatie_user_updated.update_facturatie_contact", return_value=FACTURATIE_UPDATED_CONTACT_RETURN) as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
         ):
@@ -1322,9 +1322,9 @@ class TestHandleFacturatieUserUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.update_facturatie_contact", return_value=minimal_updated_contact) as mock_update,
+            patch("src.handlers.facturatie_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.facturatie_user_updated.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.facturatie_user_updated.update_facturatie_contact", return_value=minimal_updated_contact) as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
             from src.receiver import handle_facturatie_user_updated
@@ -1383,9 +1383,9 @@ class TestHandleFacturatieUserUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.update_facturatie_contact", return_value=guarded_contact) as mock_update,
+            patch("src.handlers.facturatie_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.facturatie_user_updated.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.facturatie_user_updated.update_facturatie_contact", return_value=guarded_contact) as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
             from src.receiver import handle_facturatie_user_updated
@@ -1407,9 +1407,9 @@ class TestHandleFacturatieUserUpdated:
         parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_UPDATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("none", None)),
+            patch("src.handlers.facturatie_user_updated.get_contact_match_by_crm_id", return_value=("none", None)),
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
-            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
             caplog.at_level(logging.WARNING),
@@ -1431,7 +1431,7 @@ class TestHandleFacturatieUserUpdated:
         parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_UPDATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("ambiguous", None)),
+            patch("src.handlers.facturatie_user_updated.get_contact_match_by_crm_id", return_value=("ambiguous", None)),
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
             caplog.at_level(logging.WARNING),
@@ -1459,9 +1459,9 @@ class TestHandleFacturatieUserUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", conflicting_contact)),
-            patch("src.receiver.update_facturatie_contact") as mock_update,
+            patch("src.handlers.facturatie_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.facturatie_user_updated.get_contact_match_by_email", return_value=("unique", conflicting_contact)),
+            patch("src.handlers.facturatie_user_updated.update_facturatie_contact") as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
         ):
@@ -1487,9 +1487,9 @@ class TestHandleFacturatieUserUpdated:
         existing_contact = {**FACTURATIE_CONTACT_RETURN}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("ambiguous", None)),
-            patch("src.receiver.update_facturatie_contact") as mock_update,
+            patch("src.handlers.facturatie_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.facturatie_user_updated.get_contact_match_by_email", return_value=("ambiguous", None)),
+            patch("src.handlers.facturatie_user_updated.update_facturatie_contact") as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
             caplog.at_level(logging.WARNING),
@@ -1516,10 +1516,10 @@ class TestHandleFacturatieUserUpdated:
         deactivated_contact = {**existing_contact, "Is_Active__c": False}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
-            patch("src.receiver.update_facturatie_contact") as mock_update,
+            patch("src.handlers.facturatie_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.facturatie_user_updated.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.facturatie_user_updated.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
+            patch("src.handlers.facturatie_user_updated.update_facturatie_contact") as mock_update,
             patch("src.sender.publish_user_deactivated") as mock_deactivated_publish,
             patch("src.sender.publish_user_updated") as mock_updated_publish,
             caplog.at_level(logging.INFO),
@@ -1542,9 +1542,9 @@ class TestHandleFacturatieUserUpdated:
         existing_contact = {**FACTURATIE_CONTACT_RETURN}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.update_facturatie_contact", return_value=FACTURATIE_UPDATED_CONTACT_RETURN),
+            patch("src.handlers.facturatie_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.facturatie_user_updated.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.facturatie_user_updated.update_facturatie_contact", return_value=FACTURATIE_UPDATED_CONTACT_RETURN),
             patch("src.sender.publish_user_updated", side_effect=Exception("publish failed")),
         ):
             from src.receiver import handle_facturatie_user_updated
@@ -1583,8 +1583,8 @@ class TestHandleFacturatieUserDeactivated:
         deactivated_contact = {**existing_contact, "Is_Active__c": False}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
+            patch("src.handlers.facturatie_user_deactivated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.facturatie_user_deactivated.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
             patch("src.sender.publish_user_deactivated") as mock_publish,
         ):
             from src.receiver import handle_facturatie_user_deactivated
@@ -1609,9 +1609,9 @@ class TestHandleFacturatieUserDeactivated:
         parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_DEACTIVATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("none", None)),
+            patch("src.handlers.facturatie_user_deactivated.get_contact_match_by_crm_id", return_value=("none", None)),
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
-            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -1631,7 +1631,7 @@ class TestHandleFacturatieUserDeactivated:
         parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_DEACTIVATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("ambiguous", None)),
+            patch("src.handlers.facturatie_user_deactivated.get_contact_match_by_crm_id", return_value=("ambiguous", None)),
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -1654,8 +1654,8 @@ class TestHandleFacturatieUserDeactivated:
         deactivated_contact = {**existing_contact, "Is_Active__c": False}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact),
+            patch("src.handlers.facturatie_user_deactivated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.facturatie_user_deactivated.deactivate_contact_record", return_value=deactivated_contact),
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -1685,8 +1685,8 @@ class TestHandleFacturatieUserDeactivated:
         existing_contact = {**FACTURATIE_CONTACT_RETURN}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.deactivate_contact_record", side_effect=Exception("SF Down")),
+            patch("src.handlers.facturatie_user_deactivated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.facturatie_user_deactivated.deactivate_contact_record", side_effect=Exception("SF Down")),
             patch("src.sender.publish_user_deactivated") as mock_publish,
         ):
             from src.receiver import handle_facturatie_user_deactivated
@@ -1907,9 +1907,9 @@ class TestHandleFacturatieCompanyCreated:
         for picklist-enabled orgs).
         """
         with (
-            patch("src.receiver._resolve_account_email_field", new_callable=AsyncMock, return_value="Email__c"),
-            patch("src.receiver._resolve_account_country_field", new_callable=AsyncMock, return_value="BillingCountryCode"),
-            patch("src.receiver.has_account_house_number_field", new_callable=AsyncMock, return_value=False),
+            patch("src.handlers._facturatie_helpers._resolve_account_email_field", new_callable=AsyncMock, return_value="Email__c"),
+            patch("src.handlers._facturatie_helpers._resolve_account_country_field", new_callable=AsyncMock, return_value="BillingCountryCode"),
+            patch("src.handlers._facturatie_helpers.has_account_house_number_field", new_callable=AsyncMock, return_value=False),
         ):
             yield
 
@@ -1918,9 +1918,9 @@ class TestHandleFacturatieCompanyCreated:
         parsed_xml = etree.fromstring(VALID_FACTURATIE_COMPANY_CREATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.upsert_account_by_vat", return_value=FACTURATIE_ACCOUNT_RETURN) as mock_upsert,
-            patch("src.receiver.get_account_match_by_email") as mock_email_match,
-            patch("src.receiver.create_account") as mock_create,
+            patch("src.handlers.facturatie_company_created.upsert_account_by_vat", return_value=FACTURATIE_ACCOUNT_RETURN) as mock_upsert,
+            patch("src.handlers.facturatie_company_created.get_account_match_by_email") as mock_email_match,
+            patch("src.handlers.facturatie_company_created.create_account") as mock_create,
             patch("src.sender.publish_company_confirmed") as mock_publish,
         ):
             from src.receiver import handle_facturatie_company_created
@@ -1945,8 +1945,8 @@ class TestHandleFacturatieCompanyCreated:
         parsed_xml = etree.fromstring(VALID_FACTURATIE_COMPANY_CREATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_account_house_number_field", new_callable=AsyncMock, return_value=True),
-            patch("src.receiver.upsert_account_by_vat", return_value=FACTURATIE_ACCOUNT_RETURN) as mock_upsert,
+            patch("src.handlers._facturatie_helpers.has_account_house_number_field", new_callable=AsyncMock, return_value=True),
+            patch("src.handlers.facturatie_company_created.upsert_account_by_vat", return_value=FACTURATIE_ACCOUNT_RETURN) as mock_upsert,
             patch("src.sender.publish_company_confirmed"),
         ):
             from src.receiver import handle_facturatie_company_created
@@ -1967,9 +1967,9 @@ class TestHandleFacturatieCompanyCreated:
         created_account = {**FACTURATIE_ACCOUNT_RETURN, "VAT_Number__c": None}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.upsert_account_by_vat") as mock_upsert,
-            patch("src.receiver.get_account_match_by_email", return_value=("none", None)),
-            patch("src.receiver.create_account", return_value=created_account) as mock_create,
+            patch("src.handlers.facturatie_company_created.upsert_account_by_vat") as mock_upsert,
+            patch("src.handlers.facturatie_company_created.get_account_match_by_email", return_value=("none", None)),
+            patch("src.handlers.facturatie_company_created.create_account", return_value=created_account) as mock_create,
             patch("src.sender.publish_company_confirmed") as mock_publish,
         ):
             from src.receiver import handle_facturatie_company_created
@@ -1991,8 +1991,8 @@ class TestHandleFacturatieCompanyCreated:
         parsed_xml = etree.fromstring(no_vat_xml)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_account_match_by_email", return_value=("ambiguous", None)),
-            patch("src.receiver.create_account") as mock_create,
+            patch("src.handlers.facturatie_company_created.get_account_match_by_email", return_value=("ambiguous", None)),
+            patch("src.handlers.facturatie_company_created.create_account") as mock_create,
             patch("src.sender.publish_company_confirmed") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -2030,10 +2030,10 @@ class TestHandleFacturatieCompanyCreated:
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch(
-                "src.receiver.get_account_match_by_email",
+                "src.handlers.facturatie_company_created.get_account_match_by_email",
                 return_value=("unique", existing_vat_linked),
             ),
-            patch("src.receiver.create_account") as mock_create,
+            patch("src.handlers.facturatie_company_created.create_account") as mock_create,
             patch("src.sender.publish_company_confirmed") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -2066,10 +2066,10 @@ class TestHandleFacturatieCompanyCreated:
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch(
-                "src.receiver.get_account_match_by_email",
+                "src.handlers.facturatie_company_created.get_account_match_by_email",
                 return_value=("unique", existing_vat_less),
             ),
-            patch("src.receiver.create_account") as mock_create,
+            patch("src.handlers.facturatie_company_created.create_account") as mock_create,
             patch("src.sender.publish_company_confirmed") as mock_publish,
         ):
             from src.receiver import handle_facturatie_company_created
@@ -2106,8 +2106,8 @@ class TestHandleFacturatieCompanyUpdated:
         updated = {**existing, "Name": "Acme Updated NV"}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_account_match_by_crm_id", return_value=("unique", existing)),
-            patch("src.receiver.update_facturatie_account", return_value=updated) as mock_update,
+            patch("src.handlers.facturatie_company_updated.get_account_match_by_crm_id", return_value=("unique", existing)),
+            patch("src.handlers.facturatie_company_updated.update_facturatie_account", return_value=updated) as mock_update,
             patch("src.receiver.apply_is_active", return_value={}),
             patch("src.sender.publish_company_updated") as mock_publish,
         ):
@@ -2134,8 +2134,8 @@ class TestHandleFacturatieCompanyUpdated:
         deactivated = {**existing, "IsActive__c": False}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_account_match_by_crm_id", return_value=("unique", existing)),
-            patch("src.receiver.deactivate_account_record", return_value=deactivated) as mock_deact,
+            patch("src.handlers.facturatie_company_updated.get_account_match_by_crm_id", return_value=("unique", existing)),
+            patch("src.handlers.facturatie_company_updated.deactivate_account_record", return_value=deactivated) as mock_deact,
             patch("src.sender.publish_company_deactivated") as mock_publish,
             patch("src.sender.publish_company_updated") as mock_updated_publish,
         ):
@@ -2154,9 +2154,9 @@ class TestHandleFacturatieCompanyUpdated:
         parsed_xml = etree.fromstring(VALID_FACTURATIE_COMPANY_UPDATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_account_match_by_crm_id", return_value=("none", None)),
+            patch("src.handlers.facturatie_company_updated.get_account_match_by_crm_id", return_value=("none", None)),
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
-            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.sender.publish_company_updated") as mock_publish,
         ):
             from src.receiver import handle_facturatie_company_updated
@@ -2190,8 +2190,8 @@ class TestHandleFacturatieCompanyDeactivated:
         deactivated = {**existing, "IsActive__c": False}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_account_match_by_crm_id", return_value=("unique", existing)),
-            patch("src.receiver.deactivate_account_record", return_value=deactivated) as mock_deact,
+            patch("src.handlers.facturatie_company_deactivated.get_account_match_by_crm_id", return_value=("unique", existing)),
+            patch("src.handlers.facturatie_company_deactivated.deactivate_account_record", return_value=deactivated) as mock_deact,
             patch("src.sender.publish_company_deactivated") as mock_publish,
         ):
             from src.receiver import handle_facturatie_company_deactivated
@@ -2212,9 +2212,9 @@ class TestHandleFacturatieCompanyDeactivated:
         parsed_xml = etree.fromstring(VALID_FACTURATIE_COMPANY_DEACTIVATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_account_match_by_crm_id", return_value=("none", None)),
+            patch("src.handlers.facturatie_company_deactivated.get_account_match_by_crm_id", return_value=("none", None)),
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
-            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.sender.publish_company_deactivated") as mock_publish,
         ):
             from src.receiver import handle_facturatie_company_deactivated
@@ -2230,7 +2230,7 @@ class TestHandleFacturatieCompanyDeactivated:
         parsed_xml = etree.fromstring(VALID_FACTURATIE_COMPANY_DEACTIVATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_account_match_by_crm_id", return_value=("ambiguous", None)),
+            patch("src.handlers.facturatie_company_deactivated.get_account_match_by_crm_id", return_value=("ambiguous", None)),
             patch("src.sender.publish_company_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -2250,8 +2250,8 @@ class TestHandleFacturatieCompanyDeactivated:
         deactivated = {**existing, "IsActive__c": False}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_account_match_by_crm_id", return_value=("unique", existing)),
-            patch("src.receiver.deactivate_account_record", return_value=deactivated),
+            patch("src.handlers.facturatie_company_deactivated.get_account_match_by_crm_id", return_value=("unique", existing)),
+            patch("src.handlers.facturatie_company_deactivated.deactivate_account_record", return_value=deactivated),
             patch("src.sender.publish_company_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -2290,10 +2290,10 @@ class TestHandleMailingUserCreated:
         parsed_xml = etree.fromstring(VALID_MAILING_USER_CREATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
-            patch("src.receiver.create_contact", return_value=MAILING_CONTACT_RETURN) as mock_create,
+            patch("src.handlers.mailing_user_created.has_contact_mailing_id_field", return_value=True),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.handlers.mailing_user_created.create_contact", return_value=MAILING_CONTACT_RETURN) as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
             patch("src.sender.publish_mail_requested") as mock_mail,
@@ -2321,11 +2321,11 @@ class TestHandleMailingUserCreated:
         parsed_xml = etree.fromstring(VALID_MAILING_USER_CREATED_MINIMAL_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.handlers.mailing_user_created.has_contact_mailing_id_field", return_value=True),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_mailing_id", return_value=("none", None)),
             patch(
-                "src.receiver.create_contact",
+                "src.handlers.mailing_user_created.create_contact",
                 return_value=MAILING_MINIMAL_CONTACT_RETURN,
             ) as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
@@ -2367,17 +2367,17 @@ class TestHandleMailingUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.handlers.mailing_user_created.has_contact_mailing_id_field", return_value=True),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.handlers.mailing_user_created.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
             patch(
-                "src.receiver.backfill_mailing_contact_fields",
+                "src.handlers.mailing_user_created.backfill_mailing_contact_fields",
                 return_value=normalized_contact,
             ) as mock_backfill,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
-            patch("src.receiver.create_contact") as mock_create,
+            patch("src.handlers.mailing_user_created.create_contact") as mock_create,
         ):
             from src.receiver import handle_mailing_user_created
 
@@ -2411,12 +2411,12 @@ class TestHandleMailingUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
+            patch("src.handlers.mailing_user_created.has_contact_mailing_id_field", return_value=True),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_created.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
             patch(
-                "src.receiver.backfill_mailing_contact_fields",
+                "src.handlers.mailing_user_created.backfill_mailing_contact_fields",
                 return_value=existing_contact,
             ) as mock_backfill,
             patch("src.sender.publish_user_confirmed") as mock_publish,
@@ -2450,12 +2450,12 @@ class TestHandleMailingUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
+            patch("src.handlers.mailing_user_created.has_contact_mailing_id_field", return_value=True),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_created.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
             patch(
-                "src.receiver.backfill_mailing_contact_fields",
+                "src.handlers.mailing_user_created.backfill_mailing_contact_fields",
                 return_value=existing_contact,
             ) as mock_backfill,
             patch("src.sender.publish_user_confirmed") as mock_publish,
@@ -2481,17 +2481,17 @@ class TestHandleMailingUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_email", return_value=("ambiguous", None)),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
+            patch("src.handlers.mailing_user_created.has_contact_mailing_id_field", return_value=True),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_email", return_value=("ambiguous", None)),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_created.ensure_contact_identifiers", return_value=existing_contact) as mock_ensure,
             patch(
-                "src.receiver.backfill_mailing_contact_fields",
+                "src.handlers.mailing_user_created.backfill_mailing_contact_fields",
                 return_value=existing_contact,
             ) as mock_backfill,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
-            patch("src.receiver.create_contact") as mock_create,
+            patch("src.handlers.mailing_user_created.create_contact") as mock_create,
         ):
             from src.receiver import handle_mailing_user_created
 
@@ -2526,11 +2526,11 @@ class TestHandleMailingUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
-            patch("src.receiver.ensure_contact_identifiers") as mock_ensure,
-            patch("src.receiver.create_contact") as mock_create,
+            patch("src.handlers.mailing_user_created.has_contact_mailing_id_field", return_value=True),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.handlers.mailing_user_created.ensure_contact_identifiers") as mock_ensure,
+            patch("src.handlers.mailing_user_created.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
         ):
@@ -2561,10 +2561,10 @@ class TestHandleMailingUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.create_contact") as mock_create,
+            patch("src.handlers.mailing_user_created.has_contact_mailing_id_field", return_value=True),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_mailing_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_created.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
             caplog.at_level(logging.WARNING),
@@ -2603,9 +2603,9 @@ class TestHandleMailingUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", email_contact)),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("unique", mailing_contact)),
+            patch("src.handlers.mailing_user_created.has_contact_mailing_id_field", return_value=True),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_email", return_value=("unique", email_contact)),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_mailing_id", return_value=("unique", mailing_contact)),
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
             caplog.at_level(logging.WARNING),
@@ -2646,12 +2646,12 @@ class TestHandleMailingUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.handlers.mailing_user_created.has_contact_mailing_id_field", return_value=True),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.handlers.mailing_user_created.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
             patch(
-                "src.receiver.backfill_mailing_contact_fields",
+                "src.handlers.mailing_user_created.backfill_mailing_contact_fields",
                 return_value=backfilled_contact,
             ) as mock_backfill,
             patch("src.sender.publish_user_confirmed") as mock_publish,
@@ -2714,12 +2714,12 @@ class TestHandleMailingUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.handlers.mailing_user_created.has_contact_mailing_id_field", return_value=True),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.handlers.mailing_user_created.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
             patch(
-                "src.receiver.backfill_mailing_contact_fields",
+                "src.handlers.mailing_user_created.backfill_mailing_contact_fields",
                 return_value=backfilled_contact,
             ) as mock_backfill,
             patch("src.sender.publish_user_confirmed") as mock_publish,
@@ -2766,11 +2766,11 @@ class TestHandleMailingUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
-            patch("src.receiver.ensure_contact_identifiers") as mock_ensure,
-            patch("src.receiver.backfill_mailing_contact_fields") as mock_backfill,
+            patch("src.handlers.mailing_user_created.has_contact_mailing_id_field", return_value=True),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.handlers.mailing_user_created.ensure_contact_identifiers") as mock_ensure,
+            patch("src.handlers.mailing_user_created.backfill_mailing_contact_fields") as mock_backfill,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
         ):
@@ -2801,11 +2801,11 @@ class TestHandleMailingUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
-            patch("src.receiver.ensure_contact_identifiers") as mock_ensure,
-            patch("src.receiver.backfill_mailing_contact_fields") as mock_backfill,
+            patch("src.handlers.mailing_user_created.has_contact_mailing_id_field", return_value=True),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.handlers.mailing_user_created.ensure_contact_identifiers") as mock_ensure,
+            patch("src.handlers.mailing_user_created.backfill_mailing_contact_fields") as mock_backfill,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
         ):
@@ -2850,12 +2850,12 @@ class TestHandleMailingUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.handlers.mailing_user_created.has_contact_mailing_id_field", return_value=True),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.handlers.mailing_user_created.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
             patch(
-                "src.receiver.backfill_mailing_contact_fields",
+                "src.handlers.mailing_user_created.backfill_mailing_contact_fields",
                 return_value=backfilled_contact,
             ) as mock_backfill,
             patch("src.sender.publish_user_confirmed") as mock_publish,
@@ -2902,11 +2902,11 @@ class TestHandleMailingUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
-            patch("src.receiver.ensure_contact_identifiers") as mock_ensure,
-            patch("src.receiver.backfill_mailing_contact_fields") as mock_backfill,
+            patch("src.handlers.mailing_user_created.has_contact_mailing_id_field", return_value=True),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.handlers.mailing_user_created.ensure_contact_identifiers") as mock_ensure,
+            patch("src.handlers.mailing_user_created.backfill_mailing_contact_fields") as mock_backfill,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
         ):
@@ -2926,7 +2926,7 @@ class TestHandleMailingUserCreated:
         parsed_xml = etree.fromstring(VALID_MAILING_USER_CREATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=False),
+            patch("src.handlers.mailing_user_created.has_contact_mailing_id_field", return_value=False),
             caplog.at_level(logging.ERROR),
         ):
             from src.receiver import handle_mailing_user_created
@@ -2957,11 +2957,11 @@ class TestHandleMailingUserCreated:
         inactive_contact = {**MAILING_CONTACT_RETURN, "IsActive__c": False}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
-            patch("src.receiver.apply_is_active", side_effect=lambda _sf, data, flag: {**data, "IsActive__c": flag}),
-            patch("src.receiver.create_contact", return_value=inactive_contact) as mock_create,
+            patch("src.handlers.mailing_user_created.has_contact_mailing_id_field", return_value=True),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.handlers.mailing_user_created.apply_is_active", side_effect=lambda _sf, data, flag: {**data, "IsActive__c": flag}),
+            patch("src.handlers.mailing_user_created.create_contact", return_value=inactive_contact) as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_confirmed,
             caplog.at_level(logging.INFO),
         ):
@@ -2983,10 +2983,10 @@ class TestHandleMailingUserCreated:
         parsed_xml = etree.fromstring(VALID_MAILING_USER_CREATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_email", return_value=("ambiguous", None)),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
-            patch("src.receiver.create_contact") as mock_create,
+            patch("src.handlers.mailing_user_created.has_contact_mailing_id_field", return_value=True),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_email", return_value=("ambiguous", None)),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.handlers.mailing_user_created.create_contact") as mock_create,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
             caplog.at_level(logging.WARNING),
@@ -3019,9 +3019,9 @@ class TestHandleMailingUserCreated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_mailing_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_mailing_id", return_value=("none", None)),
+            patch("src.handlers.mailing_user_created.has_contact_mailing_id_field", return_value=True),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_email", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_created.get_contact_match_by_mailing_id", return_value=("none", None)),
             patch("src.sender.publish_user_conflict", side_effect=Exception("publish failed")),
         ):
             from src.receiver import handle_mailing_user_created
@@ -3053,9 +3053,9 @@ class TestHandleMailingUserUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.update_mailing_contact", return_value=MAILING_UPDATED_CONTACT_RETURN) as mock_update,
+            patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.mailing_user_updated.update_mailing_contact", return_value=MAILING_UPDATED_CONTACT_RETURN) as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
         ):
@@ -3092,10 +3092,10 @@ class TestHandleMailingUserUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("none", None)),
             patch(
-                "src.receiver.update_mailing_contact",
+                "src.handlers.mailing_user_updated.update_mailing_contact",
                 return_value=MAILING_UPDATED_MINIMAL_CONTACT_RETURN,
             ) as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
@@ -3135,9 +3135,9 @@ class TestHandleMailingUserUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.update_mailing_contact", return_value=updated_contact) as mock_update,
+            patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.mailing_user_updated.update_mailing_contact", return_value=updated_contact) as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
             from src.receiver import handle_mailing_user_updated
@@ -3164,9 +3164,9 @@ class TestHandleMailingUserUpdated:
         parsed_xml = etree.fromstring(VALID_MAILING_USER_UPDATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("none", None)),
+            patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("none", None)),
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
-            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
             caplog.at_level(logging.WARNING),
@@ -3188,7 +3188,7 @@ class TestHandleMailingUserUpdated:
         parsed_xml = etree.fromstring(VALID_MAILING_USER_UPDATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("ambiguous", None)),
+            patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("ambiguous", None)),
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
             caplog.at_level(logging.WARNING),
@@ -3218,9 +3218,9 @@ class TestHandleMailingUserUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", conflicting_contact)),
-            patch("src.receiver.update_mailing_contact") as mock_update,
+            patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("unique", conflicting_contact)),
+            patch("src.handlers.mailing_user_updated.update_mailing_contact") as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
         ):
@@ -3246,9 +3246,9 @@ class TestHandleMailingUserUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("ambiguous", None)),
-            patch("src.receiver.update_mailing_contact") as mock_update,
+            patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("ambiguous", None)),
+            patch("src.handlers.mailing_user_updated.update_mailing_contact") as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
             caplog.at_level(logging.WARNING),
@@ -3275,10 +3275,10 @@ class TestHandleMailingUserUpdated:
         deactivated_contact = {**existing_contact, "IsActive__c": False}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
-            patch("src.receiver.update_mailing_contact") as mock_update,
+            patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.mailing_user_updated.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
+            patch("src.handlers.mailing_user_updated.update_mailing_contact") as mock_update,
             patch("src.sender.publish_user_deactivated") as mock_deactivated_publish,
             patch("src.sender.publish_user_updated") as mock_updated_publish,
             caplog.at_level(logging.INFO),
@@ -3303,9 +3303,9 @@ class TestHandleMailingUserUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.update_mailing_contact", return_value=MAILING_UPDATED_CONTACT_RETURN),
+            patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.mailing_user_updated.update_mailing_contact", return_value=MAILING_UPDATED_CONTACT_RETURN),
             patch("src.sender.publish_user_updated", side_effect=Exception("publish failed")),
         ):
             from src.receiver import handle_mailing_user_updated
@@ -3340,11 +3340,11 @@ class TestHandlePlanningUserUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
-            patch("src.receiver.update_planning_contact", return_value=PLANNING_UPDATED_CONTACT_RETURN) as mock_update,
+            patch("src.handlers.planning_user_updated.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_updated.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.planning_user_updated.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.planning_user_updated.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.handlers.planning_user_updated.update_planning_contact", return_value=PLANNING_UPDATED_CONTACT_RETURN) as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
         ):
@@ -3384,7 +3384,7 @@ class TestHandlePlanningUserUpdated:
         parsed_xml = etree.fromstring(VALID_PLANNING_USER_UPDATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=False),
+            patch("src.handlers.planning_user_updated.has_contact_planning_id_field", return_value=False),
             caplog.at_level(logging.ERROR),
         ):
             from src.receiver import handle_planning_user_updated
@@ -3400,11 +3400,11 @@ class TestHandlePlanningUserUpdated:
         parsed_xml = etree.fromstring(VALID_PLANNING_USER_UPDATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_planning_id", return_value=("none", None)),
+            patch("src.handlers.planning_user_updated.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_updated.get_contact_match_by_planning_id", return_value=("none", None)),
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
-            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
-            patch("src.receiver.get_contact_match_by_email") as mock_email_lookup,
+            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+            patch("src.handlers.planning_user_updated.get_contact_match_by_email") as mock_email_lookup,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
             caplog.at_level(logging.WARNING),
@@ -3427,8 +3427,8 @@ class TestHandlePlanningUserUpdated:
         parsed_xml = etree.fromstring(VALID_PLANNING_USER_UPDATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_planning_id", return_value=("ambiguous", None)),
+            patch("src.handlers.planning_user_updated.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_updated.get_contact_match_by_planning_id", return_value=("ambiguous", None)),
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
             caplog.at_level(logging.WARNING),
@@ -3458,11 +3458,11 @@ class TestHandlePlanningUserUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("unique", conflicting_contact)),
-            patch("src.receiver.ensure_contact_identifiers") as mock_ensure,
-            patch("src.receiver.update_planning_contact") as mock_update,
+            patch("src.handlers.planning_user_updated.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_updated.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.planning_user_updated.get_contact_match_by_email", return_value=("unique", conflicting_contact)),
+            patch("src.handlers.planning_user_updated.ensure_contact_identifiers") as mock_ensure,
+            patch("src.handlers.planning_user_updated.update_planning_contact") as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
         ):
@@ -3485,11 +3485,11 @@ class TestHandlePlanningUserUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("ambiguous", None)),
-            patch("src.receiver.ensure_contact_identifiers") as mock_ensure,
-            patch("src.receiver.update_planning_contact") as mock_update,
+            patch("src.handlers.planning_user_updated.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_updated.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.planning_user_updated.get_contact_match_by_email", return_value=("ambiguous", None)),
+            patch("src.handlers.planning_user_updated.ensure_contact_identifiers") as mock_ensure,
+            patch("src.handlers.planning_user_updated.update_planning_contact") as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
             caplog.at_level(logging.WARNING),
@@ -3543,11 +3543,11 @@ class TestHandlePlanningUserUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=existing_contact),
-            patch("src.receiver.update_planning_contact", return_value=PLANNING_UPDATED_CONTACT_RETURN),
+            patch("src.handlers.planning_user_updated.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_updated.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.planning_user_updated.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.planning_user_updated.ensure_contact_identifiers", return_value=existing_contact),
+            patch("src.handlers.planning_user_updated.update_planning_contact", return_value=PLANNING_UPDATED_CONTACT_RETURN),
             patch("src.sender.publish_user_updated", side_effect=Exception("publish failed")),
         ):
             from src.receiver import handle_planning_user_updated
@@ -3586,10 +3586,10 @@ class TestHandlePlanningUserDeactivated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
-            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
+            patch("src.handlers.planning_user_deactivated.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_deactivated.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.planning_user_deactivated.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.handlers.planning_user_deactivated.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
             patch("src.sender.publish_user_deactivated") as mock_publish,
         ):
             from src.receiver import handle_planning_user_deactivated
@@ -3619,7 +3619,7 @@ class TestHandlePlanningUserDeactivated:
         parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=False),
+            patch("src.handlers.planning_user_deactivated.has_contact_planning_id_field", return_value=False),
             caplog.at_level(logging.ERROR),
         ):
             from src.receiver import handle_planning_user_deactivated
@@ -3635,10 +3635,10 @@ class TestHandlePlanningUserDeactivated:
         parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_planning_id", return_value=("none", None)),
+            patch("src.handlers.planning_user_deactivated.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_deactivated.get_contact_match_by_planning_id", return_value=("none", None)),
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
-            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -3658,8 +3658,8 @@ class TestHandlePlanningUserDeactivated:
         parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_planning_id", return_value=("ambiguous", None)),
+            patch("src.handlers.planning_user_deactivated.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_deactivated.get_contact_match_by_planning_id", return_value=("ambiguous", None)),
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -3688,10 +3688,10 @@ class TestHandlePlanningUserDeactivated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact),
-            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact),
+            patch("src.handlers.planning_user_deactivated.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_deactivated.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.planning_user_deactivated.ensure_contact_identifiers", return_value=normalized_contact),
+            patch("src.handlers.planning_user_deactivated.deactivate_contact_record", return_value=deactivated_contact),
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -3722,10 +3722,10 @@ class TestHandlePlanningUserDeactivated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", legacy_contact)),
-            patch("src.receiver.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
-            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
+            patch("src.handlers.planning_user_deactivated.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_deactivated.get_contact_match_by_planning_id", return_value=("unique", legacy_contact)),
+            patch("src.handlers.planning_user_deactivated.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
+            patch("src.handlers.planning_user_deactivated.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
             patch("src.sender.publish_user_deactivated") as mock_publish,
         ):
             from src.receiver import handle_planning_user_deactivated
@@ -3765,9 +3765,9 @@ class TestHandlePlanningUserDeactivated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.deactivate_contact_record", side_effect=Exception("SF Down")),
+            patch("src.handlers.planning_user_deactivated.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_deactivated.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.planning_user_deactivated.deactivate_contact_record", side_effect=Exception("SF Down")),
             patch("src.sender.publish_user_deactivated") as mock_publish,
         ):
             from src.receiver import handle_planning_user_deactivated
@@ -3793,9 +3793,9 @@ class TestHandlePlanningUserDeactivated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_contact_planning_id_field", return_value=True),
-            patch("src.receiver.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact),
+            patch("src.handlers.planning_user_deactivated.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_deactivated.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.planning_user_deactivated.deactivate_contact_record", return_value=deactivated_contact),
             patch("src.sender.publish_user_deactivated", side_effect=Exception("publish failed")),
         ):
             from src.receiver import handle_planning_user_deactivated
@@ -3832,8 +3832,8 @@ class TestHandleMailingUserDeactivated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
+            patch("src.handlers.mailing_user_deactivated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_deactivated.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
             patch("src.sender.publish_user_deactivated") as mock_publish,
         ):
             from src.receiver import handle_mailing_user_deactivated
@@ -3858,9 +3858,9 @@ class TestHandleMailingUserDeactivated:
         parsed_xml = etree.fromstring(VALID_MAILING_USER_DEACTIVATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("none", None)),
+            patch("src.handlers.mailing_user_deactivated.get_contact_match_by_crm_id", return_value=("none", None)),
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
-            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -3880,7 +3880,7 @@ class TestHandleMailingUserDeactivated:
         parsed_xml = etree.fromstring(VALID_MAILING_USER_DEACTIVATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("ambiguous", None)),
+            patch("src.handlers.mailing_user_deactivated.get_contact_match_by_crm_id", return_value=("ambiguous", None)),
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -3906,8 +3906,8 @@ class TestHandleMailingUserDeactivated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact),
+            patch("src.handlers.mailing_user_deactivated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_deactivated.deactivate_contact_record", return_value=deactivated_contact),
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -3939,8 +3939,8 @@ class TestHandleMailingUserDeactivated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.deactivate_contact_record", side_effect=Exception("SF Down")),
+            patch("src.handlers.mailing_user_deactivated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_deactivated.deactivate_contact_record", side_effect=Exception("SF Down")),
             patch("src.sender.publish_user_deactivated") as mock_publish,
         ):
             from src.receiver import handle_mailing_user_deactivated
@@ -3966,8 +3966,8 @@ class TestHandleMailingUserDeactivated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
-            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact),
+            patch("src.handlers.mailing_user_deactivated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.mailing_user_deactivated.deactivate_contact_record", return_value=deactivated_contact),
             patch("src.sender.publish_user_deactivated", side_effect=Exception("publish failed")),
         ):
             from src.receiver import handle_mailing_user_deactivated
@@ -4165,9 +4165,9 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN) as mock_upsert,
-            patch("src.receiver.ensure_session_registration_active"),
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN) as mock_upsert,
+            patch("src.handlers.frontend_registration_updated.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated"),
         ):
             from src.receiver import handle_registration_updated
@@ -4188,9 +4188,9 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN),
-            patch("src.receiver.ensure_session_registration_active"),
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN),
+            patch("src.handlers.frontend_registration_updated.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
             from src.receiver import handle_registration_updated
@@ -4220,9 +4220,9 @@ class TestHandleRegistrationUpdated:
 
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.upsert_contact_by_email", return_value=contact_with_optional_fields),
-            patch("src.receiver.ensure_session_registration_active"),
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.upsert_contact_by_email", return_value=contact_with_optional_fields),
+            patch("src.handlers.frontend_registration_updated.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
             from src.receiver import handle_registration_updated
@@ -4250,9 +4250,9 @@ class TestHandleRegistrationUpdated:
 
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.upsert_contact_by_email", return_value=contact_with_fallback_active_field),
-            patch("src.receiver.ensure_session_registration_active"),
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.upsert_contact_by_email", return_value=contact_with_fallback_active_field),
+            patch("src.handlers.frontend_registration_updated.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
             from src.receiver import handle_registration_updated
@@ -4267,9 +4267,9 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN),
-            patch("src.receiver.ensure_session_registration_active"),
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN),
+            patch("src.handlers.frontend_registration_updated.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated"),
         ):
             from src.receiver import handle_registration_updated
@@ -4289,9 +4289,9 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(xml_no_fields)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN) as mock_upsert,
-            patch("src.receiver.ensure_session_registration_active") as mock_ensure_session,
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN) as mock_upsert,
+            patch("src.handlers.frontend_registration_updated.ensure_session_registration_active") as mock_ensure_session,
             patch("src.sender.publish_user_updated"),
         ):
             from src.receiver import handle_registration_updated
@@ -4319,9 +4319,9 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(xml_with_role)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN) as mock_upsert,
-            patch("src.receiver.ensure_session_registration_active"),
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN) as mock_upsert,
+            patch("src.handlers.frontend_registration_updated.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated"),
         ):
             from src.receiver import handle_registration_updated
@@ -4335,7 +4335,7 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=False),
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=False),
         ):
             from src.receiver import handle_registration_updated
 
@@ -4360,11 +4360,11 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
-            patch("src.receiver.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}) as mock_deact_reg,
-            patch("src.receiver.count_active_session_registrations", return_value=1),
-            patch("src.receiver.deactivate_contact_record") as mock_deact_contact,
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
+            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}) as mock_deact_reg,
+            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=1),
+            patch("src.handlers.frontend_registration_updated.deactivate_contact_record") as mock_deact_contact,
             patch("src.sender.publish_user_deactivated") as mock_publish,
         ):
             from src.receiver import handle_registration_updated
@@ -4391,11 +4391,11 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
-            patch("src.receiver.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
-            patch("src.receiver.count_active_session_registrations", return_value=0),
-            patch("src.receiver.deactivate_contact_record", return_value=DEACTIVATED_CONTACT_RETURN),
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
+            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
+            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
+            patch("src.handlers.frontend_registration_updated.deactivate_contact_record", return_value=DEACTIVATED_CONTACT_RETURN),
             patch("src.sender.publish_user_deactivated") as mock_publish,
         ):
             from src.receiver import handle_registration_updated
@@ -4430,14 +4430,14 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
-            patch("src.receiver.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
-            patch("src.receiver.count_active_session_registrations", return_value=0),
-            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact_with_company),
-            patch("src.receiver.count_active_contacts_for_company", return_value=0),
-            patch("src.receiver.get_account_by_crm_id", return_value=account_before_deactivation),
-            patch("src.receiver.deactivate_account_by_crm_id", return_value=DEACTIVATED_ACCOUNT_RETURN) as mock_deactivate_account,
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
+            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
+            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
+            patch("src.handlers.frontend_registration_updated.deactivate_contact_record", return_value=deactivated_contact_with_company),
+            patch("src.handlers.frontend_registration_updated.count_active_contacts_for_company", return_value=0),
+            patch("src.handlers.frontend_registration_updated.get_account_by_crm_id", return_value=account_before_deactivation),
+            patch("src.handlers.frontend_registration_updated.deactivate_account_by_crm_id", return_value=DEACTIVATED_ACCOUNT_RETURN) as mock_deactivate_account,
             patch("src.sender.publish_user_deactivated") as mock_publish_user,
             patch("src.sender.publish_company_deactivated") as mock_publish_company,
         ):
@@ -4469,13 +4469,13 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
-            patch("src.receiver.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
-            patch("src.receiver.count_active_session_registrations", return_value=0),
-            patch("src.receiver.deactivate_contact_record", return_value=DEACTIVATED_CONTACT_RETURN),
-            patch("src.receiver.count_active_contacts_for_company") as mock_sibling_count,
-            patch("src.receiver.deactivate_account_by_crm_id") as mock_deactivate_account,
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
+            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
+            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
+            patch("src.handlers.frontend_registration_updated.deactivate_contact_record", return_value=DEACTIVATED_CONTACT_RETURN),
+            patch("src.handlers.frontend_registration_updated.count_active_contacts_for_company") as mock_sibling_count,
+            patch("src.handlers.frontend_registration_updated.deactivate_account_by_crm_id") as mock_deactivate_account,
             patch("src.sender.publish_user_deactivated"),
             patch("src.sender.publish_company_deactivated") as mock_publish_company,
         ):
@@ -4507,14 +4507,14 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
-            patch("src.receiver.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
-            patch("src.receiver.count_active_session_registrations", return_value=0),
-            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact_with_company),
-            patch("src.receiver.count_active_contacts_for_company", return_value=2) as mock_sibling_count,
-            patch("src.receiver.get_account_by_crm_id") as mock_get_account,
-            patch("src.receiver.deactivate_account_by_crm_id") as mock_deactivate_account,
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
+            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
+            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
+            patch("src.handlers.frontend_registration_updated.deactivate_contact_record", return_value=deactivated_contact_with_company),
+            patch("src.handlers.frontend_registration_updated.count_active_contacts_for_company", return_value=2) as mock_sibling_count,
+            patch("src.handlers.frontend_registration_updated.get_account_by_crm_id") as mock_get_account,
+            patch("src.handlers.frontend_registration_updated.deactivate_account_by_crm_id") as mock_deactivate_account,
             patch("src.sender.publish_user_deactivated") as mock_publish_user,
             patch("src.sender.publish_company_deactivated") as mock_publish_company,
         ):
@@ -4554,14 +4554,14 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
-            patch("src.receiver.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
-            patch("src.receiver.count_active_session_registrations", return_value=0),
-            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact_with_company),
-            patch("src.receiver.count_active_contacts_for_company", return_value=0),
-            patch("src.receiver.get_account_by_crm_id", return_value=account_without_vat),
-            patch("src.receiver.deactivate_account_by_crm_id") as mock_deactivate_account,
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
+            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
+            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
+            patch("src.handlers.frontend_registration_updated.deactivate_contact_record", return_value=deactivated_contact_with_company),
+            patch("src.handlers.frontend_registration_updated.count_active_contacts_for_company", return_value=0),
+            patch("src.handlers.frontend_registration_updated.get_account_by_crm_id", return_value=account_without_vat),
+            patch("src.handlers.frontend_registration_updated.deactivate_account_by_crm_id") as mock_deactivate_account,
             patch("src.sender.publish_user_deactivated") as mock_publish_user,
             patch("src.sender.publish_company_deactivated") as mock_publish_company,
         ):
@@ -4594,12 +4594,12 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
-            patch("src.receiver.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
-            patch("src.receiver.count_active_session_registrations", return_value=0),
-            patch("src.receiver.deactivate_contact_record", return_value=deactivated_contact_with_company),
-            patch("src.receiver.count_active_contacts_for_company", side_effect=Exception("SF API down")),
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
+            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
+            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
+            patch("src.handlers.frontend_registration_updated.deactivate_contact_record", return_value=deactivated_contact_with_company),
+            patch("src.handlers.frontend_registration_updated.count_active_contacts_for_company", side_effect=Exception("SF API down")),
             patch("src.sender.publish_user_deactivated") as mock_publish_user,
             patch("src.sender.publish_company_deactivated") as mock_publish_company,
         ):
@@ -4626,11 +4626,11 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
-            patch("src.receiver.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
-            patch("src.receiver.count_active_session_registrations", return_value=0),
-            patch("src.receiver.deactivate_contact_record") as mock_deact_contact,
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
+            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
+            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
+            patch("src.handlers.frontend_registration_updated.deactivate_contact_record") as mock_deact_contact,
             patch("src.sender.publish_user_deactivated") as mock_publish,
         ):
             from src.receiver import handle_registration_updated
@@ -4646,8 +4646,8 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(VALID_CANCEL_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.get_contact_by_email", return_value=None),
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=None),
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -4672,11 +4672,11 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
-            patch("src.receiver.deactivate_session_registration", return_value=None),
-            patch("src.receiver.count_active_session_registrations", return_value=0),
-            patch("src.receiver.deactivate_contact_record", return_value=DEACTIVATED_CONTACT_RETURN) as mock_deact_contact,
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
+            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value=None),
+            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
+            patch("src.handlers.frontend_registration_updated.deactivate_contact_record", return_value=DEACTIVATED_CONTACT_RETURN) as mock_deact_contact,
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -4702,11 +4702,11 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
-            patch("src.receiver.deactivate_session_registration", return_value=None),
-            patch("src.receiver.count_active_session_registrations", return_value=0),
-            patch("src.receiver.deactivate_contact_record") as mock_deact_contact,
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
+            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value=None),
+            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
+            patch("src.handlers.frontend_registration_updated.deactivate_contact_record") as mock_deact_contact,
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
         ):
@@ -4725,7 +4725,7 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(VALID_CANCEL_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=False),
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=False),
         ):
             from src.receiver import handle_registration_updated
 
@@ -4753,8 +4753,8 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.upsert_contact_by_email", side_effect=Exception("SF Down")),
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.upsert_contact_by_email", side_effect=Exception("SF Down")),
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
             from src.receiver import handle_registration_updated
@@ -4773,9 +4773,9 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN),
-            patch("src.receiver.ensure_session_registration_active"),
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN),
+            patch("src.handlers.frontend_registration_updated.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated", side_effect=Exception("RabbitMQ down")),
         ):
             from src.receiver import handle_registration_updated
@@ -4800,11 +4800,11 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.get_contact_by_email", return_value=existing_contact),
-            patch("src.receiver.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
-            patch("src.receiver.count_active_session_registrations", return_value=0),
-            patch("src.receiver.deactivate_contact_record", return_value=DEACTIVATED_CONTACT_RETURN),
+            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
+            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
+            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
+            patch("src.handlers.frontend_registration_updated.deactivate_contact_record", return_value=DEACTIVATED_CONTACT_RETURN),
             patch("src.sender.publish_user_deactivated", side_effect=Exception("RabbitMQ down")),
         ):
             from src.receiver import handle_registration_updated
@@ -4844,8 +4844,8 @@ class TestHandleSessionUpdated:
         parsed_xml = etree.fromstring(VALID_SESSION_UPDATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.get_active_session_participants", return_value=SESSION_PARTICIPANTS),
+            patch("src.handlers.planning_session_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.planning_session_updated.get_active_session_participants", return_value=SESSION_PARTICIPANTS),
             patch("src.sender.publish_mail_requested") as mock_publish,
         ):
             from src.receiver import handle_session_updated
@@ -4867,8 +4867,8 @@ class TestHandleSessionUpdated:
         parsed_xml = etree.fromstring(VALID_SESSION_CANCELLED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.get_active_session_participants", return_value=[SESSION_PARTICIPANTS[0]]),
+            patch("src.handlers.planning_session_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.planning_session_updated.get_active_session_participants", return_value=[SESSION_PARTICIPANTS[0]]),
             patch("src.sender.publish_mail_requested") as mock_publish,
         ):
             from src.receiver import handle_session_updated
@@ -4884,8 +4884,8 @@ class TestHandleSessionUpdated:
         parsed_xml = etree.fromstring(VALID_SESSION_UPDATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.get_active_session_participants", return_value=[]),
+            patch("src.handlers.planning_session_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.planning_session_updated.get_active_session_participants", return_value=[]),
             patch("src.sender.publish_mail_requested") as mock_publish,
         ):
             from src.receiver import handle_session_updated
@@ -4901,7 +4901,7 @@ class TestHandleSessionUpdated:
         parsed_xml = etree.fromstring(VALID_SESSION_UPDATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=False),
+            patch("src.handlers.planning_session_updated.has_session_registration_object", return_value=False),
         ):
             from src.receiver import handle_session_updated
 
@@ -4925,8 +4925,8 @@ class TestHandleSessionUpdated:
         parsed_xml = etree.fromstring(VALID_SESSION_UPDATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.has_session_registration_object", return_value=True),
-            patch("src.receiver.get_active_session_participants", return_value=[SESSION_PARTICIPANTS[0]]),
+            patch("src.handlers.planning_session_updated.has_session_registration_object", return_value=True),
+            patch("src.handlers.planning_session_updated.get_active_session_participants", return_value=[SESSION_PARTICIPANTS[0]]),
             patch("src.sender.publish_mail_requested", side_effect=Exception("RabbitMQ down")),
         ):
             from src.receiver import handle_session_updated
@@ -4955,7 +4955,7 @@ class TestHandlePaymentConfirmed:
         parsed_xml = etree.fromstring(VALID_PAYMENT_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.update_payment_status", return_value=PAID_CONTACT_RETURN) as mock_update,
+            patch("src.handlers.kassa_payment_confirmed.update_payment_status", return_value=PAID_CONTACT_RETURN) as mock_update,
         ):
             from src.receiver import handle_payment_confirmed
 
@@ -4974,7 +4974,7 @@ class TestHandlePaymentConfirmed:
         parsed_xml = etree.fromstring(VALID_PAYMENT_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.update_payment_status", return_value=PAID_CONTACT_RETURN),
+            patch("src.handlers.kassa_payment_confirmed.update_payment_status", return_value=PAID_CONTACT_RETURN),
         ):
             from src.receiver import handle_payment_confirmed
 
@@ -4989,7 +4989,7 @@ class TestHandlePaymentConfirmed:
         parsed_xml = etree.fromstring(VALID_PAYMENT_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.update_payment_status", return_value=None),
+            patch("src.handlers.kassa_payment_confirmed.update_payment_status", return_value=None),
         ):
             from src.receiver import handle_payment_confirmed
 
@@ -5014,7 +5014,7 @@ class TestHandlePaymentConfirmed:
         parsed_xml = etree.fromstring(VALID_PAYMENT_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.update_payment_status", side_effect=Exception("SF Down")),
+            patch("src.handlers.kassa_payment_confirmed.update_payment_status", side_effect=Exception("SF Down")),
         ):
             from src.receiver import handle_payment_confirmed
 
@@ -5037,7 +5037,7 @@ class TestHandleUnpaidRequested:
         parsed_xml = etree.fromstring(VALID_UNPAID_REQUEST_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_unpaid_contacts", return_value=UNPAID_CONTACTS_RETURN) as mock_get,
+            patch("src.handlers.kassa_unpaid_requested.get_unpaid_contacts", return_value=UNPAID_CONTACTS_RETURN) as mock_get,
             patch("src.sender.publish_unpaid_responded") as mock_publish,
         ):
             from src.receiver import handle_unpaid_requested
@@ -5052,7 +5052,7 @@ class TestHandleUnpaidRequested:
         parsed_xml = etree.fromstring(VALID_UNPAID_REQUEST_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_unpaid_contacts", return_value=UNPAID_CONTACTS_RETURN),
+            patch("src.handlers.kassa_unpaid_requested.get_unpaid_contacts", return_value=UNPAID_CONTACTS_RETURN),
             patch("src.sender.publish_unpaid_responded"),
         ):
             from src.receiver import handle_unpaid_requested
@@ -5068,7 +5068,7 @@ class TestHandleUnpaidRequested:
         parsed_xml = etree.fromstring(VALID_UNPAID_REQUEST_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_unpaid_contacts", return_value=[]),
+            patch("src.handlers.kassa_unpaid_requested.get_unpaid_contacts", return_value=[]),
             patch("src.sender.publish_unpaid_responded") as mock_publish,
         ):
             from src.receiver import handle_unpaid_requested
@@ -5094,7 +5094,7 @@ class TestHandleUnpaidRequested:
         parsed_xml = etree.fromstring(VALID_UNPAID_REQUEST_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_unpaid_contacts", side_effect=Exception("SF Down")),
+            patch("src.handlers.kassa_unpaid_requested.get_unpaid_contacts", side_effect=Exception("SF Down")),
             patch("src.sender.publish_unpaid_responded"),
         ):
             from src.receiver import handle_unpaid_requested
@@ -5112,7 +5112,7 @@ class TestHandleUnpaidRequested:
         parsed_xml = etree.fromstring(VALID_UNPAID_REQUEST_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_unpaid_contacts", return_value=UNPAID_CONTACTS_RETURN),
+            patch("src.handlers.kassa_unpaid_requested.get_unpaid_contacts", return_value=UNPAID_CONTACTS_RETURN),
             patch("src.sender.publish_unpaid_responded", side_effect=Exception("RabbitMQ down")),
         ):
             from src.receiver import handle_unpaid_requested
@@ -5142,7 +5142,7 @@ class TestHandlePersonLookup:
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch(
-                "src.receiver.get_contact_for_person_lookup",
+                "src.handlers.kassa_person_lookup_requested.get_contact_for_person_lookup",
                 return_value=PERSON_LOOKUP_CONTACT_WITH_ACCOUNT,
             ) as mock_lookup,
             patch("src.sender.publish_person_lookup_responded") as mock_publish,
@@ -5172,7 +5172,7 @@ class TestHandlePersonLookup:
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch(
-                "src.receiver.get_contact_for_person_lookup",
+                "src.handlers.kassa_person_lookup_requested.get_contact_for_person_lookup",
                 return_value=PERSON_LOOKUP_CONTACT_WITHOUT_ACCOUNT,
             ),
             patch("src.sender.publish_person_lookup_responded") as mock_publish,
@@ -5197,7 +5197,7 @@ class TestHandlePersonLookup:
         parsed_xml = etree.fromstring(VALID_PERSON_LOOKUP_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.receiver.get_contact_for_person_lookup", return_value=None),
+            patch("src.handlers.kassa_person_lookup_requested.get_contact_for_person_lookup", return_value=None),
             patch("src.sender.publish_person_lookup_responded") as mock_publish,
         ):
             from src.receiver import handle_person_lookup
@@ -5215,7 +5215,7 @@ class TestHandlePersonLookup:
     async def test_rejects_invalid_xml_without_requeue(self, sf_mock):
         with (
             patch("src.xml_validator.validate", side_effect=ValueError("Bad XML")),
-            patch("src.receiver.get_contact_for_person_lookup") as mock_lookup,
+            patch("src.handlers.kassa_person_lookup_requested.get_contact_for_person_lookup") as mock_lookup,
             patch("src.sender.publish_person_lookup_responded") as mock_publish,
         ):
             from src.receiver import handle_person_lookup
@@ -5233,7 +5233,7 @@ class TestHandlePersonLookup:
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch(
-                "src.receiver.get_contact_for_person_lookup",
+                "src.handlers.kassa_person_lookup_requested.get_contact_for_person_lookup",
                 side_effect=Exception("SF Down"),
             ),
             patch("src.sender.publish_person_lookup_responded"),
@@ -5519,7 +5519,7 @@ class TestHandleProcessingError:
 
         with (
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
-            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             caplog.at_level(logging.ERROR),
         ):
             await _handle_processing_error("MailingUserUpdated", message, RuntimeError("boom"))
@@ -5539,7 +5539,7 @@ class TestHandleProcessingError:
 
         with (
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
-            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             caplog.at_level(logging.ERROR),
         ):
             await _handle_processing_error("MailingUserUpdated", message, RuntimeError("still broken"))
@@ -5598,7 +5598,7 @@ class TestHandleOutOfOrderDeferral:
 
         with (
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
-            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             caplog.at_level(logging.WARNING),
         ):
             await _handle_out_of_order_deferral(
@@ -5622,7 +5622,7 @@ class TestHandleOutOfOrderDeferral:
 
         with (
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
-            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
         ):
             await _handle_out_of_order_deferral(
                 "PlanningUserUpdated",
@@ -5645,7 +5645,7 @@ class TestHandleOutOfOrderDeferral:
 
         with (
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
-            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
         ):
             await _handle_out_of_order_deferral(
                 "MailingUserDeactivated",
@@ -5665,7 +5665,7 @@ class TestHandleOutOfOrderDeferral:
 
         with (
             patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
-            patch("src.receiver._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             caplog.at_level(logging.WARNING),
         ):
             await _handle_out_of_order_deferral(
