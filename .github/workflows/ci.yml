@@ -27,6 +27,12 @@ jobs:
       - name: Lint
         run: ruff check src/ tests/
 
+      - name: File-size check (warn >1000 regels)
+        run: |
+          find src -name "*.py" -type f -exec wc -l {} + \
+            | awk '$2 ~ /\.py$/ && $1 > 1000 { print "::warning file=" $2 "::" $2 " has " $1 " lines (>1000, consider splitting)" }'
+        continue-on-error: true
+
       - name: Security audit
         run: pip-audit -r requirements.txt
 
