@@ -804,8 +804,8 @@ def _get_account_email(account: dict) -> str | None:
 def _build_company_data(account: dict) -> dict:
     """Build outbound Contract 14 crm.company.confirmed payload from a Salesforce Account.
 
-    Required XSD fields: id, vatNumber, name, email, isActive, confirmedAt.
-    Phone/adres fields are not part of C14 (only C19/C5b carry them).
+    Required XSD fields: id, vatNumber, name, email, street, houseNumber,
+    postalCode, city, country, isActive, confirmedAt. Only phone is optional.
     """
     crm_id = account.get("CRM_ID__c")
     if not crm_id:
@@ -820,7 +820,7 @@ def _build_company_data(account: dict) -> dict:
             "crm.company.confirmed payload (Contract 14 requires email).",
         )
 
-    return {
+    data: dict[str, Any] = {
         "id": crm_id,
         "vatNumber": account["VAT_Number__c"],
         "name": account["Name"],
@@ -828,6 +828,34 @@ def _build_company_data(account: dict) -> dict:
         "isActive": _get_account_is_active(account),
         "confirmedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+    if account.get("Phone"):
+        data["phone"] = account["Phone"]
+    for sf_field, xml_field in (
+        ("BillingStreet", "street"),
+        ("House_Number__c", "houseNumber"),
+        ("BillingPostalCode", "postalCode"),
+        ("BillingCity", "city"),
+    ):
+        value = account.get(sf_field)
+        if value:
+            data[xml_field] = value
+    country = (
+        to_iso_alpha2(account.get("BillingCountryCode"))
+        or to_iso_alpha2(account.get("BillingCountry"))
+    )
+    if country:
+        data["country"] = country
+
+    missing = [
+        f for f in ("street", "houseNumber", "postalCode", "city", "country")
+        if f not in data
+    ]
+    if missing:
+        raise ValueError(
+            f"Account {account.get('Id')}: cannot publish crm.company.confirmed — "
+            f"missing required address fields: {missing}",
+        )
+    return data
 
 
 def _build_updated_company_data(account: dict) -> dict:

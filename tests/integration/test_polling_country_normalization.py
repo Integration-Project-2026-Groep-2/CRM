@@ -50,6 +50,10 @@ def _make_account_record(crm_id: str, vat: str, **country_fields) -> dict:
         "Name": "Acme NV",
         "VAT_Number__c": vat,
         "Email__c": "info@acme.be",
+        "BillingStreet": "Kerkstraat",
+        "House_Number__c": "12",
+        "BillingPostalCode": "1000",
+        "BillingCity": "Brussel",
         "IsActive__c": True,
         "CreatedDate": "2026-04-21T09:00:00.000+0000",
         "SystemModstamp": "2026-04-21T10:00:00.000+0000",
@@ -75,7 +79,8 @@ def _make_sf_mock(account_records: list[dict]) -> MagicMock:
             "Id", "CRM_ID__c", "Name", "VAT_Number__c",
             "CreatedDate", "SystemModstamp", "LastModifiedById",
             "IsActive__c", "Email__c",
-            "BillingCountry", "BillingCountryCode",
+            "BillingStreet", "House_Number__c", "BillingPostalCode",
+            "BillingCity", "BillingCountry", "BillingCountryCode",
         ]],
     }
     sf.Contact.update = MagicMock()
@@ -184,6 +189,11 @@ async def test_polling_emits_iso2_country_when_billing_country_code_present(
 
     assert b"<country>BE</country>" in body
     assert b"<country>Belgium</country>" not in body
+    # Full address must flow through for the newly-required C14 fields.
+    assert b"<street>Kerkstraat</street>" in body
+    assert b"<houseNumber>12</houseNumber>" in body
+    assert b"<postalCode>1000</postalCode>" in body
+    assert b"<city>Brussel</city>" in body
 
 
 @pytest.mark.asyncio
@@ -207,3 +217,7 @@ async def test_polling_normalizes_full_country_name_via_pycountry(
     )
 
     assert b"<country>BE</country>" in body
+    assert b"<street>Kerkstraat</street>" in body
+    assert b"<houseNumber>12</houseNumber>" in body
+    assert b"<postalCode>1000</postalCode>" in body
+    assert b"<city>Brussel</city>" in body
