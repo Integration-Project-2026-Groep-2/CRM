@@ -1143,7 +1143,10 @@ class TestSessionReauth:
         from simple_salesforce.exceptions import SalesforceResourceNotFound
 
         expired_exc = SalesforceResourceNotFound(
-            "https://example/services/data/v59.0/query/", 404, "query", b"",
+            "https://example/services/data/v59.0/query/",
+            404,
+            "query",
+            [{"errorCode": "INVALID_SESSION_ID", "message": "Session expired"}],
         )
 
         # Old sf: query_all always raises expired. Describe + other lookups
@@ -1250,7 +1253,10 @@ class TestSessionReauth:
         from simple_salesforce.exceptions import SalesforceResourceNotFound
 
         expired_exc = SalesforceResourceNotFound(
-            "https://example/services/data/v59.0/query/", 404, "query", b"",
+            "https://example/services/data/v59.0/query/",
+            404,
+            "query",
+            [{"errorCode": "INVALID_SESSION_ID", "message": "Session expired"}],
         )
 
         # Both old and new sf raise on query_all — the bug did not clear on reauth.
@@ -1305,7 +1311,10 @@ class TestSessionReauth:
         )
 
         expired_exc = SalesforceResourceNotFound(
-            "https://example/services/data/v59.0/query/", 404, "query", b"",
+            "https://example/services/data/v59.0/query/",
+            404,
+            "query",
+            [{"errorCode": "INVALID_SESSION_ID", "message": "Session expired"}],
         )
 
         sf = MagicMock()
