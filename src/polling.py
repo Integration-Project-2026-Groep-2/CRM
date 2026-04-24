@@ -34,6 +34,7 @@ Checkpoint state:
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
 import os
@@ -70,6 +71,30 @@ logger = logging.getLogger(__name__)
 # Re-resolve the integration user id once an hour so a rotated username
 # doesn't silently let polling re-publish receiver-induced events.
 _USER_ID_REFRESH_SECONDS = 3600
+
+# Permanent-failure ERROR log dedup — production regression: when a record
+# fails dispatch deterministically (e.g. XSD validation on a malformed
+# country), the skip-and-cap checkpoint semantics correctly re-process the
+# record every cycle, but the full ERROR stacktrace per cycle drowns
+# operators in identical logs. Track (record_id, SystemModstamp) in an LRU
+# set so we log ERROR once per distinct failure. An admin fix bumps
+# SystemModstamp, producing a new tuple that logs once more if still failing.
+_REPORTED_FAILURES_CAP = 1000
+_reported_failures: "collections.OrderedDict[tuple[str, str], None]" = (
+    collections.OrderedDict()
+)
+
+
+def _should_log_failure(record: dict) -> bool:
+    """Return True the first time we see a (record_id, modstamp); False after."""
+    key = (str(record.get("Id")), str(record.get("SystemModstamp")))
+    if key in _reported_failures:
+        _reported_failures.move_to_end(key)
+        return False
+    _reported_failures[key] = None
+    if len(_reported_failures) > _REPORTED_FAILURES_CAP:
+        _reported_failures.popitem(last=False)
+    return True
 
 # SOQL-safe timestamp format. Salesforce accepts ISO-8601 with Z suffix.
 _SF_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
@@ -696,7 +721,10 @@ async def _poll_contacts(
             # log, and would keep hammering SF while it throttles us.
             if is_rate_limit_error(exc):
                 raise
-            logger.exception("Polling: failed to dispatch Contact %s", record.get("Id"))
+            if _should_log_failure(record):
+                logger.exception(
+                    "Polling: failed to dispatch Contact %s", record.get("Id"),
+                )
             # Treat as a skip so the checkpoint cap stays below this record's
             # timestamp and a fixed version is re-processed on the next cycle.
             # Without this, a later successful record would advance the
@@ -750,7 +778,10 @@ async def _poll_accounts(
         except Exception as exc:
             if is_rate_limit_error(exc):
                 raise
-            logger.exception("Polling: failed to dispatch Account %s", record.get("Id"))
+            if _should_log_failure(record):
+                logger.exception(
+                    "Polling: failed to dispatch Account %s", record.get("Id"),
+                )
             if earliest_skipped is None or record_ts < earliest_skipped:
                 earliest_skipped = record_ts
 

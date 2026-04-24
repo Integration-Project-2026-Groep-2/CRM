@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -495,6 +496,171 @@ class TestSkipDoesNotAdvanceCheckpoint:
         # failing record (and re-processes succeeding — consumers idempotent).
         assert new_state.contact_last_seen == (
             datetime(2026, 4, 21, 10, 0, tzinfo=timezone.utc) - _td(milliseconds=1)
+        )
+
+
+class TestPermanentFailureDedup:
+    """Production regression: a record that fails deterministically (e.g. XSD
+    validation on country="Belgium") re-enters polling every ~60s. The full
+    ERROR stacktrace every cycle drowned operators in duplicate logs.
+
+    Fix: log ERROR once per (id, SystemModstamp). Skip-and-cap checkpoint
+    semantics are unchanged — the record is still re-processed until fixed;
+    only the log is deduplicated.
+    """
+
+    def setup_method(self):
+        polling._reported_failures.clear()
+
+    @pytest.mark.asyncio
+    async def test_logs_once_per_id_and_modstamp_across_cycles(
+        self, tmp_path, sender_init, monkeypatch, caplog,
+    ):
+        record = _account_record(
+            Id="001PERM",
+            CreatedDate="2026-04-21T09:00:00.000+0000",
+            SystemModstamp="2026-04-21T10:00:00.000+0000",
+        )
+
+        async def raise_always(account_data):
+            raise ValueError("XML validation failed: country")
+
+        sender_init["company_updated"].side_effect = raise_always
+        sender_init["company_confirmed"].side_effect = raise_always
+
+        sf = make_sf_mock(account_query_records=[record])
+        state = polling.PollingState(
+            contact_last_seen=datetime(2026, 4, 20, tzinfo=timezone.utc),
+            account_last_seen=datetime(2026, 4, 20, tzinfo=timezone.utc),
+        )
+
+        caplog.set_level(logging.ERROR, logger="src.polling")
+        await polling._poll_accounts(make_session(sf), state, "UID")
+        await polling._poll_accounts(make_session(sf), state, "UID")
+
+        failure_logs = [
+            r for r in caplog.records
+            if "failed to dispatch" in r.message and "001PERM" in r.message
+        ]
+        assert len(failure_logs) == 1, (
+            f"expected exactly one ERROR per (id, modstamp), got {len(failure_logs)}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_logs_again_when_modstamp_changes(
+        self, tmp_path, sender_init, monkeypatch, caplog,
+    ):
+        """Admin fix bumps SystemModstamp → new (id, modstamp) → log fires once more."""
+
+        async def raise_always(account_data):
+            raise ValueError("XML validation failed: country")
+
+        sender_init["company_updated"].side_effect = raise_always
+        sender_init["company_confirmed"].side_effect = raise_always
+
+        first = _account_record(
+            Id="001PERM",
+            CreatedDate="2026-04-21T09:00:00.000+0000",
+            SystemModstamp="2026-04-21T10:00:00.000+0000",
+        )
+        second = _account_record(
+            Id="001PERM",
+            CreatedDate="2026-04-21T09:00:00.000+0000",
+            SystemModstamp="2026-04-21T11:00:00.000+0000",  # newer modstamp
+        )
+
+        state = polling.PollingState(
+            contact_last_seen=datetime(2026, 4, 20, tzinfo=timezone.utc),
+            account_last_seen=datetime(2026, 4, 20, tzinfo=timezone.utc),
+        )
+
+        caplog.set_level(logging.ERROR, logger="src.polling")
+        sf_first = make_sf_mock(account_query_records=[first])
+        await polling._poll_accounts(make_session(sf_first), state, "UID")
+        sf_second = make_sf_mock(account_query_records=[second])
+        await polling._poll_accounts(make_session(sf_second), state, "UID")
+
+        failure_logs = [
+            r for r in caplog.records
+            if "failed to dispatch" in r.message and "001PERM" in r.message
+        ]
+        assert len(failure_logs) == 2
+
+    @pytest.mark.asyncio
+    async def test_lru_eviction_re_logs_after_cap(
+        self, tmp_path, sender_init, monkeypatch, caplog,
+    ):
+        """LRU cap bounds the set; evicted entries re-log on re-encounter."""
+        monkeypatch.setattr(polling, "_REPORTED_FAILURES_CAP", 2)
+        polling._reported_failures.clear()
+
+        async def raise_always(account_data):
+            raise ValueError("XML validation failed")
+
+        sender_init["company_updated"].side_effect = raise_always
+        sender_init["company_confirmed"].side_effect = raise_always
+
+        def _rec(record_id):
+            return _account_record(
+                Id=record_id,
+                VAT_Number__c=f"BE000000000{record_id[-1]}",
+                CreatedDate="2026-04-21T09:00:00.000+0000",
+                SystemModstamp="2026-04-21T10:00:00.000+0000",
+            )
+
+        state = polling.PollingState(
+            contact_last_seen=datetime(2026, 4, 20, tzinfo=timezone.utc),
+            account_last_seen=datetime(2026, 4, 20, tzinfo=timezone.utc),
+        )
+
+        caplog.set_level(logging.ERROR, logger="src.polling")
+        # Cycle 1: record A is logged and tracked.
+        await polling._poll_accounts(
+            make_session(make_sf_mock(account_query_records=[_rec("001A")])), state, "UID",
+        )
+        # Cycle 2: records B and C fill and overflow the cap; A is evicted.
+        await polling._poll_accounts(
+            make_session(make_sf_mock(
+                account_query_records=[_rec("001B"), _rec("001C")],
+            )), state, "UID",
+        )
+        # Cycle 3: A re-appears; since it was evicted, it logs again.
+        await polling._poll_accounts(
+            make_session(make_sf_mock(account_query_records=[_rec("001A")])), state, "UID",
+        )
+
+        a_logs = [r for r in caplog.records if "001A" in r.message]
+        assert len(a_logs) == 2  # first sight + re-log after eviction
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_bypasses_dedup_and_propagates(
+        self, tmp_path, sender_init, monkeypatch, caplog,
+    ):
+        """REQUEST_LIMIT_EXCEEDED must propagate; no entry in the dedup set."""
+        record = _account_record(
+            Id="001RATE",
+            CreatedDate="2026-04-21T09:00:00.000+0000",
+            SystemModstamp="2026-04-21T10:00:00.000+0000",
+        )
+
+        async def raise_rate_limit(account_data):
+            raise Exception("REQUEST_LIMIT_EXCEEDED: daily API cap")
+
+        sender_init["company_updated"].side_effect = raise_rate_limit
+        sender_init["company_confirmed"].side_effect = raise_rate_limit
+
+        sf = make_sf_mock(account_query_records=[record])
+        state = polling.PollingState(
+            contact_last_seen=datetime(2026, 4, 20, tzinfo=timezone.utc),
+            account_last_seen=datetime(2026, 4, 20, tzinfo=timezone.utc),
+        )
+
+        caplog.set_level(logging.ERROR, logger="src.polling")
+        with pytest.raises(Exception, match="REQUEST_LIMIT_EXCEEDED"):
+            await polling._poll_accounts(make_session(sf), state, "UID")
+
+        assert not any(
+            "001RATE" in key[0] for key in polling._reported_failures
         )
 
 
