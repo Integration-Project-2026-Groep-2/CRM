@@ -1741,6 +1741,12 @@ FACTURATIE_ACCOUNT_RETURN = {
     "Name": "Acme NV",
     "VAT_Number__c": "BE0123456789",
     "Email__c": "billing@acme.example",
+    "BillingStreet": "Kerkstraat",
+    "House_Number__c": "12",
+    "BillingPostalCode": "1000",
+    "BillingCity": "Brussel",
+    "BillingCountryCode": "BE",
+    "BillingCountry": "Belgium",
     "IsActive__c": True,
 }
 
@@ -1788,6 +1794,103 @@ class TestBuildCompanyPayloadGuards:
         payload = _build_updated_company_data(account)
 
         assert payload["houseNumber"] == "12A"
+
+    def test_build_updated_company_data_prefers_billing_country_code(self):
+        from src.country_code import to_iso_alpha2
+        from src.receiver import _build_updated_company_data
+
+        to_iso_alpha2.cache_clear()
+        account = {
+            **FACTURATIE_ACCOUNT_RETURN,
+            "BillingCountryCode": "BE",
+            "BillingCountry": "United States",  # stale derived label
+        }
+
+        payload = _build_updated_company_data(account)
+
+        assert payload["country"] == "BE"
+
+    def test_build_updated_company_data_falls_back_to_billing_country(self):
+        from src.country_code import to_iso_alpha2
+        from src.receiver import _build_updated_company_data
+
+        to_iso_alpha2.cache_clear()
+        account = {
+            **FACTURATIE_ACCOUNT_RETURN,
+            "BillingCountryCode": None,
+            "BillingCountry": "Belgium",
+        }
+
+        payload = _build_updated_company_data(account)
+
+        assert payload["country"] == "BE"
+
+    def test_build_updated_company_data_omits_country_when_unresolvable(self):
+        from src.country_code import to_iso_alpha2
+        from src.receiver import _build_updated_company_data
+
+        to_iso_alpha2.cache_clear()
+        account = {
+            **FACTURATIE_ACCOUNT_RETURN,
+            "BillingCountryCode": "",
+            "BillingCountry": "Atlantis",
+        }
+
+        payload = _build_updated_company_data(account)
+
+        assert "country" not in payload
+
+    def test_build_company_data_includes_address_fields(self):
+        from src.country_code import to_iso_alpha2
+        from src.receiver import _build_company_data
+
+        to_iso_alpha2.cache_clear()
+        payload = _build_company_data(FACTURATIE_ACCOUNT_RETURN)
+
+        assert payload["street"] == "Kerkstraat"
+        assert payload["houseNumber"] == "12"
+        assert payload["postalCode"] == "1000"
+        assert payload["city"] == "Brussel"
+        assert payload["country"] == "BE"
+
+    def test_build_company_data_prefers_billing_country_code(self):
+        from src.country_code import to_iso_alpha2
+        from src.receiver import _build_company_data
+
+        to_iso_alpha2.cache_clear()
+        account = {
+            **FACTURATIE_ACCOUNT_RETURN,
+            "BillingCountryCode": "BE",
+            "BillingCountry": "United States",
+        }
+
+        payload = _build_company_data(account)
+
+        assert payload["country"] == "BE"
+
+    def test_build_company_data_raises_when_street_missing(self):
+        from src.country_code import to_iso_alpha2
+        from src.receiver import _build_company_data
+
+        to_iso_alpha2.cache_clear()
+        account = {**FACTURATIE_ACCOUNT_RETURN, "BillingStreet": None}
+
+        with pytest.raises(ValueError, match="street"):
+            _build_company_data(account)
+
+    def test_build_company_data_raises_when_country_unresolvable(self):
+        from src.country_code import to_iso_alpha2
+        from src.receiver import _build_company_data
+
+        to_iso_alpha2.cache_clear()
+        account = {
+            **FACTURATIE_ACCOUNT_RETURN,
+            "BillingCountryCode": "",
+            "BillingCountry": "Atlantis",
+        }
+
+        with pytest.raises(ValueError, match="country"):
+            _build_company_data(account)
 
 
 class TestHandleFacturatieCompanyCreated:
@@ -4010,6 +4113,44 @@ UNPAID_CONTACTS_RETURN = [
 ]
 
 
+class TestBuildUpdatedUserData:
+    """Contract 18 country normalization: MailingCountryCode preferred,
+    MailingCountry resolved via pycountry, unresolvable omits country."""
+
+    def _base(self, **extra):
+        return {**UPDATED_CONTACT_RETURN, **extra}
+
+    def test_prefers_mailing_country_code(self):
+        from src.country_code import to_iso_alpha2
+        from src.receiver import _build_updated_user_data
+
+        to_iso_alpha2.cache_clear()
+        payload = _build_updated_user_data(
+            self._base(MailingCountryCode="BE", MailingCountry="United States"),
+        )
+        assert payload["country"] == "BE"
+
+    def test_falls_back_to_mailing_country(self):
+        from src.country_code import to_iso_alpha2
+        from src.receiver import _build_updated_user_data
+
+        to_iso_alpha2.cache_clear()
+        payload = _build_updated_user_data(
+            self._base(MailingCountryCode=None, MailingCountry="Belgium"),
+        )
+        assert payload["country"] == "BE"
+
+    def test_omits_country_when_unresolvable(self):
+        from src.country_code import to_iso_alpha2
+        from src.receiver import _build_updated_user_data
+
+        to_iso_alpha2.cache_clear()
+        payload = _build_updated_user_data(
+            self._base(MailingCountryCode="", MailingCountry="Atlantis"),
+        )
+        assert "country" not in payload
+
+
 class TestHandleRegistrationUpdated:
     @pytest.fixture
     def sf_mock(self):
@@ -4096,7 +4237,8 @@ class TestHandleRegistrationUpdated:
             assert user_data["houseNumber"] == "10A"
             assert user_data["postalCode"] == "2000"
             assert user_data["city"] == "Antwerp"
-            assert user_data["country"] == "Belgium"
+            # Country is normalized to ISO 3166-1 alpha-2 for the XSD pattern.
+            assert user_data["country"] == "BE"
 
     @pytest.mark.asyncio
     async def test_updated_uses_active_field_fallbacks_for_is_active(self, sf_mock):

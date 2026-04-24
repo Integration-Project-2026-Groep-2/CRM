@@ -34,6 +34,7 @@ Checkpoint state:
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
 import os
@@ -46,6 +47,7 @@ from typing import TYPE_CHECKING, Any
 
 from src import sender
 from src.config import Config
+from src.country_code import to_iso_alpha2
 from src.receiver import (  # Private helpers reused to keep record→dict mapping aligned with the receiver path.
     _build_updated_user_data,
     _build_user_data,
@@ -69,6 +71,25 @@ logger = logging.getLogger(__name__)
 # Re-resolve the integration user id once an hour so a rotated username
 # doesn't silently let polling re-publish receiver-induced events.
 _USER_ID_REFRESH_SECONDS = 3600
+
+# Deduplicate ERROR logs for records that fail dispatch deterministically:
+# skip-and-cap still re-processes them every cycle, but we only want ONE log
+# per (id, modstamp). Admin fix → new modstamp → new tuple → one more log.
+_REPORTED_FAILURES_CAP = 1000
+_reported_failures: "collections.OrderedDict[tuple[str, str], None]" = (
+    collections.OrderedDict()
+)
+
+
+def _should_log_failure(record: dict) -> bool:
+    key = (str(record.get("Id")), str(record.get("SystemModstamp")))
+    if key in _reported_failures:
+        _reported_failures.move_to_end(key)
+        return False
+    _reported_failures[key] = None
+    if len(_reported_failures) > _REPORTED_FAILURES_CAP:
+        _reported_failures.popitem(last=False)
+    return True
 
 # SOQL-safe timestamp format. Salesforce accepts ISO-8601 with Z suffix.
 _SF_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
@@ -284,7 +305,8 @@ _CONTACT_REQUIRED_FIELDS = [
 # field here is a dev/sandbox org that hasn't deployed all contracts yet.
 _CONTACT_OPTIONAL_FIELDS = [
     "Phone", "Role__c", "GDPR_Consent__c", "Badge_Code__c", "Company_ID__c",
-    "MailingStreet", "House_Number__c", "MailingPostalCode", "MailingCity", "MailingCountry",
+    "MailingStreet", "House_Number__c", "MailingPostalCode", "MailingCity",
+    "MailingCountry", "MailingCountryCode",
     "Mailing_ID__c", "Planning_ID__c",
 ]
 
@@ -295,7 +317,8 @@ _ACCOUNT_REQUIRED_FIELDS = [
 
 _ACCOUNT_OPTIONAL_FIELDS = [
     "Phone", "Email__c", "Email",
-    "BillingStreet", "House_Number__c", "BillingPostalCode", "BillingCity", "BillingCountry",
+    "BillingStreet", "House_Number__c", "BillingPostalCode", "BillingCity",
+    "BillingCountry", "BillingCountryCode",
 ]
 
 
@@ -430,13 +453,24 @@ def _account_company_fields(account: dict) -> dict[str, Any]:
         "House_Number__c": "houseNumber",
         "BillingPostalCode": "postalCode",
         "BillingCity": "city",
-        "BillingCountry": "country",
     }
     for sf_field, xml_field in address_mapping.items():
         value = account.get(sf_field)
         if value:
             data[xml_field] = value
+
+    # When State & Country Picklists are enabled, BillingCountry is the
+    # read-only localized label ("Belgium"); the ISO-2 lives in the *Code field.
+    country = (
+        to_iso_alpha2(account.get("BillingCountryCode"))
+        or to_iso_alpha2(account.get("BillingCountry"))
+    )
+    if country:
+        data["country"] = country
     return data
+
+
+_C14_REQUIRED_ADDRESS_FIELDS = ("street", "houseNumber", "postalCode", "city", "country")
 
 
 def _build_company_confirmed_data(account: dict) -> dict:
@@ -449,6 +483,12 @@ def _build_company_confirmed_data(account: dict) -> dict:
         "confirmedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     data.update(_account_company_fields(account))
+    missing = [f for f in _C14_REQUIRED_ADDRESS_FIELDS if f not in data]
+    if missing:
+        raise ValueError(
+            f"Account {account.get('Id')}: cannot publish crm.company.confirmed — "
+            f"missing required address fields: {missing}",
+        )
     return data
 
 
@@ -683,7 +723,10 @@ async def _poll_contacts(
             # log, and would keep hammering SF while it throttles us.
             if is_rate_limit_error(exc):
                 raise
-            logger.exception("Polling: failed to dispatch Contact %s", record.get("Id"))
+            if _should_log_failure(record):
+                logger.exception(
+                    "Polling: failed to dispatch Contact %s", record.get("Id"),
+                )
             # Treat as a skip so the checkpoint cap stays below this record's
             # timestamp and a fixed version is re-processed on the next cycle.
             # Without this, a later successful record would advance the
@@ -737,7 +780,10 @@ async def _poll_accounts(
         except Exception as exc:
             if is_rate_limit_error(exc):
                 raise
-            logger.exception("Polling: failed to dispatch Account %s", record.get("Id"))
+            if _should_log_failure(record):
+                logger.exception(
+                    "Polling: failed to dispatch Account %s", record.get("Id"),
+                )
             if earliest_skipped is None or record_ts < earliest_skipped:
                 earliest_skipped = record_ts
 

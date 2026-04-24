@@ -2857,12 +2857,14 @@ class TestIsExpiredSessionError:
         )
         assert is_expired_session_error(exc) is True
 
-    def test_detects_query_resource_404_empty_body(self):
-        """Production pattern: 302 redirect → 404 empty body on /query endpoint.
+    def test_query_404_with_empty_body_is_not_session_expired(self):
+        """Regression: empty-body 404 on /query is NOT session-expired.
 
-        This is the real-world symptom: SF returns an empty-body 404 after
-        silently redirecting a request on an expired session. The content
-        list is empty, but resource_name="query" is the tell.
+        The previous heuristic (removed) classified these as expired, which
+        caused a false-positive reauth loop in production when SF returned
+        transient empty-body 404s on the /query endpoint. Real session expiry
+        is covered by SalesforceExpiredSession or INVALID_SESSION_ID in the
+        content list.
         """
         from simple_salesforce.exceptions import SalesforceResourceNotFound
 
@@ -2874,7 +2876,7 @@ class TestIsExpiredSessionError:
             "query",
             b"",
         )
-        assert is_expired_session_error(exc) is True
+        assert is_expired_session_error(exc) is False
 
     def test_ignores_404_on_unrelated_resource(self):
         """A genuine 404 (e.g. deleted custom endpoint) must NOT reauth-loop."""
@@ -2927,7 +2929,10 @@ class TestSfCall:
 
         old_sf = MagicMock()
         old_sf.query.side_effect = SalesforceResourceNotFound(
-            "https://example/query/", 404, "query", b"",
+            "https://example/query/",
+            404,
+            "query",
+            [{"errorCode": "INVALID_SESSION_ID", "message": "Session expired"}],
         )
 
         new_sf = MagicMock()
@@ -3008,7 +3013,10 @@ class TestSfCall:
         from src.salesforce_client import SalesforceSession, sf_call
 
         persistent_exc = SalesforceResourceNotFound(
-            "https://example/query/", 404, "query", b"",
+            "https://example/query/",
+            404,
+            "query",
+            [{"errorCode": "INVALID_SESSION_ID", "message": "Session expired"}],
         )
 
         old_sf = MagicMock()
@@ -3050,7 +3058,10 @@ class TestSfCall:
         from src.salesforce_client import SalesforceSession, sf_call
 
         expired_exc = SalesforceResourceNotFound(
-            "https://example/query/", 404, "query", b"",
+            "https://example/query/",
+            404,
+            "query",
+            [{"errorCode": "INVALID_SESSION_ID", "message": "Session expired"}],
         )
 
         old_sf = MagicMock()
@@ -3085,7 +3096,10 @@ class TestSfCall:
         from src.salesforce_client import SalesforceSession, sf_call
 
         expired_exc = SalesforceResourceNotFound(
-            "https://example/query/", 404, "query", b"",
+            "https://example/query/",
+            404,
+            "query",
+            [{"errorCode": "INVALID_SESSION_ID", "message": "Session expired"}],
         )
 
         old_sf = MagicMock()
@@ -3105,7 +3119,7 @@ class TestSfCall:
 
 
 class TestIsExpiredSessionErrorContentGuard:
-    """H3 hardening: restrict resource_name='query' fallback to empty body only."""
+    """Ensure 404s on /query with non-session content do not trigger reauth."""
 
     def test_ignores_query_404_with_non_session_errorcode(self):
         """A real 404 response with MALFORMED_QUERY content is NOT expired."""
@@ -3120,31 +3134,3 @@ class TestIsExpiredSessionErrorContentGuard:
             [{"errorCode": "MALFORMED_QUERY", "message": "unexpected token"}],
         )
         assert is_expired_session_error(exc) is False
-
-    def test_detects_empty_list_content(self):
-        """Empty list content is treated as empty body (defensive)."""
-        from simple_salesforce.exceptions import SalesforceResourceNotFound
-
-        from src.salesforce_client import is_expired_session_error
-
-        exc = SalesforceResourceNotFound(
-            "https://example/services/data/v59.0/query/",
-            404,
-            "query",
-            [],
-        )
-        assert is_expired_session_error(exc) is True
-
-    def test_detects_empty_string_content(self):
-        """Empty str (some lib versions return str not bytes)."""
-        from simple_salesforce.exceptions import SalesforceResourceNotFound
-
-        from src.salesforce_client import is_expired_session_error
-
-        exc = SalesforceResourceNotFound(
-            "https://example/services/data/v59.0/query/",
-            404,
-            "query",
-            "",
-        )
-        assert is_expired_session_error(exc) is True

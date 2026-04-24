@@ -34,7 +34,6 @@ from simple_salesforce import Salesforce, SalesforceError
 from simple_salesforce.exceptions import (
     SalesforceAuthenticationFailed,
     SalesforceExpiredSession,
-    SalesforceResourceNotFound,
 )
 
 from src.config import Config
@@ -119,15 +118,10 @@ def is_rate_limit_error(exc: Exception) -> bool:
 def is_expired_session_error(exc: Exception) -> bool:
     """Detect an expired Salesforce session from the exception shape.
 
-    Catches three observed patterns:
+    Catches two documented patterns:
     1. Native 401 → `SalesforceExpiredSession`.
     2. 404 on /query with `INVALID_SESSION_ID` in the content list — the
        documented API response when the session is invalid.
-    3. 404 on /query with empty/missing content — production pattern where
-       SF silently redirects (302) the query endpoint on expiry and the
-       final response is an empty-body 404. The `resource_name="query"`
-       from simple-salesforce is the tell; no other SF REST resource
-       shares that exact name.
     """
     if isinstance(exc, SalesforceExpiredSession):
         return True
@@ -135,15 +129,6 @@ def is_expired_session_error(exc: Exception) -> bool:
     if isinstance(content, list):
         for item in content:
             if isinstance(item, dict) and item.get("errorCode") == "INVALID_SESSION_ID":
-                return True
-    if isinstance(exc, SalesforceResourceNotFound):
-        # Only the 302→404 session-redirect pattern has an empty body on
-        # the /query endpoint. Non-empty content is a real REST response
-        # (MALFORMED_QUERY, INVALID_TYPE, etc.) and must NOT trigger reauth
-        # — we'd hide the real error and burn two auth round-trips per call.
-        if str(getattr(exc, "resource_name", "")) == "query":
-            resp_content = getattr(exc, "content", None)
-            if resp_content is None or resp_content == b"" or resp_content == "" or resp_content == []:
                 return True
     return "INVALID_SESSION_ID" in str(exc)
 

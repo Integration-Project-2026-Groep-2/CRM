@@ -238,71 +238,66 @@ class TestPublishUserConfirmed:
 
 class TestPublishCompanyConfirmed:
 
-    MINIMAL_DATA = {
+    REQUIRED_DATA = {
         "id": "660e8400-e29b-41d4-a716-446655440001",
         "vatNumber": "BE0123456789",
         "name": "Acme NV",
         "email": "info@acme.be",
+        "street": "Main Street",
+        "houseNumber": "42",
+        "postalCode": "1000",
+        "city": "Brussels",
+        "country": "BE",
         "isActive": True,
         "confirmedAt": "2025-01-01T10:00:00Z",
     }
 
-    BASE_DATA = {
-        **MINIMAL_DATA,
-        "street": "Main Street",
-        "houseNumber": "42",
-        "postalCode": "1000",
-        "city": "Brussels",
-        "country": "BE",
-    }
-
     FULL_DATA = {
-        **BASE_DATA,
+        **REQUIRED_DATA,
         "phone": "+32 2 123 45 67",
-        "street": "Main Street",
-        "houseNumber": "42",
-        "postalCode": "1000",
-        "city": "Brussels",
-        "country": "BE",
     }
 
     @pytest.mark.asyncio
     async def test_publishes_to_correct_queue(self, setup_sender):
         with patch("src.xml_validator.validate", return_value=MagicMock()):
-            await sender.publish_company_confirmed(self.BASE_DATA)
+            await sender.publish_company_confirmed(self.REQUIRED_DATA)
         assert _get_routing_key(setup_sender) == "crm.company.confirmed"
 
     @pytest.mark.asyncio
     async def test_message_is_persistent(self, setup_sender):
         from aio_pika import DeliveryMode
         with patch("src.xml_validator.validate", return_value=MagicMock()):
-            await sender.publish_company_confirmed(self.BASE_DATA)
+            await sender.publish_company_confirmed(self.REQUIRED_DATA)
         assert _get_delivery_mode(setup_sender) == DeliveryMode.PERSISTENT
 
     @pytest.mark.asyncio
     async def test_root_element_is_company_confirmed(self, setup_sender):
         with patch("src.xml_validator.validate") as v:
             v.side_effect = lambda b: etree.fromstring(b)
-            await sender.publish_company_confirmed(self.BASE_DATA)
+            await sender.publish_company_confirmed(self.REQUIRED_DATA)
         assert _get_published_xml(setup_sender).tag == "CompanyConfirmed"
 
     @pytest.mark.asyncio
-    async def test_required_fields_present(self, setup_sender):
+    async def test_all_required_fields_present(self, setup_sender):
         with patch("src.xml_validator.validate") as v:
             v.side_effect = lambda b: etree.fromstring(b)
-            await sender.publish_company_confirmed(self.BASE_DATA)
+            await sender.publish_company_confirmed(self.REQUIRED_DATA)
         xml = _get_published_xml(setup_sender)
-        for field in ["id", "vatNumber", "name", "email", "isActive", "confirmedAt"]:
+        for field in (
+            "id", "vatNumber", "name", "email",
+            "street", "houseNumber", "postalCode", "city", "country",
+            "isActive", "confirmedAt",
+        ):
             assert xml.find(field) is not None, f"Required field '{field}' missing"
 
     @pytest.mark.asyncio
-    async def test_optional_fields_absent_when_not_provided(self, setup_sender):
+    async def test_phone_absent_when_not_provided(self, setup_sender):
+        """phone is the only optional element on C14 after the v1.X.0 contract update."""
         with patch("src.xml_validator.validate") as v:
             v.side_effect = lambda b: etree.fromstring(b)
-            await sender.publish_company_confirmed(self.MINIMAL_DATA)
+            await sender.publish_company_confirmed(self.REQUIRED_DATA)
         xml = _get_published_xml(setup_sender)
-        for field in ["phone", "street", "houseNumber", "postalCode", "city", "country"]:
-            assert xml.find(field) is None, f"Optional field '{field}' should be absent"
+        assert xml.find("phone") is None
 
     @pytest.mark.asyncio
     async def test_phone_included_when_present(self, setup_sender):
@@ -313,6 +308,12 @@ class TestPublishCompanyConfirmed:
         assert xml.findtext("phone") == "+32 2 123 45 67"
         tags = [child.tag for child in xml]
         assert tags.index("email") < tags.index("phone") < tags.index("street") < tags.index("houseNumber") < tags.index("postalCode") < tags.index("city") < tags.index("country") < tags.index("isActive") < tags.index("confirmedAt")
+
+    @pytest.mark.asyncio
+    async def test_raises_key_error_when_required_address_field_missing(self, setup_sender):
+        incomplete = {k: v for k, v in self.REQUIRED_DATA.items() if k != "street"}
+        with pytest.raises(KeyError, match="street"):
+            await sender.publish_company_confirmed(incomplete)
 
 
 # ---------------------------------------------------------------------------
