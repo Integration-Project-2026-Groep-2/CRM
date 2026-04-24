@@ -292,17 +292,28 @@ class TestPublishCompanyConfirmed:
             v.side_effect = lambda b: etree.fromstring(b)
             await sender.publish_company_confirmed(self.BASE_DATA)
         xml = _get_published_xml(setup_sender)
-        for field in ["id", "vatNumber", "name", "email", "isActive", "confirmedAt"]:
+        for field in [
+            "id",
+            "vatNumber",
+            "name",
+            "email",
+            "street",
+            "houseNumber",
+            "postalCode",
+            "city",
+            "country",
+            "isActive",
+            "confirmedAt",
+        ]:
             assert xml.find(field) is not None, f"Required field '{field}' missing"
 
     @pytest.mark.asyncio
-    async def test_optional_fields_absent_when_not_provided(self, setup_sender):
-        with patch("src.xml_validator.validate") as v:
-            v.side_effect = lambda b: etree.fromstring(b)
-            await sender.publish_company_confirmed(self.MINIMAL_DATA)
-        xml = _get_published_xml(setup_sender)
-        for field in ["phone", "street", "houseNumber", "postalCode", "city", "country"]:
-            assert xml.find(field) is None, f"Optional field '{field}' should be absent"
+    async def test_missing_required_address_field_raises_key_error(self, setup_sender):
+        incomplete_data = dict(self.BASE_DATA)
+        incomplete_data.pop("street")
+
+        with pytest.raises(KeyError, match="street"):
+            await sender.publish_company_confirmed(incomplete_data)
 
     @pytest.mark.asyncio
     async def test_phone_included_when_present(self, setup_sender):

@@ -278,13 +278,32 @@ class TestFacturatieCompanySync:
         assert doc.findtext("id") == "123e4567-e89b-42d3-a456-426614174000"
         assert doc.findtext("isActive") == "true"
 
-    def test_accepts_company_confirmed_without_address(self) -> None:
+    def test_rejects_company_confirmed_without_address(self) -> None:
         xml = b"""<?xml version='1.0' encoding='utf-8'?>
 <CompanyConfirmed>
     <id>660e8400-e29b-41d4-a716-446655440001</id>
     <vatNumber>BE0123456789</vatNumber>
     <name>Acme NV</name>
     <email>info@acme.be</email>
+    <isActive>true</isActive>
+    <confirmedAt>2026-04-22T10:00:00Z</confirmedAt>
+</CompanyConfirmed>"""
+
+        with pytest.raises(ValueError, match="XML validation failed"):
+            validate(xml)
+
+    def test_accepts_company_confirmed_with_required_address(self) -> None:
+        xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<CompanyConfirmed>
+    <id>660e8400-e29b-41d4-a716-446655440001</id>
+    <vatNumber>BE0123456789</vatNumber>
+    <name>Acme NV</name>
+    <email>info@acme.be</email>
+    <street>Kerkstraat</street>
+    <houseNumber>12</houseNumber>
+    <postalCode>1000</postalCode>
+    <city>Brussels</city>
+    <country>BE</country>
     <isActive>true</isActive>
     <confirmedAt>2026-04-22T10:00:00Z</confirmedAt>
 </CompanyConfirmed>"""

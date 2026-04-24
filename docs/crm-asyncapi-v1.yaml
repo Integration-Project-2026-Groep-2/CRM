@@ -2030,6 +2030,11 @@ components:
               <vatNumber>BE0123456789</vatNumber>
               <name>Bedrijf NV</name>
               <email>facturatie@bedrijf.be</email>
+              <street>Kerkstraat</street>
+              <houseNumber>12</houseNumber>
+              <postalCode>1000</postalCode>
+              <city>Brussels</city>
+              <country>BE</country>
               <isActive>true</isActive>
               <confirmedAt>2026-04-15T10:00:10Z</confirmedAt>
             </CompanyConfirmed>
@@ -3276,6 +3281,11 @@ components:
         - vatNumber
         - name
         - email
+        - street
+        - houseNumber
+        - postalCode
+        - city
+        - country
         - isActive
         - confirmedAt
       properties:
@@ -3295,6 +3305,20 @@ components:
           description: >-
             Facturatie-e-mailadres. Nodig voor FOSSBilling bij aanmaak —
             voorkomt extra roundtrip via Contract 5.
+        phone:
+          type: string
+          description: Optioneel telefoonnummer van het bedrijf.
+        street:
+          type: string
+        houseNumber:
+          type: string
+        postalCode:
+          type: string
+        city:
+          type: string
+        country:
+          type: string
+          pattern: "^[A-Z]{2}$"
         isActive:
           type: boolean
         confirmedAt:
