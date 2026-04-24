@@ -7,7 +7,7 @@ import pytest
 from simple_salesforce import SalesforceError
 from simple_salesforce.exceptions import SalesforceAuthenticationFailed
 
-import src.salesforce_client as salesforce_client_module
+import src.salesforce.client as salesforce_client_module
 from src.salesforce_client import (
     apply_account_is_active,
     backfill_mailing_contact_fields,
