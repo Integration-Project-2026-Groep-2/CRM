@@ -5254,7 +5254,7 @@ class TestRunReceiver:
         queues = {}
         sf_client = MagicMock()
 
-        async def _declare_queue(_channel, queue_name, durable, *, routing_key=None):  # noqa: ARG001
+        async def _declare_queue(_channel, queue_name, durable, *, routing_key=None, exchange_name=None):  # noqa: ARG001
             queue = queues.get(queue_name)
             if queue is None:
                 queue = AsyncMock(name=f"{queue_name}_queue")

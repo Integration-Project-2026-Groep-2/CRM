@@ -9,40 +9,23 @@ from aio_pika import ExchangeType
 from aio_pika.abc import AbstractChannel, AbstractRobustConnection
 
 from src.config import Config
-from src.handlers._registry import QUEUE_REGISTRY
+from src.handlers._registry import PENDING_EXCHANGES, QUEUE_REGISTRY
 from src.salesforce_client import get_salesforce_client
 
 logger = logging.getLogger(__name__)
 
-# Queue → topic exchange mapping (Infra-beheerd, zie docs/rabbitmq-exchanges.md).
-# Queue-namen volgen consumer-prefix conventie (`crm.<producer>.<event>`) wanneer
-# de naam anders zou botsen met een consumer-queue van een ander team op een
-# andere exchange. De routing keys blijven de producer-eventnamen — zie de
-# QUEUE_REGISTRY entries waar routing_key expliciet meegegeven wordt.
+# Queue → topic exchange mapping derived from the single source of truth in
+# handlers/_registry.py. Active queues come from QUEUE_REGISTRY (6th tuple
+# element); pending/unimplemented queues (contracts 3, 5a, 12, 20) come from
+# PENDING_EXCHANGES. Kept as a module-level name so integration tests that do
+# `from src.receiver import _INBOUND_EXCHANGE` keep working.
 _INBOUND_EXCHANGE: dict[str, str] = {
-    "crm.frontend.registration.created": "user.topic",
-    "crm.frontend.registration.updated": "user.topic",
-    "frontend.company.created": "user.topic",
-    "crm.facturatie.user.created": "user.topic",
-    "crm.facturatie.user.updated": "user.topic",
-    "crm.facturatie.user.deactivated": "user.topic",
-    "crm.mailing.user.created": "user.topic",
-    "crm.mailing.user.updated": "user.topic",
-    "crm.mailing.user.deactivated": "user.topic",
-    "crm.planning.user.created": "user.topic",
-    "crm.planning.user.updated": "user.topic",
-    "crm.planning.user.deactivated": "user.topic",
-    "facturatie.company.requested": "invoice.topic",
-    "crm.facturatie.company.created": "company.topic",
-    "crm.facturatie.company.updated": "company.topic",
-    "crm.facturatie.company.deactivated": "company.topic",
-    "kassa.person.lookup.requested": "payment.topic",
-    "kassa.payment.confirmed": "payment.topic",
-    "kassa.unpaid.requested": "payment.topic",
-    "planning.session.updated": "planning.topic",
-    "controlroom.warning.issued": "planning.topic",
-    "iot.badge.linked": "planning.topic",
-    "mailing.bounce.reported": "mail.topic",
+    **{
+        queue: exchange
+        for queue, _handler, _requires_sf, _rk, _durable, exchange in QUEUE_REGISTRY
+        if exchange is not None
+    },
+    **PENDING_EXCHANGES,
 }
 
 
@@ -52,19 +35,23 @@ async def _declare_and_bind(
     durable: bool,
     *,
     routing_key: str | None = None,
+    exchange_name: str | None = None,
 ) -> aio_pika.abc.AbstractQueue:
-    """Declare a queue and bind it to the mapped topic exchange.
+    """Declare a queue and bind it to a topic exchange.
 
     When `routing_key` is omitted, the queue-name is reused as routing key
     (point-to-point queues where the name matches the producer event). Passing
     an explicit routing_key is required when the queue-name is consumer-prefixed
     to avoid collisions while still binding to the producer's event.
+
+    `exchange_name` falls back to the _INBOUND_EXCHANGE lookup so existing
+    callers that omit it (e.g. integration tests) continue to work.
     """
     queue = await channel.declare_queue(queue_name, durable=durable)
-    exchange_name = _INBOUND_EXCHANGE.get(queue_name)
-    if exchange_name:
+    resolved_exchange = exchange_name or _INBOUND_EXCHANGE.get(queue_name)
+    if resolved_exchange:
         exchange = await channel.declare_exchange(
-            exchange_name, type=ExchangeType.TOPIC, durable=True,
+            resolved_exchange, type=ExchangeType.TOPIC, durable=True,
         )
         effective_routing_key = routing_key or queue_name
         await queue.bind(exchange, routing_key=effective_routing_key)
@@ -89,9 +76,13 @@ async def run_receiver(
     channel = await connection.channel()
     sf_client = await get_salesforce_client(config, shutdown_event=shutdown_event)
 
-    for queue_name, handler, requires_sf, routing_key, durable in QUEUE_REGISTRY:
+    for queue_name, handler, requires_sf, routing_key, durable, exchange in QUEUE_REGISTRY:
         queue = await _declare_and_bind(
-            channel, queue_name, durable=durable, routing_key=routing_key,
+            channel,
+            queue_name,
+            durable=durable,
+            routing_key=routing_key,
+            exchange_name=exchange,
         )
         consumer = partial(handler, sf=sf_client) if requires_sf else handler
         await queue.consume(consumer)
