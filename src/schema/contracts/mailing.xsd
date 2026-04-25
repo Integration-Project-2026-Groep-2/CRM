@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Mailing ↔ CRM contracts (C6, C20, C27-C29)
+  Geïncludeerd door crm-schema-v1.xsd. Geen targetNamespace.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           elementFormDefault="unqualified">
+
+  <!-- ============================================================
+       CONTRACT 27 — Mailing → CRM: user aanmaken
+       Queue: crm.mailing.user.created (routing key: mailing.user.created) | durable: true
+  ============================================================ -->
+  <xs:element name="MailingUserCreated" type="MailingUserPayloadType"/>
+
+  <!-- ============================================================
+       CONTRACT 28 — Mailing → CRM: user bijwerken
+       Queue: crm.mailing.user.updated (routing key: mailing.user.updated) | durable: true
+       Volledig object vereist volgens producer-XSD.
+  ============================================================ -->
+  <xs:element name="MailingUserUpdated" type="MailingUserPayloadType"/>
+
+  <!-- ============================================================
+       CONTRACT 29 — Mailing → CRM: user deactiveren
+       Queue: crm.mailing.user.deactivated (routing key: mailing.user.deactivated) | durable: true
+  ============================================================ -->
+  <xs:element name="MailingUserDeactivated">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="id"            type="UUIDType"/>
+        <xs:element name="email"         type="EmailType"/>
+        <xs:element name="deactivatedAt" type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 6 — CRM → Mailing: deelnemersnotificatie
+       Queue: crm.mail.requested | durable: true
+  ============================================================ -->
+  <xs:element name="MailRequest">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="header">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="source">
+                <xs:simpleType>
+                  <xs:restriction base="xs:string">
+                    <xs:enumeration value="CRM"/>
+                  </xs:restriction>
+                </xs:simpleType>
+              </xs:element>
+              <xs:element name="timestamp" type="ISO8601DateTimeType"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="mailType">
+          <xs:simpleType>
+            <xs:restriction base="xs:string">
+              <xs:enumeration value="registration_confirmation"/>
+              <xs:enumeration value="session_change"/>
+              <xs:enumeration value="session_reminder"/>
+              <xs:enumeration value="bulk_event"/>
+            </xs:restriction>
+          </xs:simpleType>
+        </xs:element>
+        <xs:element name="recipient">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="email" type="EmailType"/>
+              <xs:element name="name"  type="xs:string"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="dynamic_data">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="guest_name"       type="xs:string"/>
+              <xs:element name="session_name"     type="xs:string"           minOccurs="0"/>
+              <xs:element name="session_time"     type="ISO8601DateTimeType" minOccurs="0"/>
+              <xs:element name="session_location" type="xs:string"           minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 20 — Mailing → CRM: e-mailbounce gerapporteerd
+       Queue: mailing.bounce.reported | durable: true
+  ============================================================ -->
+  <xs:element name="BounceReported">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="email" type="EmailType"/>
+        <xs:element name="bounceType">
+          <xs:simpleType>
+            <xs:restriction base="xs:string">
+              <xs:enumeration value="hard"/>
+              <xs:enumeration value="soft"/>
+            </xs:restriction>
+          </xs:simpleType>
+        </xs:element>
+        <xs:element name="reason"    type="xs:string"           minOccurs="0"/>
+        <xs:element name="bouncedAt" type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

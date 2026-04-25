@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Planning → CRM contracts (C11, C30-C32)
+  Geïncludeerd door crm-schema-v1.xsd. Geen targetNamespace.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           elementFormDefault="unqualified">
+
+  <!-- ============================================================
+       CONTRACT 11 — Planning → CRM: sessiewijziging
+       Queue: planning.session.updated | durable: true
+  ============================================================ -->
+  <xs:element name="SessionUpdate">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="sessionId"   type="xs:string"/>
+        <xs:element name="sessionName" type="xs:string"/>
+        <xs:element name="newTime"     type="ISO8601DateTimeType" minOccurs="0"/>
+        <xs:element name="newLocation" type="xs:string"           minOccurs="0"/>
+        <xs:element name="changeType">
+          <xs:simpleType>
+            <xs:restriction base="xs:string">
+              <xs:enumeration value="rescheduled"/>
+              <xs:enumeration value="cancelled"/>
+              <xs:enumeration value="updated"/>
+            </xs:restriction>
+          </xs:simpleType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 30 — Planning → CRM: user aanmaken
+       Planning ref 21 | Queue: crm.planning.user.created (routing key: planning.user.created) | durable: true
+  ============================================================ -->
+  <xs:element name="PlanningUserCreated" type="PlanningUserPayloadType"/>
+
+  <!-- ============================================================
+       CONTRACT 31 — Planning → CRM: user bijwerken
+       Planning ref 22 | Queue: crm.planning.user.updated (routing key: planning.user.updated) | durable: true
+  ============================================================ -->
+  <xs:element name="PlanningUserUpdated" type="PlanningUserPayloadType"/>
+
+  <!-- ============================================================
+       CONTRACT 32 — Planning → CRM: user deactiveren
+       Planning ref 23 | Queue: crm.planning.user.deactivated (routing key: planning.user.deactivated) | durable: true
+  ============================================================ -->
+  <xs:element name="PlanningUserDeactivated">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="id"            type="UUIDType"/>
+        <xs:element name="email"         type="EmailType"/>
+        <xs:element name="deactivatedAt" type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

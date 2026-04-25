@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Controlroom ↔ CRM contracts (C7, C8, C9)
+  Geïncludeerd door crm-schema-v1.xsd. Geen targetNamespace.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           elementFormDefault="unqualified">
+
+  <!-- ============================================================
+       CONTRACT 7 — CRM → Controlroom: heartbeat
+       Exchange: heartbeat.direct | routing key: routing.heartbeat | durable: true
+  ============================================================ -->
+  <xs:element name="Heartbeat">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="serviceId">
+          <xs:simpleType>
+            <xs:restriction base="xs:string">
+              <xs:enumeration value="CRM"/>
+            </xs:restriction>
+          </xs:simpleType>
+        </xs:element>
+        <xs:element name="timestamp" type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 8 — CRM → Controlroom: periodieke statuscheck
+       Queue: crm.status.checked | durable: false
+  ============================================================ -->
+  <xs:element name="StatusCheck">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="serviceId">
+          <xs:simpleType>
+            <xs:restriction base="xs:string">
+              <xs:enumeration value="CRM"/>
+            </xs:restriction>
+          </xs:simpleType>
+        </xs:element>
+        <xs:element name="timestamp" type="ISO8601DateTimeType"/>
+        <xs:element name="status">
+          <xs:simpleType>
+            <xs:restriction base="xs:string">
+              <xs:enumeration value="healthy"/>
+              <xs:enumeration value="degraded"/>
+              <xs:enumeration value="unhealthy"/>
+              <xs:enumeration value="unknown"/>
+            </xs:restriction>
+          </xs:simpleType>
+        </xs:element>
+        <xs:element name="uptime" type="xs:nonNegativeInteger"/>
+        <xs:element name="systemLoad">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="cpu">
+                <xs:simpleType>
+                  <xs:restriction base="xs:decimal">
+                    <xs:minInclusive value="0.0"/>
+                    <xs:maxInclusive value="1.0"/>
+                  </xs:restriction>
+                </xs:simpleType>
+              </xs:element>
+              <xs:element name="memory">
+                <xs:simpleType>
+                  <xs:restriction base="xs:decimal">
+                    <xs:minInclusive value="0.0"/>
+                    <xs:maxInclusive value="1.0"/>
+                  </xs:restriction>
+                </xs:simpleType>
+              </xs:element>
+              <xs:element name="disk">
+                <xs:simpleType>
+                  <xs:restriction base="xs:decimal">
+                    <xs:minInclusive value="0.0"/>
+                    <xs:maxInclusive value="1.0"/>
+                  </xs:restriction>
+                </xs:simpleType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 9 — Controlroom → CRM: systeemwaarschuwing
+       Queue: controlroom.warning.issued | durable: false
+  ============================================================ -->
+  <xs:element name="Warning">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="serviceId" type="xs:string"/>
+        <xs:element name="message"   type="xs:string"/>
+        <xs:element name="type">
+          <xs:simpleType>
+            <xs:restriction base="xs:string">
+              <xs:enumeration value="heartbeat"/>
+              <xs:enumeration value="statusCheck"/>
+              <xs:enumeration value="user"/>
+            </xs:restriction>
+          </xs:simpleType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

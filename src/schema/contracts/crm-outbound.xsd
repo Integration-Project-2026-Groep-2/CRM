@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CRM → consumers contracts (C13, C14, C15, C18, C19, C22, C23)
+  Noot: <UserUpdated> wordt ook hergebruikt door C25 (Facturatie inbound).
+        <UserDeactivated> wordt ook hergebruikt door C26 (Facturatie inbound).
+  Geïncludeerd door crm-schema-v1.xsd. Geen targetNamespace.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           elementFormDefault="unqualified">
+
+  <!-- ============================================================
+       CONTRACT 13 — CRM → consumers: user confirmed
+       Queue: crm.user.confirmed | durable: true
+  ============================================================ -->
+  <xs:element name="UserConfirmed">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="id"          type="UUIDType"/>
+        <xs:element name="email"       type="EmailType"/>
+        <xs:element name="firstName"   type="xs:string"/>
+        <xs:element name="lastName"    type="xs:string"/>
+        <xs:element name="phone"       type="xs:string"  minOccurs="0"/>
+        <xs:element name="role"        type="UserRoleType"/>
+        <xs:element name="companyId"   type="UUIDType"   minOccurs="0"/>
+        <xs:element name="badgeCode"   type="xs:string"  minOccurs="0"/>
+        <xs:element name="isActive"    type="xs:boolean"/>
+        <xs:element name="gdprConsent" type="xs:boolean"/>
+        <xs:element name="confirmedAt" type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 14 — CRM → consumers: company confirmed
+       Queue: crm.company.confirmed | durable: true
+  ============================================================ -->
+  <xs:element name="CompanyConfirmed">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="id"          type="UUIDType"/>
+        <xs:element name="vatNumber"   type="BelgianVatNumberType"/>
+        <xs:element name="name"        type="xs:string"/>
+        <xs:element name="email"       type="EmailType"/>
+        <xs:element name="phone"       type="xs:string"       minOccurs="0"/>
+        <xs:element name="street"      type="xs:string"/>
+        <xs:element name="houseNumber" type="xs:string"/>
+        <xs:element name="postalCode"  type="xs:string"/>
+        <xs:element name="city"        type="xs:string"/>
+        <xs:element name="country"     type="CountryCodeType"/>
+        <xs:element name="isActive"    type="xs:boolean"/>
+        <xs:element name="confirmedAt" type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 15 — CRM → Controlroom+Frontend: user conflict (fanout)
+       Exchange: crm.user.conflict | type: fanout | durable: true
+  ============================================================ -->
+  <xs:element name="UserConflict">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="email" type="EmailType"/>
+        <xs:element name="existingValue">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="firstName" type="xs:string"/>
+              <xs:element name="lastName"  type="xs:string"/>
+              <xs:element name="company"   type="xs:string" minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="incomingValue">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="firstName" type="xs:string"/>
+              <xs:element name="lastName"  type="xs:string"/>
+              <xs:element name="company"   type="xs:string" minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="detectedAt" type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 18 — CRM → consumers: user updated
+       CONTRACT 25 — Facturatie → CRM: user bijwerken
+       Queue: crm.user.updated / crm.facturatie.user.updated (routing key: facturatie.user.updated) | durable: true
+       Noot: gedeelde root. Facturatie stuurt geen gdprConsent of
+       badgeCode (daarom op XSD-niveau optional); CRM outbound (C18)
+       vult die velden wel in op basis van Salesforce-data.
+       firstName en lastName zijn NonEmptyStringType (sinds 2026-04-21)
+       — lege elementen worden door XSD-validatie geweigerd.
+  ============================================================ -->
+  <xs:element name="UserUpdated">
+    <xs:complexType>
+      <xs:all>
+        <xs:element name="id"          type="UUIDType"/>
+        <xs:element name="email"       type="EmailType"/>
+        <xs:element name="firstName"   type="NonEmptyStringType"/>
+        <xs:element name="lastName"    type="NonEmptyStringType"/>
+        <xs:element name="phone"       type="xs:string"       minOccurs="0" nillable="true"/>
+        <xs:element name="street"      type="xs:string"       minOccurs="0" nillable="true"/>
+        <xs:element name="houseNumber" type="xs:string"       minOccurs="0" nillable="true"/>
+        <xs:element name="postalCode"  type="xs:string"       minOccurs="0" nillable="true"/>
+        <xs:element name="city"        type="xs:string"       minOccurs="0" nillable="true"/>
+        <xs:element name="country"     type="CountryCodeType" minOccurs="0" nillable="true"/>
+        <xs:element name="role"        type="FacturatieUserRoleType"/>
+        <xs:element name="companyId"   type="UUIDType"        minOccurs="0" nillable="true"/>
+        <xs:element name="badgeCode"   type="xs:string"       minOccurs="0" nillable="true"/>
+        <xs:element name="isActive"    type="xs:boolean"/>
+        <xs:element name="gdprConsent" type="xs:boolean"      minOccurs="0"/>
+        <xs:element name="updatedAt"   type="ISO8601DateTimeType"/>
+      </xs:all>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 19 — CRM → consumers: company updated
+       Queue: crm.company.updated | durable: true
+  ============================================================ -->
+  <xs:element name="CompanyUpdated">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="id"          type="UUIDType"/>
+        <xs:element name="vatNumber"   type="BelgianVatNumberType"/>
+        <xs:element name="name"        type="xs:string"/>
+        <xs:element name="email"       type="EmailType"       minOccurs="0"/>
+        <xs:element name="phone"       type="xs:string"       minOccurs="0"/>
+        <xs:element name="street"      type="xs:string"       minOccurs="0"/>
+        <xs:element name="houseNumber" type="xs:string"       minOccurs="0"/>
+        <xs:element name="postalCode"  type="xs:string"       minOccurs="0"/>
+        <xs:element name="city"        type="xs:string"       minOccurs="0"/>
+        <xs:element name="country"     type="CountryCodeType" minOccurs="0"/>
+        <xs:element name="isActive"    type="xs:boolean"/>
+        <xs:element name="updatedAt"   type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 22 — CRM → consumers: user deactivated (GDPR)
+       CONTRACT 26 — Facturatie → CRM: user deactiveren
+       Queue: crm.user.deactivated / crm.facturatie.user.deactivated (routing key: facturatie.user.deactivated) | durable: true
+       Noot: gedeelde root met identieke velden.
+  ============================================================ -->
+  <xs:element name="UserDeactivated">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="id"            type="UUIDType"/>
+        <xs:element name="email"         type="EmailType"/>
+        <xs:element name="deactivatedAt" type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 23 — CRM → consumers: company deactivated
+       Queue: crm.company.deactivated | durable: true
+  ============================================================ -->
+  <xs:element name="CompanyDeactivated">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="id"            type="UUIDType"/>
+        <xs:element name="vatNumber"     type="BelgianVatNumberType"/>
+        <xs:element name="deactivatedAt" type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

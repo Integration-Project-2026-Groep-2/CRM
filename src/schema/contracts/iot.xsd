@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  IoT → CRM contracts (C12)
+  Geïncludeerd door crm-schema-v1.xsd. Geen targetNamespace.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           elementFormDefault="unqualified">
+
+  <!-- ============================================================
+       CONTRACT 12 — IoT → CRM: badge koppelen aan bezoeker
+       Queue: iot.badge.linked | durable: true
+  ============================================================ -->
+  <xs:element name="BadgeLink">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="badgeId"      type="xs:string"/>
+        <xs:element name="contactEmail" type="EmailType"/>
+        <xs:element name="linkedAt"     type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

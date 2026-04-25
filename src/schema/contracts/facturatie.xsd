@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Facturatie ↔ CRM contracts (C5a, C5b, C21, C24, C33-C35)
+  Noot: C25 <UserUpdated> en C26 <UserDeactivated> hergebruiken roots
+        uit crm-outbound.xsd (zie comments daar).
+  Geïncludeerd door crm-schema-v1.xsd. Geen targetNamespace.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           elementFormDefault="unqualified">
+
+  <!-- ============================================================
+       CONTRACT 24 — Facturatie → CRM: user aanmaken
+       Queue: crm.facturatie.user.created (routing key: facturatie.user.created) | durable: true
+  ============================================================ -->
+  <xs:element name="UserCreated">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="facturatieCustomerId" type="xs:string"/>
+        <xs:element name="registrationId"       type="xs:string" minOccurs="0"/>
+        <xs:element name="firstName"            type="NonEmptyStringType"/>
+        <xs:element name="lastName"             type="NonEmptyStringType"/>
+        <xs:element name="email"                type="EmailType"/>
+        <xs:element name="phone"                type="xs:string" minOccurs="0" nillable="true"/>
+        <xs:element name="role"                 type="FacturatieUserRoleType"/>
+        <xs:element name="companyId"            type="UUIDType"  minOccurs="0" nillable="true"/>
+        <xs:element name="isActive"             type="xs:boolean"/>
+        <xs:element name="createdAt"            type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 5a — Facturatie → CRM: bedrijfsdata opvragen
+       Queue: facturatie.company.requested | durable: true
+  ============================================================ -->
+  <xs:element name="CompanyRequest">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="requestId" type="xs:string"/>
+        <xs:element name="vatNumber" type="BelgianVatNumberType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 5b — CRM → Facturatie: bedrijfsdata response
+       Queue: crm.company.responded | durable: false
+  ============================================================ -->
+  <xs:element name="CompanyResponse">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="requestId"   type="xs:string"/>
+        <xs:element name="found"       type="xs:boolean"/>
+        <xs:element name="id"          type="UUIDType"             minOccurs="0"/>
+        <xs:element name="name"        type="xs:string"            minOccurs="0"/>
+        <xs:element name="vatNumber"   type="BelgianVatNumberType" minOccurs="0"/>
+        <xs:element name="email"       type="EmailType"            minOccurs="0"/>
+        <xs:element name="phone"       type="xs:string"            minOccurs="0"/>
+        <xs:element name="street"      type="xs:string"            minOccurs="0"/>
+        <xs:element name="houseNumber" type="xs:string"            minOccurs="0"/>
+        <xs:element name="postalCode"  type="xs:string"            minOccurs="0"/>
+        <xs:element name="city"        type="xs:string"            minOccurs="0"/>
+        <xs:element name="country"     type="CountryCodeType"      minOccurs="0"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 21 — CRM → Facturatie: factuurverzoek privépersoon
+       Queue: crm.invoice.requested | durable: true
+  ============================================================ -->
+  <xs:element name="InvoiceRequested">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="userId"      type="UUIDType"/>
+        <xs:element name="email"       type="EmailType"/>
+        <xs:element name="firstName"   type="xs:string"/>
+        <xs:element name="lastName"    type="xs:string"/>
+        <xs:element name="street"      type="xs:string"/>
+        <xs:element name="houseNumber" type="xs:string"/>
+        <xs:element name="postalCode"  type="xs:string"/>
+        <xs:element name="city"        type="xs:string"/>
+        <xs:element name="country"     type="CountryCodeType"/>
+        <xs:element name="requestedAt" type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 33 — Facturatie → CRM: nieuw bedrijf aangemaakt
+       Queue: crm.facturatie.company.created (routing key: facturatie.company.created) | durable: true | Exchange: company.topic
+       Noot: dedicated root om conflict met C3 <CompanyCreated> te vermijden.
+  ============================================================ -->
+  <xs:element name="FacturatieCompanyCreated">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="name"        type="xs:string"/>
+        <xs:element name="vatNumber"   type="BelgianVatNumberType" minOccurs="0" nillable="true"/>
+        <xs:element name="email"       type="EmailType"/>
+        <xs:element name="phone"       type="xs:string"            minOccurs="0" nillable="true"/>
+        <xs:element name="street"      type="xs:string"            minOccurs="0" nillable="true"/>
+        <xs:element name="houseNumber" type="xs:string"            minOccurs="0" nillable="true"/>
+        <xs:element name="postalCode"  type="xs:string"            minOccurs="0" nillable="true"/>
+        <xs:element name="city"        type="xs:string"            minOccurs="0" nillable="true"/>
+        <xs:element name="country"     type="CountryCodeType"      minOccurs="0" nillable="true"/>
+        <xs:element name="createdAt"   type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 34 — Facturatie → CRM: bestaand bedrijf bijgewerkt
+       Queue: crm.facturatie.company.updated (routing key: facturatie.company.updated) | durable: true | Exchange: company.topic
+  ============================================================ -->
+  <xs:element name="FacturatieCompanyUpdated">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="id"          type="UUIDType"/>
+        <xs:element name="vatNumber"   type="BelgianVatNumberType" minOccurs="0" nillable="true"/>
+        <xs:element name="name"        type="xs:string"/>
+        <xs:element name="email"       type="EmailType"/>
+        <xs:element name="phone"       type="xs:string"            minOccurs="0" nillable="true"/>
+        <xs:element name="street"      type="xs:string"            minOccurs="0" nillable="true"/>
+        <xs:element name="houseNumber" type="xs:string"            minOccurs="0" nillable="true"/>
+        <xs:element name="postalCode"  type="xs:string"            minOccurs="0" nillable="true"/>
+        <xs:element name="city"        type="xs:string"            minOccurs="0" nillable="true"/>
+        <xs:element name="country"     type="CountryCodeType"      minOccurs="0" nillable="true"/>
+        <xs:element name="isActive"    type="xs:boolean"/>
+        <xs:element name="updatedAt"   type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 35 — Facturatie → CRM: bedrijf deactiveren
+       Queue: crm.facturatie.company.deactivated (routing key: facturatie.company.deactivated) | durable: true | Exchange: company.topic
+  ============================================================ -->
+  <xs:element name="FacturatieCompanyDeactivated">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="id"            type="UUIDType"/>
+        <xs:element name="email"         type="EmailType"/>
+        <xs:element name="deactivatedAt" type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>
