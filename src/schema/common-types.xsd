@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CRM Common Types — gedeelde simple/complex types
+  Integration Project 2025/2026 | Groep 2
+
+  Geïncludeerd door crm-schema-v1.xsd (entry manifest).
+  Geen targetNamespace — XML-berichten op de queue bevatten
+  geen namespace-declaraties (zie crm-asyncapi-v1.yaml voorbeelden).
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           elementFormDefault="unqualified">
+
+  <!-- ============================================================
+       GEDEELDE SIMPLE TYPES
+  ============================================================ -->
+
+  <xs:simpleType name="UUIDType">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="ISO8601DateTimeType">
+    <xs:restriction base="xs:dateTime"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="CountryCodeType">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[A-Z]{2}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="EmailType">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[^@\s]+@[^@\s]+\.[^@\s]+"/>
+      <xs:maxLength value="254"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Niet-lege string — spiegelt Facturatie's NonEmptyStringType (2026-04-21).
+       Gebruikt voor verplichte naamvelden zodat lege elementen (bv. <lastName></lastName>)
+       door XSD-validatie worden geweigerd in plaats van pas door Salesforce. -->
+  <xs:simpleType name="NonEmptyStringType">
+    <xs:restriction base="xs:string">
+      <xs:minLength value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="BelgianVatNumberType">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="BE[0-9]{10}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="UserRoleType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="VISITOR"/>
+      <xs:enumeration value="COMPANY_CONTACT"/>
+      <xs:enumeration value="SPEAKER"/>
+      <xs:enumeration value="EVENT_MANAGER"/>
+      <xs:enumeration value="CASHIER"/>
+      <xs:enumeration value="BAR_STAFF"/>
+      <xs:enumeration value="ADMIN"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Restrictieve rol-enum voor Contract 1 (alleen VISITOR/COMPANY_CONTACT) -->
+  <xs:simpleType name="RegistrationRoleType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="VISITOR"/>
+      <xs:enumeration value="COMPANY_CONTACT"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="FacturatieUserRoleType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="VISITOR"/>
+      <xs:enumeration value="COMPANY_CONTACT"/>
+      <xs:enumeration value="SPEAKER"/>
+      <xs:enumeration value="EVENT_MANAGER"/>
+      <xs:enumeration value="CASHIER"/>
+      <xs:enumeration value="BAR_STAFF"/>
+      <xs:enumeration value="ADMIN"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="PlanningUserRoleType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="SPEAKER"/>
+      <xs:enumeration value="VISITOR"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="MailingUserPayloadType">
+    <xs:sequence>
+      <xs:element name="id"        type="UUIDType"/>
+      <xs:element name="email"     type="EmailType"/>
+      <xs:element name="firstName" type="xs:string" minOccurs="0" nillable="true"/>
+      <xs:element name="lastName"  type="xs:string" minOccurs="0" nillable="true"/>
+      <xs:element name="isActive"  type="xs:boolean"/>
+      <xs:element name="companyId" type="UUIDType"  minOccurs="0" nillable="true"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="PlanningUserPayloadType">
+    <xs:sequence>
+      <xs:element name="id"          type="UUIDType"/>
+      <xs:element name="email"       type="EmailType"/>
+      <xs:element name="firstName"   type="xs:string"/>
+      <xs:element name="lastName"    type="xs:string"/>
+      <xs:element name="role"        type="PlanningUserRoleType"/>
+      <xs:element name="gdprConsent" type="xs:boolean"/>
+      <xs:element name="phoneNumber" type="xs:string" minOccurs="0"/>
+      <xs:element name="company"     type="xs:string" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ============================================================
+       CANONIEKE COMPLEX TYPES
+       Master data owner: CRM.
+       Niet direct als root element — elk contract heeft zijn eigen root.
+  ============================================================ -->
+
+  <xs:complexType name="UserType">
+    <xs:sequence>
+      <xs:element name="id"          type="UUIDType"/>
+      <xs:element name="firstName"   type="xs:string"/>
+      <xs:element name="lastName"    type="xs:string"/>
+      <xs:element name="email"       type="EmailType"/>
+      <xs:element name="phone"       type="xs:string"           minOccurs="0" nillable="true"/>
+      <xs:element name="street"      type="xs:string"           minOccurs="0" nillable="true"/>
+      <xs:element name="houseNumber" type="xs:string"           minOccurs="0" nillable="true"/>
+      <xs:element name="postalCode"  type="xs:string"           minOccurs="0" nillable="true"/>
+      <xs:element name="city"        type="xs:string"           minOccurs="0" nillable="true"/>
+      <xs:element name="country"     type="CountryCodeType"     minOccurs="0" nillable="true"/>
+      <xs:element name="companyId"   type="UUIDType"            minOccurs="0" nillable="true"/>
+      <xs:element name="role"        type="UserRoleType"/>
+      <xs:element name="badgeCode"   type="xs:string"           minOccurs="0" nillable="true"/>
+      <xs:element name="isActive"    type="xs:boolean"/>
+      <xs:element name="gdprConsent" type="xs:boolean"/>
+      <xs:element name="createdAt"   type="ISO8601DateTimeType"/>
+      <xs:element name="updatedAt"   type="ISO8601DateTimeType"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="CompanyType">
+    <xs:sequence>
+      <xs:element name="id"               type="UUIDType"/>
+      <xs:element name="name"             type="xs:string"/>
+      <xs:element name="vatNumber"        type="BelgianVatNumberType"/>
+      <xs:element name="street"           type="xs:string"/>
+      <xs:element name="houseNumber"      type="xs:string"/>
+      <xs:element name="postalCode"       type="xs:string"/>
+      <xs:element name="city"             type="xs:string"/>
+      <xs:element name="country"          type="CountryCodeType"/>
+      <xs:element name="email"            type="EmailType"/>
+      <xs:element name="phone"            type="xs:string"    minOccurs="0" nillable="true"/>
+      <xs:element name="primaryContactId" type="UUIDType"     minOccurs="0" nillable="true"/>
+      <xs:element name="isActive"         type="xs:boolean"/>
+      <xs:element name="createdAt"        type="ISO8601DateTimeType"/>
+      <xs:element name="updatedAt"        type="ISO8601DateTimeType"/>
+    </xs:sequence>
+  </xs:complexType>
+
+</xs:schema>
