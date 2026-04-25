@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Frontend → CRM contracts (C1, C2, C3)
+  Geïncludeerd door crm-schema-v1.xsd. Geen targetNamespace.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           elementFormDefault="unqualified">
+
+  <!-- ============================================================
+       CONTRACT 1 — Frontend → CRM: nieuwe inschrijving
+       Queue: crm.frontend.registration.created (routing key: frontend.registration.created) | durable: true
+  ============================================================ -->
+  <xs:element name="Registration">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="registrationId" type="xs:string"/>
+        <xs:element name="firstName"      type="xs:string"/>
+        <xs:element name="lastName"       type="xs:string"/>
+        <xs:element name="email"          type="EmailType"/>
+        <xs:element name="sessionId"      type="xs:string"/>
+        <xs:element name="role"           type="RegistrationRoleType"/>
+        <xs:element name="gdprConsent"    type="xs:boolean"/>
+        <xs:element name="phone"          type="xs:string" minOccurs="0"/>
+        <xs:element name="company"        type="xs:string" minOccurs="0"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 2 — Frontend → CRM: inschrijving wijzigen/annuleren
+       Queue: crm.frontend.registration.updated (routing key: frontend.registration.updated) | durable: true
+  ============================================================ -->
+  <xs:element name="RegistrationChange">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="registrationId" type="xs:string" minOccurs="0"/>
+        <xs:element name="email"          type="EmailType"/>
+        <xs:element name="sessionId"      type="xs:string"/>
+        <xs:element name="changeType">
+          <xs:simpleType>
+            <xs:restriction base="xs:string">
+              <xs:enumeration value="updated"/>
+              <xs:enumeration value="cancelled"/>
+            </xs:restriction>
+          </xs:simpleType>
+        </xs:element>
+        <xs:element name="updatedFields" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="firstName" type="xs:string"            minOccurs="0"/>
+              <xs:element name="lastName"  type="xs:string"            minOccurs="0"/>
+              <xs:element name="email"     type="EmailType"            minOccurs="0"/>
+              <xs:element name="phone"     type="xs:string"            minOccurs="0"/>
+              <xs:element name="role"      type="RegistrationRoleType" minOccurs="0"/>
+              <xs:element name="company"   type="xs:string"            minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 3 — Frontend → CRM: nieuw bedrijf aanmaken
+       Queue: frontend.company.created | durable: true
+  ============================================================ -->
+  <xs:element name="CompanyCreated">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="name"        type="xs:string"/>
+        <xs:element name="vatNumber"   type="BelgianVatNumberType"/>
+        <xs:element name="email"       type="EmailType"      minOccurs="0"/>
+        <xs:element name="phone"       type="xs:string"      minOccurs="0"/>
+        <xs:element name="street"      type="xs:string"      minOccurs="0"/>
+        <xs:element name="houseNumber" type="xs:string"      minOccurs="0"/>
+        <xs:element name="postalCode"  type="xs:string"      minOccurs="0"/>
+        <xs:element name="city"        type="xs:string"      minOccurs="0"/>
+        <xs:element name="country"     type="CountryCodeType" minOccurs="0"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Kassa ↔ CRM contracts (C10a, C10b, C16, C17a, C17b)
+  Geïncludeerd door crm-schema-v1.xsd. Geen targetNamespace.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           elementFormDefault="unqualified">
+
+  <!-- ============================================================
+       CONTRACT 10a — Kassa → CRM: persoonscheck request
+       Queue: kassa.person.lookup.requested | durable: true
+       Root: <PersonLookupRequest> (aligned met Kassa XSD 2026-04-22)
+  ============================================================ -->
+  <xs:element name="PersonLookupRequest">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="requestId" type="xs:string"/>
+        <xs:element name="email"     type="EmailType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 10b — CRM → Kassa: persoonscheck response
+       Queue: crm.person.lookup.responded | durable: false
+       Root: <PersonLookupResponse> (aligned met Kassa XSD 2026-04-22)
+
+       Application-level regels (afgedwongen in sender.py):
+       - linkedToCompany moet false zijn als found=false
+       - id/companyName/companyId alleen aanwezig als found=true
+  ============================================================ -->
+  <xs:element name="PersonLookupResponse">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="requestId"       type="xs:string"/>
+        <xs:element name="found"           type="xs:boolean"/>
+        <xs:element name="linkedToCompany" type="xs:boolean"/>
+        <xs:element name="id"              type="UUIDType"  minOccurs="0"/>
+        <xs:element name="companyName"     type="xs:string" minOccurs="0"/>
+        <xs:element name="companyId"       type="UUIDType"  minOccurs="0"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 16 — Kassa → CRM: betaling bevestigd
+       Queue: kassa.payment.confirmed | durable: true
+  ============================================================ -->
+  <xs:element name="PaymentConfirmed">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="userId"         type="UUIDType"  minOccurs="0"/>
+        <xs:element name="email"          type="EmailType"/>
+        <xs:element name="registrationId" type="xs:string" minOccurs="0"/>
+        <xs:element name="amount"         type="xs:decimal"/>
+        <xs:element name="currency">
+          <xs:simpleType>
+            <xs:restriction base="xs:string">
+              <xs:enumeration value="EUR"/>
+            </xs:restriction>
+          </xs:simpleType>
+        </xs:element>
+        <xs:element name="paidAt" type="ISO8601DateTimeType"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 17a — Kassa → CRM: lijst niet-betaalden opvragen
+       Queue: kassa.unpaid.requested | durable: true
+  ============================================================ -->
+  <xs:element name="UnpaidRequest">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="requestId" type="xs:string"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ============================================================
+       CONTRACT 17b — CRM → Kassa: lijst niet-betaalden response
+       Queue: crm.unpaid.responded | durable: false
+  ============================================================ -->
+  <xs:element name="UnpaidResponse">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="requestId" type="xs:string"/>
+        <xs:element name="persons">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="person" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="id"              type="UUIDType"/>
+                    <xs:element name="firstName"       type="xs:string"/>
+                    <xs:element name="lastName"        type="xs:string"/>
+                    <xs:element name="email"           type="EmailType"/>
+                    <xs:element name="linkedToCompany" type="xs:boolean"/>
+                    <xs:element name="companyName"     type="xs:string" minOccurs="0"/>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>
