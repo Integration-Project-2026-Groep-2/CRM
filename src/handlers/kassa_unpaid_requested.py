@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 import aio_pika
 
 from src import sender, xml_validator
-from src.handlers._transport import _handle_processing_error
 from src.salesforce_client import get_unpaid_contacts
 
 if TYPE_CHECKING:
@@ -28,7 +27,7 @@ async def handle(
     - Query Salesforce for unpaid Contacts.
     - Publish crm.unpaid.responded with the same requestId.
     - Invalid XML: rejected without requeue.
-    - Other errors: requeued.
+    - Other errors: bubble to _wrap_handler for retry/DLQ routing.
     """
     try:
         xml = xml_validator.validate(message.body)
@@ -37,11 +36,8 @@ async def handle(
         await message.reject(requeue=False)
         return
 
-    try:
-        request_id = xml.findtext("requestId") or ""
-        persons = await get_unpaid_contacts(sf)
-        await sender.publish_unpaid_responded(request_id, persons)
-        logger.info("Processed unpaid request %s with %d unpaid contacts", request_id, len(persons))
-        await message.ack()
-    except Exception as exc:  # noqa: BLE001
-        await _handle_processing_error("UnpaidRequest", message, exc)
+    request_id = xml.findtext("requestId") or ""
+    persons = await get_unpaid_contacts(sf)
+    await sender.publish_unpaid_responded(request_id, persons)
+    logger.info("Processed unpaid request %s with %d unpaid contacts", request_id, len(persons))
+    await message.ack()

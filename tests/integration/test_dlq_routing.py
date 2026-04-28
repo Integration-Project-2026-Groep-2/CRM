@@ -1,9 +1,10 @@
 """Integration tests for the TTL-DLX failure topology against a real broker.
 
 Asserts that:
-1. `_ensure_dlq_topology` declares `crm.retry`, `crm.dlq` and `crm.dlq.queue`
-   idempotently and binds the ops-queue with routing-key `#`.
-2. A queue declared with `x-dead-letter-exchange="crm.dlq"` plus a
+1. `_ensure_dlq_topology` declares `contact.retry` (DIRECT), `contact.dlq`
+   (TOPIC) and `crm.dlq.queue` idempotently and binds the ops-queue with
+   routing-key `#`.
+2. A queue declared with `x-dead-letter-exchange="contact.dlq"` plus a
    `reject(requeue=False)` actually routes the message to `crm.dlq.queue`
    with all custom headers preserved and an `x-death` entry appended by
    RabbitMQ.
@@ -59,7 +60,7 @@ async def test_ensure_dlq_topology_is_idempotent(_skip_if_no_broker):
         await _ensure_dlq_topology(channel)
 
         retry_ex = await channel.declare_exchange(
-            _RETRY_EXCHANGE, ExchangeType.TOPIC, durable=True, passive=True,
+            _RETRY_EXCHANGE, ExchangeType.DIRECT, durable=True, passive=True,
         )
         dlq_ex = await channel.declare_exchange(
             _DLQ_EXCHANGE, ExchangeType.TOPIC, durable=True, passive=True,

@@ -17,7 +17,6 @@ from src.handlers._helpers import (
     _contact_has_native_identity,
     _normalize_optional_text,
 )
-from src.handlers._transport import _handle_processing_error
 from src.salesforce.contacts import _build_updated_user_data, _build_user_deactivation_data
 from src.salesforce_client import (
     count_active_contacts_for_company,
@@ -51,7 +50,7 @@ async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
                     registrations remain.
     - Contact removal remains soft delete only — never physically remove (GDPR).
     - Invalid XML: rejected without requeue.
-    - Other errors: requeued.
+    - Other errors: bubble to _wrap_handler for retry/DLQ routing.
     """
     try:
         xml = xml_validator.validate(message.body)
@@ -60,27 +59,23 @@ async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
         await message.reject(requeue=False)
         return
 
-    try:
-        email = xml.findtext("email")
-        session_id = xml.findtext("sessionId")
-        change_type = xml.findtext("changeType")
+    email = xml.findtext("email")
+    session_id = xml.findtext("sessionId")
+    change_type = xml.findtext("changeType")
 
-        logger.info(
-            "Processing registration change: email=%s, sessionId=%s, changeType=%s",
-            email, session_id, change_type,
-        )
+    logger.info(
+        "Processing registration change: email=%s, sessionId=%s, changeType=%s",
+        email, session_id, change_type,
+    )
 
-        if change_type == "updated":
-            await _handle_update(xml, email, sf, message)
-        elif change_type == "cancelled":
-            await _handle_cancellation(xml, email, sf, message)
-        else:
-            # XSD validation should prevent this, but defence-in-depth
-            logger.error("Unknown changeType '%s' for email %s — rejecting", change_type, email)
-            await message.reject(requeue=False)
-
-    except Exception as exc:  # noqa: BLE001
-        await _handle_processing_error("RegistrationChange", message, exc)
+    if change_type == "updated":
+        await _handle_update(xml, email, sf, message)
+    elif change_type == "cancelled":
+        await _handle_cancellation(xml, email, sf, message)
+    else:
+        # Defence-in-depth — XSD should already enforce the enum.
+        logger.error("Unknown changeType '%s' for email %s — rejecting", change_type, email)
+        await message.reject(requeue=False)
 
 
 async def _handle_update(
