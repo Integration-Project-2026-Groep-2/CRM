@@ -427,6 +427,8 @@ async def update_kassa_contact(
 ) -> dict[str, Any]:
     """Authoritatively update Kassa-owned fields on an existing Contact."""
     updates: dict[str, Any] = {}
+    existing_role = _normalize_optional_field_value(contact.get("Role__c"))
+    can_manage_role_and_company = existing_role not in _SPECIALIZED_ROLES
 
     if contact.get("Email") != email:
         updates["Email"] = email
@@ -437,14 +439,25 @@ async def update_kassa_contact(
     if _normalize_optional_field_value(contact.get("LastName")) != _normalize_optional_field_value(last_name):
         updates["LastName"] = last_name
 
-    if _normalize_optional_field_value(contact.get("Badge_Code__c")) != _normalize_optional_field_value(badge_code):
+    if badge_code is not None and _normalize_optional_field_value(contact.get("Badge_Code__c")) != _normalize_optional_field_value(badge_code):
         updates["Badge_Code__c"] = badge_code
 
-    if _normalize_optional_field_value(contact.get("Role__c")) != _normalize_optional_field_value(role):
+    if can_manage_role_and_company and _normalize_optional_field_value(contact.get("Role__c")) != _normalize_optional_field_value(role):
         updates["Role__c"] = role
 
-    if _normalize_optional_field_value(contact.get("Company_ID__c")) != _normalize_optional_field_value(company_id):
+    if can_manage_role_and_company and _normalize_optional_field_value(contact.get("Company_ID__c")) != _normalize_optional_field_value(company_id):
         updates["Company_ID__c"] = company_id
+    elif not can_manage_role_and_company and (
+        _normalize_optional_field_value(contact.get("Role__c")) != _normalize_optional_field_value(role)
+        or _normalize_optional_field_value(contact.get("Company_ID__c")) != _normalize_optional_field_value(company_id)
+    ):
+        logger.warning(
+            "Kassa update skipped Role__c/Company_ID__c overwrite on Contact %s (existing role=%s, incoming role=%s, incoming company=%s); specialized roles are protected from Kassa changes",
+            contact.get("Id"),
+            existing_role,
+            role,
+            company_id,
+        )
 
     if not updates:
         return contact

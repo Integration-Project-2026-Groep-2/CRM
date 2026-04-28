@@ -15,6 +15,7 @@ from src import sender, xml_validator
 from src.handlers._exceptions import MissingDependencyError
 from src.handlers._helpers import (
     _build_conflict_value,
+    _normalize_email_for_compare,
     _normalize_optional_text,
 )
 from src.salesforce.contacts import (
@@ -67,6 +68,31 @@ async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
         logger.warning(
             "KassaUserUpdated ignored — ambiguous Kassa_ID__c %s in Salesforce",
             kassa_id,
+        )
+        await message.ack()
+        return
+
+    existing_email = _normalize_email_for_compare(existing_contact.get("Email"))
+    incoming_email = _normalize_email_for_compare(email)
+    if existing_contact.get("Registration_ID__c") and existing_email is not None and incoming_email is not None and existing_email != incoming_email:
+        logger.warning(
+            "KassaUserUpdated conflict — Contact %s is owned by Registration_ID__c %s and email would change from %s to %s",
+            existing_contact.get("Id"),
+            existing_contact.get("Registration_ID__c"),
+            existing_contact.get("Email"),
+            email,
+        )
+        await sender.publish_user_conflict(
+            {
+                "email": email,
+                "existingValue": _build_conflict_value(
+                    existing_contact.get("FirstName"),
+                    existing_contact.get("LastName"),
+                    existing_contact.get("Company_ID__c"),
+                ),
+                "incomingValue": _build_conflict_value(first_name, last_name, company_id),
+                "detectedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
         )
         await message.ack()
         return
@@ -129,8 +155,8 @@ async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
             contact_id = contact["Id"]
             await asyncio.to_thread(sf.Contact.update, contact_id, reactivation_update)
             contact = await asyncio.to_thread(sf.Contact.get, contact_id)
-            logger.info(
-                "Reactivated Contact %s for Kassa user %s (update)",
+            logger.warning(
+                "Reactivated Contact %s for Kassa user %s (update) after previous soft delete/inactive state",
                 contact_id,
                 email,
             )
