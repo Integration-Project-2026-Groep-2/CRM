@@ -212,6 +212,9 @@ from src.handlers.frontend_registration_updated import handle as handle_registra
 from src.handlers.kassa_payment_confirmed import handle as handle_payment_confirmed  # noqa: E402, F401
 from src.handlers.kassa_person_lookup_requested import handle as handle_person_lookup  # noqa: E402, F401
 from src.handlers.kassa_unpaid_requested import handle as handle_unpaid_requested  # noqa: E402, F401
+from src.handlers.kassa_user_created import handle as handle_kassa_user_created  # noqa: E402, F401
+from src.handlers.kassa_user_deactivated import handle as handle_kassa_user_deactivated  # noqa: E402, F401
+from src.handlers.kassa_user_updated import handle as handle_kassa_user_updated  # noqa: E402, F401
 from src.handlers.mailing_user_created import handle as handle_mailing_user_created  # noqa: E402, F401
 from src.handlers.mailing_user_deactivated import handle as handle_mailing_user_deactivated  # noqa: E402, F401
 from src.handlers.mailing_user_updated import handle as handle_mailing_user_updated  # noqa: E402, F401
@@ -249,9 +252,11 @@ from src.salesforce_client import (  # noqa: E402, F401
     get_contact_for_person_lookup,
     get_contact_match_by_crm_id,
     get_contact_match_by_email,
+    get_contact_match_by_kassa_id,
     get_contact_match_by_mailing_id,
     get_contact_match_by_planning_id,
     get_unpaid_contacts,
+    has_contact_kassa_id_field,
     has_contact_mailing_id_field,
     has_contact_planning_id_field,
     has_session_registration_object,

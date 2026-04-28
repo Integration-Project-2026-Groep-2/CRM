@@ -36,12 +36,12 @@ EXPECTED_ROOTS: frozenset[str] = frozenset(
         "Heartbeat",
         "StatusCheck",
         "Warning",
-        # kassa.xsd
-        "PersonLookupRequest",
-        "PersonLookupResponse",
         "PaymentConfirmed",
         "UnpaidRequest",
         "UnpaidResponse",
+        # kassa.xsd
+        "PersonLookupRequest",
+        "PersonLookupResponse",
         # planning.xsd
         "SessionUpdate",
         "PlanningUserCreated",

@@ -98,7 +98,7 @@ def _contact_has_native_identity(contact: dict) -> bool:
     """Return whether the Contact is also owned by a native producer id."""
     return any(
         _normalize_optional_text(contact.get(field)) is not None
-        for field in ("Planning_ID__c", "Mailing_ID__c")
+        for field in ("Planning_ID__c", "Mailing_ID__c", "Kassa_ID__c")
     )
 
 

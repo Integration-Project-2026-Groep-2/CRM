@@ -40,6 +40,7 @@ from src.salesforce.client import (  # noqa: F401
     escape_soql,
     get_salesforce_client,
     has_account_house_number_field,
+    has_contact_kassa_id_field,
     has_contact_mailing_id_field,
     has_contact_planning_id_field,
     has_session_registration_object,
@@ -49,6 +50,7 @@ from src.salesforce.client import (  # noqa: F401
 )
 from src.salesforce.contacts import (  # noqa: F401
     apply_is_active,
+    backfill_kassa_contact_fields,
     backfill_mailing_contact_fields,
     backfill_planning_contact_fields,
     count_active_contacts_for_company,
@@ -62,9 +64,11 @@ from src.salesforce.contacts import (  # noqa: F401
     get_contact_for_person_lookup,
     get_contact_match_by_crm_id,
     get_contact_match_by_email,
+    get_contact_match_by_kassa_id,
     get_contact_match_by_mailing_id,
     get_contact_match_by_planning_id,
     update_facturatie_contact,
+    update_kassa_contact,
     update_mailing_contact,
     update_planning_contact,
     upsert_contact_by_email,
