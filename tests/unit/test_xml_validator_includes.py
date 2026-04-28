@@ -36,15 +36,12 @@ EXPECTED_ROOTS: frozenset[str] = frozenset(
         "Heartbeat",
         "StatusCheck",
         "Warning",
-        # kassa.xsd
-        "PersonLookupRequest",
-        "PersonLookupResponse",
-        "KassaUserCreated",
-        "KassaUserUpdated",
-        "KassaUserDeactivated",
         "PaymentConfirmed",
         "UnpaidRequest",
         "UnpaidResponse",
+        # kassa.xsd
+        "PersonLookupRequest",
+        "PersonLookupResponse",
         # planning.xsd
         "SessionUpdate",
         "PlanningUserCreated",
@@ -107,7 +104,7 @@ class TestIncludeGraph:
 
     def test_expected_root_count_matches_contract_count(self) -> None:
         """35 root elements voor 35 contracts (sommige roots delen consumers)."""
-        assert len(EXPECTED_ROOTS) == 38
+        assert len(EXPECTED_ROOTS) == 35
 
 
 @pytest.mark.parametrize(

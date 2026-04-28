@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from lxml import etree
 
-from src.xml_validator import load_schema, validate
+from src.xml_validator import load_schema, validate, validate_kassa
 
 
 class TestLoadSchema:
@@ -188,6 +188,23 @@ class TestValidate:
         assert doc.tag == "UserCreated"
         assert doc.findtext("firstName") == "Els"
         assert doc.findtext("lastName") == "Peeters"
+
+    def test_accepts_kassa_user_created_with_valid_names(self) -> None:
+        """Kassa producer schema accepts the shared user-created root."""
+        xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<UserCreated>
+    <userId>523e4567-e89b-42d3-a456-426614174036</userId>
+    <firstName>Karel</firstName>
+    <lastName>Kassa</lastName>
+    <email>karel.kassa@example.com</email>
+    <badgeCode>BADGE-036</badgeCode>
+    <role>VISITOR</role>
+    <createdAt>2026-04-25T09:30:00Z</createdAt>
+</UserCreated>"""
+
+        doc = validate_kassa(xml)
+
+        assert doc.tag == "UserCreated"
 
 
 class TestFacturatieCompanySync:

@@ -384,7 +384,7 @@ VALID_KASSA_USER_UPDATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
 
 VALID_KASSA_USER_DEACTIVATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
 <UserDeactivated>
-    <userId>523e4567-e89b-42d3-a456-426614174036</userId>
+    <id>523e4567-e89b-42d3-a456-426614174036</id>
     <email>karel.kassa@example.com</email>
     <deactivatedAt>2026-04-25T16:00:00Z</deactivatedAt>
 </UserDeactivated>"""

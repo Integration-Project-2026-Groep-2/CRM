@@ -6,7 +6,7 @@ import pytest
 from lxml import etree
 
 VALID_KASSA_USER_CREATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
-<KassaUserCreated>
+<UserCreated>
     <userId>523e4567-e89b-42d3-a456-426614174036</userId>
     <firstName>Karel</firstName>
     <lastName>Kassa</lastName>
@@ -15,10 +15,10 @@ VALID_KASSA_USER_CREATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <badgeCode>BADGE-036</badgeCode>
     <role>VISITOR</role>
     <createdAt>2026-04-25T09:30:00Z</createdAt>
-</KassaUserCreated>"""
+</UserCreated>"""
 
 VALID_KASSA_USER_UPDATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
-<KassaUserUpdated>
+<UserUpdated>
     <userId>523e4567-e89b-42d3-a456-426614174036</userId>
     <firstName>Karel</firstName>
     <lastName>Update</lastName>
@@ -27,14 +27,14 @@ VALID_KASSA_USER_UPDATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <badgeCode>BADGE-036A</badgeCode>
     <role>COMPANY_CONTACT</role>
     <updatedAt>2026-04-25T10:00:00Z</updatedAt>
-</KassaUserUpdated>"""
+</UserUpdated>"""
 
 VALID_KASSA_USER_DEACTIVATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
-<KassaUserDeactivated>
-    <userId>523e4567-e89b-42d3-a456-426614174036</userId>
+<UserDeactivated>
+    <id>523e4567-e89b-42d3-a456-426614174036</id>
     <email>karel.kassa@example.com</email>
     <deactivatedAt>2026-04-25T16:00:00Z</deactivatedAt>
-</KassaUserDeactivated>"""
+</UserDeactivated>"""
 
 KASSA_CONTACT_RETURN = {
     "Id": "003000000000036",
@@ -70,7 +70,7 @@ def sf_mock():
 async def test_kassa_user_created_publishes_confirmed(sf_mock):
     parsed_xml = etree.fromstring(VALID_KASSA_USER_CREATED_XML)
     with (
-        patch("src.xml_validator.validate", return_value=parsed_xml),
+        patch("src.xml_validator.validate_kassa", return_value=parsed_xml),
         patch("src.handlers.kassa_user_created.has_contact_kassa_id_field", return_value=True),
         patch("src.handlers.kassa_user_created.get_contact_match_by_kassa_id", return_value=("none", None)),
         patch("src.handlers.kassa_user_created.get_contact_match_by_email", return_value=("none", None)),
@@ -97,7 +97,7 @@ async def test_kassa_user_created_publishes_confirmed(sf_mock):
 async def test_kassa_user_updated_publishes_updated(sf_mock):
     parsed_xml = etree.fromstring(VALID_KASSA_USER_UPDATED_XML)
     with (
-        patch("src.xml_validator.validate", return_value=parsed_xml),
+        patch("src.xml_validator.validate_kassa", return_value=parsed_xml),
         patch("src.handlers.kassa_user_updated.has_contact_kassa_id_field", return_value=True),
         patch("src.handlers.kassa_user_updated.get_contact_match_by_kassa_id", return_value=("unique", KASSA_CONTACT_RETURN)),
         patch("src.handlers.kassa_user_updated.get_contact_match_by_email", return_value=("unique", KASSA_CONTACT_RETURN)),
@@ -124,7 +124,7 @@ async def test_kassa_user_updated_publishes_updated(sf_mock):
 async def test_kassa_user_deactivated_publishes_deactivated(sf_mock):
     parsed_xml = etree.fromstring(VALID_KASSA_USER_DEACTIVATED_XML)
     with (
-        patch("src.xml_validator.validate", return_value=parsed_xml),
+        patch("src.xml_validator.validate_kassa", return_value=parsed_xml),
         patch("src.handlers.kassa_user_deactivated.has_contact_kassa_id_field", return_value=True),
         patch("src.handlers.kassa_user_deactivated.get_contact_match_by_kassa_id", return_value=("unique", KASSA_CONTACT_RETURN)),
         patch("src.handlers.kassa_user_deactivated.deactivate_contact_record", return_value=KASSA_CONTACT_RETURN),
