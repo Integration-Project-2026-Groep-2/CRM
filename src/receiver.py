@@ -28,6 +28,31 @@ _INBOUND_EXCHANGE: dict[str, str] = {
     **PENDING_EXCHANGES,
 }
 
+# TTL-DLX failure topology — project-wide convention shared with Lucas (TL
+# Facturatie/Mailing) and validated by Control Room. `crm.retry` carries
+# delayed redelivery via per-message TTL; `crm.dlq` is the terminal failure
+# stream that ops inspects via `crm.dlq.queue`. Queue-args wiring on the
+# inbound work-queues themselves is added in a later PR.
+_RETRY_EXCHANGE = "crm.retry"
+_DLQ_EXCHANGE = "crm.dlq"
+_DLQ_OPS_QUEUE = "crm.dlq.queue"
+
+
+async def _ensure_dlq_topology(channel: AbstractChannel) -> None:
+    """Idempotently declare the project-wide retry + DLQ infrastructure.
+
+    Safe to call on every container start — RabbitMQ no-ops the declares when
+    the exchange/queue already exists with matching args. The ops-queue uses
+    routing-key `#` so any team that adopts the same `<team>.dlq` convention
+    gets full coverage without per-contract bindings.
+    """
+    await channel.declare_exchange(_RETRY_EXCHANGE, ExchangeType.TOPIC, durable=True)
+    dlq_exchange = await channel.declare_exchange(
+        _DLQ_EXCHANGE, ExchangeType.TOPIC, durable=True,
+    )
+    dlq_queue = await channel.declare_queue(_DLQ_OPS_QUEUE, durable=True)
+    await dlq_queue.bind(dlq_exchange, routing_key="#")
+
 
 async def _declare_and_bind(
     channel: AbstractChannel,
@@ -74,6 +99,7 @@ async def run_receiver(
     container.
     """
     channel = await connection.channel()
+    await _ensure_dlq_topology(channel)
     sf_client = await get_salesforce_client(config, shutdown_event=shutdown_event)
 
     for queue_name, handler, requires_sf, routing_key, durable, exchange in QUEUE_REGISTRY:
