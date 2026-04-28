@@ -20,7 +20,7 @@
         <xs:element name="lastName"   type="NameType"/>
         <xs:element name="email"      type="EmailType"/>
         <xs:element name="companyId"  type="UUIDType" minOccurs="0"/>
-        <xs:element name="badgeCode"  type="xs:string"/>
+        <xs:element name="badgeCode"  type="NonEmptyStringType"/>
         <xs:element name="role"       type="UserRoleType"/>
         <xs:element name="createdAt"  type="ISO8601DateTimeType"/>
       </xs:sequence>
@@ -39,7 +39,7 @@
         <xs:element name="lastName"   type="NameType"/>
         <xs:element name="email"      type="EmailType"/>
         <xs:element name="companyId"  type="UUIDType" minOccurs="0"/>
-        <xs:element name="badgeCode"  type="xs:string"/>
+        <xs:element name="badgeCode"  type="NonEmptyStringType"/>
         <xs:element name="role"       type="UserRoleType"/>
         <xs:element name="updatedAt"  type="ISO8601DateTimeType"/>
       </xs:sequence>
