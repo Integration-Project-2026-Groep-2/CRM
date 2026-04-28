@@ -28,16 +28,19 @@ from src.salesforce.contacts.matching import (  # noqa: F401
     get_contact_for_person_lookup,
     get_contact_match_by_crm_id,
     get_contact_match_by_email,
+    get_contact_match_by_kassa_id,
     get_contact_match_by_mailing_id,
     get_contact_match_by_planning_id,
 )
 from src.salesforce.contacts.updates import (  # noqa: F401
+    backfill_kassa_contact_fields,
     backfill_mailing_contact_fields,
     backfill_planning_contact_fields,
     deactivate_contact,
     deactivate_contact_record,
     ensure_contact_identifiers,
     update_facturatie_contact,
+    update_kassa_contact,
     update_mailing_contact,
     update_planning_contact,
 )

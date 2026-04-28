@@ -27,6 +27,9 @@ from src.handlers import (
     kassa_payment_confirmed,
     kassa_person_lookup_requested,
     kassa_unpaid_requested,
+    kassa_user_created,
+    kassa_user_deactivated,
+    kassa_user_updated,
     mailing_user_created,
     mailing_user_deactivated,
     mailing_user_updated,
@@ -89,6 +92,14 @@ QUEUE_REGISTRY: list[tuple[str, HandlerFn, bool, str | None, bool, str | None]] 
     ("kassa.person.lookup.requested", kassa_person_lookup_requested.handle, True, None, True, "payment.topic"),
     ("kassa.payment.confirmed", kassa_payment_confirmed.handle, True, None, True, "payment.topic"),
     ("kassa.unpaid.requested", kassa_unpaid_requested.handle, True, None, True, "payment.topic"),
+
+    # Contracts 36/37/38 — Kassa → CRM: user sync (consumer-prefixed queues)
+    ("crm.kassa.user.created", kassa_user_created.handle, True,
+     "kassa.user.created", True, "user.topic"),
+    ("crm.kassa.user.updated", kassa_user_updated.handle, True,
+     "kassa.user.updated", True, "user.topic"),
+    ("crm.kassa.user.deactivated", kassa_user_deactivated.handle, True,
+     "kassa.user.deactivated", True, "user.topic"),
 
     # Contract 11 — Planning → CRM: session update
     ("planning.session.updated", planning_session_updated.handle, True, None, True, "planning.topic"),

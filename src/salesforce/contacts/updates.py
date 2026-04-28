@@ -29,6 +29,7 @@ async def ensure_contact_identifiers(
     registration_id: str | None = None,
     mailing_id: str | None = None,
     planning_id: str | None = None,
+    kassa_id: str | None = None,
 ) -> dict[str, Any]:
     """Ensure a Contact has the canonical identifiers needed by CRM contracts.
 
@@ -39,6 +40,8 @@ async def ensure_contact_identifiers(
       mailing_id is provided.
         - Only set Planning_ID__c when it is currently empty and an inbound
             planning_id is provided.
+        - Only set Kassa_ID__c when it is currently empty and an inbound
+            kassa_id is provided.
     """
     updates: dict[str, Any] = {}
 
@@ -53,6 +56,9 @@ async def ensure_contact_identifiers(
 
     if planning_id and not contact.get("Planning_ID__c"):
         updates["Planning_ID__c"] = planning_id
+
+    if kassa_id and not contact.get("Kassa_ID__c"):
+        updates["Kassa_ID__c"] = kassa_id
 
     if not updates:
         return contact
@@ -164,6 +170,47 @@ async def backfill_planning_contact_fields(
     await asyncio.to_thread(sf.Contact.update, contact_id, updates)
     logger.info(
         "Backfilled Planning Contact %s fields: %s",
+        contact_id,
+        ", ".join(sorted(updates.keys())),
+    )
+    return await asyncio.to_thread(sf.Contact.get, contact_id)
+
+
+async def backfill_kassa_contact_fields(
+    sf: Salesforce,
+    contact: dict[str, Any],
+    *,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    badge_code: str | None = None,
+    role: str | None = None,
+    company_id: str | None = None,
+) -> dict[str, Any]:
+    """Backfill Kassa-owned fields on a compatible existing Contact."""
+    updates: dict[str, Any] = {}
+
+    if first_name and _normalize_optional_field_value(contact.get("FirstName")) is None:
+        updates["FirstName"] = first_name
+
+    if last_name and _normalize_optional_field_value(contact.get("LastName")) is None:
+        updates["LastName"] = last_name
+
+    if badge_code and _normalize_optional_field_value(contact.get("Badge_Code__c")) is None:
+        updates["Badge_Code__c"] = badge_code
+
+    if role and _normalize_optional_field_value(contact.get("Role__c")) is None:
+        updates["Role__c"] = role
+
+    if company_id and _normalize_optional_field_value(contact.get("Company_ID__c")) is None:
+        updates["Company_ID__c"] = company_id
+
+    if not updates:
+        return contact
+
+    contact_id = contact["Id"]
+    await asyncio.to_thread(sf.Contact.update, contact_id, updates)
+    logger.info(
+        "Backfilled Kassa Contact %s fields: %s",
         contact_id,
         ", ".join(sorted(updates.keys())),
     )
@@ -361,6 +408,51 @@ async def update_facturatie_contact(
     await asyncio.to_thread(sf.Contact.update, contact_id, updates)
     logger.info(
         "Updated Facturatie Contact %s fields: %s",
+        contact_id,
+        ", ".join(sorted(updates.keys())),
+    )
+    return await asyncio.to_thread(sf.Contact.get, contact_id)
+
+
+async def update_kassa_contact(
+    sf: Salesforce,
+    contact: dict[str, Any],
+    *,
+    email: str,
+    first_name: str | None,
+    last_name: str | None,
+    badge_code: str | None,
+    role: str | None,
+    company_id: str | None,
+) -> dict[str, Any]:
+    """Authoritatively update Kassa-owned fields on an existing Contact."""
+    updates: dict[str, Any] = {}
+
+    if contact.get("Email") != email:
+        updates["Email"] = email
+
+    if _normalize_optional_field_value(contact.get("FirstName")) != _normalize_optional_field_value(first_name):
+        updates["FirstName"] = first_name
+
+    if _normalize_optional_field_value(contact.get("LastName")) != _normalize_optional_field_value(last_name):
+        updates["LastName"] = last_name
+
+    if _normalize_optional_field_value(contact.get("Badge_Code__c")) != _normalize_optional_field_value(badge_code):
+        updates["Badge_Code__c"] = badge_code
+
+    if _normalize_optional_field_value(contact.get("Role__c")) != _normalize_optional_field_value(role):
+        updates["Role__c"] = role
+
+    if _normalize_optional_field_value(contact.get("Company_ID__c")) != _normalize_optional_field_value(company_id):
+        updates["Company_ID__c"] = company_id
+
+    if not updates:
+        return contact
+
+    contact_id = contact["Id"]
+    await asyncio.to_thread(sf.Contact.update, contact_id, updates)
+    logger.info(
+        "Updated Kassa Contact %s fields: %s",
         contact_id,
         ", ".join(sorted(updates.keys())),
     )

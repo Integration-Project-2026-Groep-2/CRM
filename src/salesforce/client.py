@@ -12,6 +12,7 @@ CUSTOM FIELDS REFERENCE (must be created in Salesforce Setup):
   paid session registration for Contracts 16 / 17 legacy consumers
 - Contact.Mailing_ID__c (Text, Unique) — Native Mailing UUID for Contracts 27-29
 - Contact.Planning_ID__c (Text, Unique) — Native Planning UUID for Contracts 30-32
+- Contact.Kassa_ID__c (Text, Unique) — Native Kassa UUID for Contracts 36-38
 - Contact.Role__c (Picklist: VISITOR | COMPANY_CONTACT) — For Contract 1, 13, 18
 
 - Session_Registration__c.Registration_ID__c (Text, External ID, Unique) —
@@ -377,6 +378,7 @@ async def get_salesforce_client(
 
 _active_field_cache: str | None = None
 _mailing_id_field_supported_cache: bool | None = None
+_kassa_id_field_supported_cache: bool | None = None
 _account_active_field_cache: str | None = None
 _planning_id_field_supported_cache: bool | None = None
 _session_registration_object_supported_cache: bool | None = None
@@ -427,6 +429,18 @@ async def has_contact_mailing_id_field(sf: Salesforce) -> bool:
     available_fields = {field["name"] for field in describe.get("fields", [])}
     _mailing_id_field_supported_cache = "Mailing_ID__c" in available_fields
     return _mailing_id_field_supported_cache
+
+
+async def has_contact_kassa_id_field(sf: Salesforce) -> bool:
+    """Return whether the Salesforce org exposes Contact.Kassa_ID__c."""
+    global _kassa_id_field_supported_cache  # noqa: PLW0603
+    if _kassa_id_field_supported_cache is not None:
+        return _kassa_id_field_supported_cache
+
+    describe = await asyncio.to_thread(sf.Contact.describe)
+    available_fields = {field["name"] for field in describe.get("fields", [])}
+    _kassa_id_field_supported_cache = "Kassa_ID__c" in available_fields
+    return _kassa_id_field_supported_cache
 
 
 async def _resolve_account_active_field_optional(sf: Salesforce) -> str | None:
