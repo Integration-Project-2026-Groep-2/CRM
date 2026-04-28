@@ -43,58 +43,6 @@
   </xs:element>
 
   <!-- ============================================================
-       CONTRACT 36 — Kassa → CRM: user aanmaken
-       Queue: crm.kassa.user.created (routing key: kassa.user.created) | durable: true
-  ============================================================ -->
-  <xs:element name="KassaUserCreated">
-    <xs:complexType>
-      <xs:sequence>
-        <xs:element name="userId"     type="UUIDType"/>
-        <xs:element name="firstName"  type="NameType"/>
-        <xs:element name="lastName"   type="NameType"/>
-        <xs:element name="email"      type="EmailType"/>
-        <xs:element name="companyId"  type="UUIDType" minOccurs="0"/>
-        <xs:element name="badgeCode"  type="xs:string"/>
-        <xs:element name="role"       type="UserRoleType"/>
-        <xs:element name="createdAt"  type="ISO8601DateTimeType"/>
-      </xs:sequence>
-    </xs:complexType>
-  </xs:element>
-
-  <!-- ============================================================
-       CONTRACT 37 — Kassa → CRM: user bijwerken
-       Queue: crm.kassa.user.updated (routing key: kassa.user.updated) | durable: true
-  ============================================================ -->
-  <xs:element name="KassaUserUpdated">
-    <xs:complexType>
-      <xs:sequence>
-        <xs:element name="userId"     type="UUIDType"/>
-        <xs:element name="firstName"  type="NameType"/>
-        <xs:element name="lastName"   type="NameType"/>
-        <xs:element name="email"      type="EmailType"/>
-        <xs:element name="companyId"  type="UUIDType" minOccurs="0"/>
-        <xs:element name="badgeCode"  type="xs:string"/>
-        <xs:element name="role"       type="UserRoleType"/>
-        <xs:element name="updatedAt"  type="ISO8601DateTimeType"/>
-      </xs:sequence>
-    </xs:complexType>
-  </xs:element>
-
-  <!-- ============================================================
-       CONTRACT 38 — Kassa → CRM: user deactiveren
-       Queue: crm.kassa.user.deactivated (routing key: kassa.user.deactivated) | durable: true
-  ============================================================ -->
-  <xs:element name="KassaUserDeactivated">
-    <xs:complexType>
-      <xs:sequence>
-        <xs:element name="userId"       type="UUIDType"/>
-        <xs:element name="email"        type="EmailType"/>
-        <xs:element name="deactivatedAt" type="ISO8601DateTimeType"/>
-      </xs:sequence>
-    </xs:complexType>
-  </xs:element>
-
-  <!-- ============================================================
        CONTRACT 16 — Kassa → CRM: betaling bevestigd
        Queue: kassa.payment.confirmed | durable: true
   ============================================================ -->

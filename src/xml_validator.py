@@ -8,8 +8,10 @@ from lxml import etree
 logger = logging.getLogger(__name__)
 
 SCHEMA_PATH = Path(__file__).parent / "schema" / "crm-schema-v1.xsd"
+KASSA_SCHEMA_PATH = Path(__file__).parent / "schema" / "contracts" / "kassa-user.xsd"
 
 _schema: etree.XMLSchema | None = None
+_kassa_schema: etree.XMLSchema | None = None
 
 # Hardened parser for untrusted inbound XML.
 #
@@ -65,6 +67,14 @@ def _get_schema() -> etree.XMLSchema:
     return _schema
 
 
+def _get_kassa_schema() -> etree.XMLSchema:
+    """Return the cached Kassa producer schema."""
+    global _kassa_schema  # noqa: PLW0603
+    if _kassa_schema is None:
+        _kassa_schema = load_schema(KASSA_SCHEMA_PATH)
+    return _kassa_schema
+
+
 def validate(xml_bytes: bytes) -> etree._Element:
     """Validate XML bytes against the CRM XSD schema.
 
@@ -80,6 +90,15 @@ def validate(xml_bytes: bytes) -> etree._Element:
             references when entity resolution is disabled.
     """
     schema = _get_schema()
+    doc = etree.fromstring(xml_bytes, _SECURE_PARSER)
+    if not schema.validate(doc):
+        raise ValueError(f"XML validation failed: {schema.error_log}")
+    return doc
+
+
+def validate_kassa(xml_bytes: bytes) -> etree._Element:
+    """Validate XML bytes against the Kassa producer XSD schema."""
+    schema = _get_kassa_schema()
     doc = etree.fromstring(xml_bytes, _SECURE_PARSER)
     if not schema.validate(doc):
         raise ValueError(f"XML validation failed: {schema.error_log}")

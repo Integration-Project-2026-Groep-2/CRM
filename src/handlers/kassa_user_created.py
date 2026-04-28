@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
     """Contract 36 — Kassa -> CRM: create or attach a Kassa user identity."""
     try:
-        xml = xml_validator.validate(message.body)
+        xml = xml_validator.validate_kassa(message.body)
     except Exception as exc:  # noqa: BLE001
         logger.error("KassaUserCreated — invalid XML, rejecting message: %s", exc)
         await message.reject(requeue=False)

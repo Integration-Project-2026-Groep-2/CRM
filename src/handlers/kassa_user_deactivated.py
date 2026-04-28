@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
     """Contract 38 — Kassa -> CRM: deactivate an existing Kassa-linked user."""
     try:
-        xml = xml_validator.validate(message.body)
+        xml = xml_validator.validate_kassa(message.body)
     except Exception as exc:  # noqa: BLE001
         logger.error("KassaUserDeactivated — invalid XML, rejecting message: %s", exc)
         await message.reject(requeue=False)
@@ -41,7 +41,7 @@ async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
         await message.reject(requeue=False)
         return
 
-    kassa_id = xml.findtext("userId") or ""
+    kassa_id = xml.findtext("id") or ""
     email = xml.findtext("email") or ""
     deactivated_at = xml.findtext("deactivatedAt") or ""
 
