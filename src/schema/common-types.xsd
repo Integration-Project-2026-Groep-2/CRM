@@ -46,6 +46,15 @@
     </xs:restriction>
   </xs:simpleType>
 
+  <!-- NameType: used by producer XSDs (Kassa) for first/last names.
+       Mirrors NonEmptyString but kept as a dedicated semantic alias so
+       external producers referencing "NameType" keep working. -->
+  <xs:simpleType name="NameType">
+    <xs:restriction base="xs:string">
+      <xs:minLength value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
   <xs:simpleType name="BelgianVatNumberType">
     <xs:restriction base="xs:string">
       <xs:pattern value="BE[0-9]{10}"/>

@@ -31,15 +31,18 @@ from src.salesforce_client import (
     get_contact_by_crm_id,
     get_contact_by_email,
     get_contact_match_by_email,
+    get_contact_match_by_kassa_id,
     get_contact_match_by_planning_id,
     get_salesforce_client,
     get_session_registration_by_registration_id,
     get_unique_active_session_registration_for_contact,
     get_unpaid_contacts,
+    has_contact_kassa_id_field,
     has_contact_mailing_id_field,
     has_contact_planning_id_field,
     has_session_registration_object,
     update_facturatie_account,
+    update_kassa_contact,
     update_mailing_contact,
     update_payment_status,
     update_planning_contact,
@@ -53,6 +56,7 @@ from src.salesforce_client import (
 def sf(monkeypatch):
     salesforce_client_module._active_field_cache = None
     salesforce_client_module._mailing_id_field_supported_cache = None
+    salesforce_client_module._kassa_id_field_supported_cache = None
     salesforce_client_module._account_active_field_cache = None
     salesforce_client_module._planning_id_field_supported_cache = None
     salesforce_client_module._session_registration_object_supported_cache = None
@@ -334,6 +338,28 @@ async def test_has_contact_planning_id_field_returns_false_when_absent(sf):
     }
 
     result = await has_contact_planning_id_field(sf)
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_has_contact_kassa_id_field_returns_true_when_present(sf):
+    sf.Contact.describe.return_value = {
+        "fields": [{"name": "IsActive__c"}, {"name": "Kassa_ID__c"}]
+    }
+
+    result = await has_contact_kassa_id_field(sf)
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_has_contact_kassa_id_field_returns_false_when_absent(sf):
+    sf.Contact.describe.return_value = {
+        "fields": [{"name": "IsActive__c"}]
+    }
+
+    result = await has_contact_kassa_id_field(sf)
 
     assert result is False
 
@@ -634,6 +660,32 @@ async def test_ensure_contact_identifiers_adds_missing_crm_id_and_registration_i
     )
     assert result["CRM_ID__c"] == "generated-crm-id"
     assert result["Registration_ID__c"] == "REG-NEW"
+
+
+@pytest.mark.asyncio
+async def test_get_contact_match_by_kassa_id_returns_unique_contact(sf):
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000040"}]}
+    sf.Contact.get.return_value = {
+        "Id": "003000000000040",
+        "Kassa_ID__c": "kassa-id-1",
+    }
+
+    match_status, contact = await get_contact_match_by_kassa_id(sf, "kassa-id-1")
+
+    assert match_status == "unique"
+    assert contact == {"Id": "003000000000040", "Kassa_ID__c": "kassa-id-1"}
+    sf.Contact.get.assert_called_once_with("003000000000040")
+
+
+@pytest.mark.asyncio
+async def test_get_contact_match_by_kassa_id_returns_none_for_no_match(sf):
+    sf.query.return_value = {"totalSize": 0, "records": []}
+
+    match_status, contact = await get_contact_match_by_kassa_id(sf, "missing-kassa-id")
+
+    assert match_status == "none"
+    assert contact is None
+    sf.Contact.get.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1199,6 +1251,47 @@ async def test_update_mailing_contact_returns_existing_contact_when_no_changes(s
 
     sf.Contact.update.assert_not_called()
     assert result == existing_contact
+
+
+@pytest.mark.asyncio
+async def test_update_kassa_contact_preserves_specialized_role_and_skips_empty_badge(sf):
+    existing_contact = {
+        "Id": "003000000000090",
+        "Email": "admin.old@example.com",
+        "FirstName": "Admin",
+        "LastName": "User",
+        "Badge_Code__c": "BADGE-OLD",
+        "Role__c": "ADMIN",
+        "Company_ID__c": "company-old",
+    }
+    sf.Contact.get.return_value = {
+        "Id": "003000000000090",
+        "Email": "admin.new@example.com",
+        "FirstName": "Admin",
+        "LastName": "User",
+        "Badge_Code__c": "BADGE-OLD",
+        "Role__c": "ADMIN",
+        "Company_ID__c": "company-old",
+    }
+
+    result = await update_kassa_contact(
+        sf,
+        existing_contact,
+        email="admin.new@example.com",
+        first_name="Admin",
+        last_name="User",
+        badge_code=None,
+        role="VISITOR",
+        company_id="company-new",
+    )
+
+    sf.Contact.update.assert_called_once_with(
+        "003000000000090",
+        {"Email": "admin.new@example.com"},
+    )
+    assert result["Role__c"] == "ADMIN"
+    assert result["Company_ID__c"] == "company-old"
+    assert result["Badge_Code__c"] == "BADGE-OLD"
 
 
 @pytest.mark.asyncio
