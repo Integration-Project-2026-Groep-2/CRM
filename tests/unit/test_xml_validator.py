@@ -206,6 +206,22 @@ class TestValidate:
 
         assert doc.tag == "UserCreated"
 
+    def test_rejects_kassa_user_created_with_empty_badge_code(self) -> None:
+        """Kassa producer schema rejects empty badgeCode values."""
+        invalid_xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<UserCreated>
+    <userId>523e4567-e89b-42d3-a456-426614174036</userId>
+    <firstName>Karel</firstName>
+    <lastName>Kassa</lastName>
+    <email>karel.kassa@example.com</email>
+    <badgeCode></badgeCode>
+    <role>VISITOR</role>
+    <createdAt>2026-04-25T09:30:00Z</createdAt>
+</UserCreated>"""
+
+        with pytest.raises(ValueError, match="XML validation failed"):
+            validate_kassa(invalid_xml)
+
 
 class TestFacturatieCompanySync:
     """Contracts 33/34/35 — Facturatie → CRM company lifecycle sync (v1.9.0).

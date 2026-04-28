@@ -42,6 +42,7 @@ from src.salesforce_client import (
     has_contact_planning_id_field,
     has_session_registration_object,
     update_facturatie_account,
+    update_kassa_contact,
     update_mailing_contact,
     update_payment_status,
     update_planning_contact,
@@ -1250,6 +1251,47 @@ async def test_update_mailing_contact_returns_existing_contact_when_no_changes(s
 
     sf.Contact.update.assert_not_called()
     assert result == existing_contact
+
+
+@pytest.mark.asyncio
+async def test_update_kassa_contact_preserves_specialized_role_and_skips_empty_badge(sf):
+    existing_contact = {
+        "Id": "003000000000090",
+        "Email": "admin.old@example.com",
+        "FirstName": "Admin",
+        "LastName": "User",
+        "Badge_Code__c": "BADGE-OLD",
+        "Role__c": "ADMIN",
+        "Company_ID__c": "company-old",
+    }
+    sf.Contact.get.return_value = {
+        "Id": "003000000000090",
+        "Email": "admin.new@example.com",
+        "FirstName": "Admin",
+        "LastName": "User",
+        "Badge_Code__c": "BADGE-OLD",
+        "Role__c": "ADMIN",
+        "Company_ID__c": "company-old",
+    }
+
+    result = await update_kassa_contact(
+        sf,
+        existing_contact,
+        email="admin.new@example.com",
+        first_name="Admin",
+        last_name="User",
+        badge_code=None,
+        role="VISITOR",
+        company_id="company-new",
+    )
+
+    sf.Contact.update.assert_called_once_with(
+        "003000000000090",
+        {"Email": "admin.new@example.com"},
+    )
+    assert result["Role__c"] == "ADMIN"
+    assert result["Company_ID__c"] == "company-old"
+    assert result["Badge_Code__c"] == "BADGE-OLD"
 
 
 @pytest.mark.asyncio

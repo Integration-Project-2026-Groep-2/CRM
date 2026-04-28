@@ -121,6 +121,62 @@ async def test_kassa_user_updated_publishes_updated(sf_mock):
 
 
 @pytest.mark.asyncio
+async def test_kassa_user_updated_conflicts_when_registration_owner_email_changes(sf_mock):
+    parsed_xml = etree.fromstring(VALID_KASSA_USER_UPDATED_XML)
+    existing_contact = dict(KASSA_CONTACT_RETURN)
+    existing_contact["Registration_ID__c"] = "reg-123"
+    existing_contact["Email"] = "karel.old@example.com"
+
+    with (
+        patch("src.xml_validator.validate_kassa", return_value=parsed_xml),
+        patch("src.handlers.kassa_user_updated.has_contact_kassa_id_field", return_value=True),
+        patch("src.handlers.kassa_user_updated.get_contact_match_by_kassa_id", return_value=("unique", existing_contact)),
+        patch("src.sender.publish_user_conflict") as mock_conflict,
+        patch("src.handlers.kassa_user_updated.get_contact_match_by_email") as mock_email_match,
+        patch("src.handlers.kassa_user_updated.update_kassa_contact") as mock_update,
+    ):
+        from src.receiver import handle_kassa_user_updated
+
+        msg = AsyncMock()
+        msg.body = VALID_KASSA_USER_UPDATED_XML
+        msg.ack = AsyncMock()
+        msg.reject = AsyncMock()
+
+        await handle_kassa_user_updated(msg, sf_mock)
+
+        mock_conflict.assert_called_once()
+        mock_email_match.assert_not_called()
+        mock_update.assert_not_called()
+        msg.ack.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_kassa_user_updated_acks_when_kassa_id_is_ambiguous(sf_mock):
+    parsed_xml = etree.fromstring(VALID_KASSA_USER_UPDATED_XML)
+    with (
+        patch("src.xml_validator.validate_kassa", return_value=parsed_xml),
+        patch("src.handlers.kassa_user_updated.has_contact_kassa_id_field", return_value=True),
+        patch("src.handlers.kassa_user_updated.get_contact_match_by_kassa_id", return_value=("ambiguous", None)),
+        patch("src.sender.publish_user_conflict") as mock_conflict,
+        patch("src.handlers.kassa_user_updated.get_contact_match_by_email") as mock_email_match,
+        patch("src.handlers.kassa_user_updated.update_kassa_contact") as mock_update,
+    ):
+        from src.receiver import handle_kassa_user_updated
+
+        msg = AsyncMock()
+        msg.body = VALID_KASSA_USER_UPDATED_XML
+        msg.ack = AsyncMock()
+        msg.reject = AsyncMock()
+
+        await handle_kassa_user_updated(msg, sf_mock)
+
+        mock_conflict.assert_not_called()
+        mock_email_match.assert_not_called()
+        mock_update.assert_not_called()
+        msg.ack.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_kassa_user_deactivated_publishes_deactivated(sf_mock):
     parsed_xml = etree.fromstring(VALID_KASSA_USER_DEACTIVATED_XML)
     with (
