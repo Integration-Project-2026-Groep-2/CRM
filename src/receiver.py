@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from functools import partial
+from typing import Any
 
 import aio_pika
 from aio_pika import ExchangeType
@@ -10,6 +11,7 @@ from aio_pika.abc import AbstractChannel, AbstractRobustConnection
 
 from src.config import Config
 from src.handlers._registry import PENDING_EXCHANGES, QUEUE_REGISTRY
+from src.handlers._transport import _handle_failure
 from src.salesforce_client import get_salesforce_client
 
 logger = logging.getLogger(__name__)
@@ -28,25 +30,31 @@ _INBOUND_EXCHANGE: dict[str, str] = {
     **PENDING_EXCHANGES,
 }
 
-# TTL-DLX failure topology — project-wide convention shared with Lucas (TL
-# Facturatie/Mailing) and validated by Control Room. `crm.retry` carries
-# delayed redelivery via per-message TTL; `crm.dlq` is the terminal failure
-# stream that ops inspects via `crm.dlq.queue`. Queue-args wiring on the
-# inbound work-queues themselves is added in a later PR.
-_RETRY_EXCHANGE = "crm.retry"
-_DLQ_EXCHANGE = "crm.dlq"
+# TTL-DLX failure topology — Lucas's pattern (TL Facturatie/Mailing) measured
+# on the prod broker on 2026-04-28. The `contact.*` exchanges already exist on
+# prod (declared by Lucas/another developer via Management UI) so our declare
+# calls are no-ops at runtime; we keep them so the test broker bootstraps the
+# same topology.
+_RETRY_EXCHANGE = "contact.retry"      # DIRECT — rk-matched per <queue>.retry
+_DLQ_EXCHANGE = "contact.dlq"          # TOPIC — bound `#` to crm.dlq.queue
 _DLQ_OPS_QUEUE = "crm.dlq.queue"
+_RETRY_QUEUE_TTL_MS = 30_000           # Lucas's vaste 30s queue-level TTL
+
+# Queues whose contracts forbid retry semantics. Exceptions raised by these
+# handlers are logged and ack'd; nothing flows to retry or DLQ. C9 explicitly
+# states "log error, no crash"; retry-fanout would create alarm storms in
+# Controlroom.
+_NO_RETRY_QUEUES: frozenset[str] = frozenset({"controlroom.warning.issued"})
 
 
 async def _ensure_dlq_topology(channel: AbstractChannel) -> None:
-    """Idempotently declare the project-wide retry + DLQ infrastructure.
+    """Idempotently declare the contact.* failure topology.
 
-    Safe to call on every container start — RabbitMQ no-ops the declares when
-    the exchange/queue already exists with matching args. The ops-queue uses
-    routing-key `#` so any team that adopts the same `<team>.dlq` convention
-    gets full coverage without per-contract bindings.
+    `contact.retry` is DIRECT (rk-precise), `contact.dlq` is TOPIC so the
+    shared `crm.dlq.queue` ops-queue catches every flow via `#` binding. All
+    three already exist on prod; declare is a no-op when args match.
     """
-    await channel.declare_exchange(_RETRY_EXCHANGE, ExchangeType.TOPIC, durable=True)
+    await channel.declare_exchange(_RETRY_EXCHANGE, ExchangeType.DIRECT, durable=True)
     dlq_exchange = await channel.declare_exchange(
         _DLQ_EXCHANGE, ExchangeType.TOPIC, durable=True,
     )
@@ -62,15 +70,13 @@ async def _declare_and_bind(
     routing_key: str | None = None,
     exchange_name: str | None = None,
 ) -> aio_pika.abc.AbstractQueue:
-    """Declare a queue and bind it to a topic exchange.
+    """Declare a work-queue + sibling retry-queue and bind both.
 
-    When `routing_key` is omitted, the queue-name is reused as routing key
-    (point-to-point queues where the name matches the producer event). Passing
-    an explicit routing_key is required when the queue-name is consumer-prefixed
-    to avoid collisions while still binding to the producer's event.
-
-    `exchange_name` falls back to the _INBOUND_EXCHANGE lookup so existing
-    callers that omit it (e.g. integration tests) continue to work.
+    The retry-queue (`<queue_name>.retry`) carries a queue-level
+    `x-message-ttl=30000` and dead-letters back to the producer-exchange with
+    the producer's original routing-key, so a TTL expiry re-delivers the
+    message via the existing producer→work-queue binding. This matches
+    Lucas's pattern measured on prod (`facturatie.user.confirmed.retry`).
     """
     queue = await channel.declare_queue(queue_name, durable=durable)
     resolved_exchange = exchange_name or _INBOUND_EXCHANGE.get(queue_name)
@@ -80,7 +86,60 @@ async def _declare_and_bind(
         )
         effective_routing_key = routing_key or queue_name
         await queue.bind(exchange, routing_key=effective_routing_key)
+
+        retry_queue = await channel.declare_queue(
+            f"{queue_name}.retry",
+            durable=durable,
+            arguments={
+                "x-message-ttl": _RETRY_QUEUE_TTL_MS,
+                "x-dead-letter-exchange": resolved_exchange,
+                "x-dead-letter-routing-key": effective_routing_key,
+            },
+        )
+        retry_exchange = await channel.declare_exchange(
+            _RETRY_EXCHANGE, type=ExchangeType.DIRECT, durable=True,
+        )
+        await retry_queue.bind(retry_exchange, routing_key=f"{queue_name}.retry")
     return queue
+
+
+async def _wrap_handler(
+    handler: Any,
+    queue_name: str,
+    message: aio_pika.abc.AbstractIncomingMessage,
+) -> None:
+    """Run a handler under the centralised failure-routing policy.
+
+    No-retry queues (e.g. C9) ack-and-drop on any exception per contract.
+    Other queues route uncaught exceptions through `_handle_failure`; if that
+    helper itself raises (channel closed, bug), we last-resort
+    `reject(requeue=False)` to keep the message off the work-queue.
+    """
+    try:
+        await handler(message)
+    except Exception as exc:  # noqa: BLE001
+        if queue_name in _NO_RETRY_QUEUES:
+            logger.error(
+                "%s — %s; ack-and-drop (no retry by contract)", queue_name, exc,
+            )
+            try:
+                await message.ack()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        try:
+            await _handle_failure(
+                queue_name, message, exc, work_queue=queue_name,
+            )
+        except Exception as meta_exc:  # noqa: BLE001
+            logger.exception(
+                "%s — meta-failure in _handle_failure: %s; force-rejecting",
+                queue_name, meta_exc,
+            )
+            try:
+                await message.reject(requeue=False)
+            except Exception:  # noqa: BLE001
+                pass
 
 
 async def run_receiver(
@@ -110,7 +169,8 @@ async def run_receiver(
             routing_key=routing_key,
             exchange_name=exchange,
         )
-        consumer = partial(handler, sf=sf_client) if requires_sf else handler
+        inner = partial(handler, sf=sf_client) if requires_sf else handler
+        consumer = partial(_wrap_handler, inner, queue_name)
         await queue.consume(consumer)
 
     logger.info("Receiver started. Listening on all configured queues.")

@@ -12,9 +12,9 @@ from typing import TYPE_CHECKING
 import aio_pika
 
 from src import sender, xml_validator
+from src.handlers._exceptions import MissingDependencyError
 from src.handlers._facturatie_helpers import _build_facturatie_user_conflict_data
 from src.handlers._helpers import _normalize_optional_text
-from src.handlers._transport import _handle_out_of_order_deferral, _handle_processing_error
 from src.salesforce.contacts import (
     _build_updated_user_data,
     _build_user_deactivation_data,
@@ -46,7 +46,7 @@ async def handle(
     Behaviour:
     - Validate XML against schema.
     - Resolve the Contact strictly by CRM_ID__c.
-    - Requeue unknown CRM identities so out-of-order create/update can recover.
+    - Raise MissingDependencyError on unknown CRM identities (TTL-DLX deferral).
     - Ack ambiguous CRM identities without retry.
     - Publish crm.user.conflict on email collisions.
     - If `isActive=false`, soft-delete the Contact and publish crm.user.deactivated.
@@ -55,7 +55,7 @@ async def handle(
     - Specialized existing roles (ADMIN/SPEAKER/EVENT_MANAGER/CASHIER/BAR_STAFF)
       protect Role__c and Company_ID__c from Facturatie-side overwrites.
     - Invalid XML: rejected without requeue.
-    - Other errors: requeued.
+    - Other errors: bubble to _wrap_handler for retry/DLQ routing.
     """
     try:
         xml = xml_validator.validate(message.body)
@@ -64,96 +64,87 @@ async def handle(
         await message.reject(requeue=False)
         return
 
-    try:
-        email = xml.findtext("email") or ""
-        crm_id = xml.findtext("id") or ""
-        is_active = xml.findtext("isActive") in ("true", "1")
+    email = xml.findtext("email") or ""
+    crm_id = xml.findtext("id") or ""
+    is_active = xml.findtext("isActive") in ("true", "1")
 
-        crm_match_status, existing_contact = await get_contact_match_by_crm_id(sf, crm_id)
-        if crm_match_status == "none":
-            await _handle_out_of_order_deferral(
-                "FacturatieUserUpdated",
-                message,
-                identifier_label="CRM_ID__c",
-                identifier_value=crm_id,
-            )
-            return
+    crm_match_status, existing_contact = await get_contact_match_by_crm_id(sf, crm_id)
+    if crm_match_status == "none":
+        raise MissingDependencyError("CRM_ID__c", crm_id)
 
-        if crm_match_status == "ambiguous":
-            logger.warning(
-                "FacturatieUserUpdated ignored — ambiguous CRM_ID__c %s in Salesforce",
-                crm_id,
-            )
-            await message.ack()
-            return
-
-        email_match_status, existing_by_email = await get_contact_match_by_email(sf, email)
-        if email_match_status == "ambiguous":
-            logger.warning(
-                "FacturatieUserUpdated conflict — email %s is ambiguous in Salesforce",
-                email,
-            )
-            await sender.publish_user_conflict(
-                _build_facturatie_user_conflict_data(email, existing_contact, xml)
-            )
-            await message.ack()
-            return
-
-        if email_match_status == "unique" and existing_by_email["Id"] != existing_contact["Id"]:
-            logger.warning(
-                "FacturatieUserUpdated conflict — email %s already linked to another Contact",
-                email,
-            )
-            await sender.publish_user_conflict(
-                _build_facturatie_user_conflict_data(email, existing_by_email, xml)
-            )
-            await message.ack()
-            return
-
-        contact = existing_contact
-        if not is_active:
-            contact = await deactivate_contact_record(
-                sf, contact, log_value=f"CRM_ID__c {crm_id}",
-            )
-            deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            await sender.publish_user_deactivated(
-                _build_user_deactivation_data(contact, deactivated_at),
-            )
-            logger.info(
-                "Published crm.user.deactivated for Facturatie user %s (isActive=false on update)",
-                email,
-            )
-            await message.ack()
-            return
-
-        contact = await update_facturatie_contact(
-            sf,
-            contact,
-            email=email,
-            first_name=xml.findtext("firstName") or "",
-            last_name=xml.findtext("lastName") or "",
-            phone=_normalize_optional_text(xml.findtext("phone")),
-            street=_normalize_optional_text(xml.findtext("street")),
-            house_number=_normalize_optional_text(xml.findtext("houseNumber")),
-            postal_code=_normalize_optional_text(xml.findtext("postalCode")),
-            city=_normalize_optional_text(xml.findtext("city")),
-            country=_normalize_optional_text(xml.findtext("country")),
-            role=xml.findtext("role") or "",
-            company_id=_normalize_optional_text(xml.findtext("companyId")),
+    if crm_match_status == "ambiguous":
+        logger.warning(
+            "FacturatieUserUpdated ignored — ambiguous CRM_ID__c %s in Salesforce",
+            crm_id,
         )
-        if not _get_contact_is_active(contact):
-            reactivation_update = await apply_is_active(sf, {}, True)
-            if reactivation_update:
-                contact_id = contact["Id"]
-                await asyncio.to_thread(sf.Contact.update, contact_id, reactivation_update)
-                contact = await asyncio.to_thread(sf.Contact.get, contact_id)
-                logger.info(
-                    "Reactivated Contact %s for Facturatie user %s (isActive=true on update)",
-                    contact_id,
-                    email,
-                )
-        await sender.publish_user_updated(_build_updated_user_data(contact))
-        logger.info("Published crm.user.updated for Facturatie user %s", email)
         await message.ack()
-    except Exception as exc:  # noqa: BLE001
-        await _handle_processing_error("FacturatieUserUpdated", message, exc)
+        return
+
+    email_match_status, existing_by_email = await get_contact_match_by_email(sf, email)
+    if email_match_status == "ambiguous":
+        logger.warning(
+            "FacturatieUserUpdated conflict — email %s is ambiguous in Salesforce",
+            email,
+        )
+        await sender.publish_user_conflict(
+            _build_facturatie_user_conflict_data(email, existing_contact, xml)
+        )
+        await message.ack()
+        return
+
+    if email_match_status == "unique" and existing_by_email["Id"] != existing_contact["Id"]:
+        logger.warning(
+            "FacturatieUserUpdated conflict — email %s already linked to another Contact",
+            email,
+        )
+        await sender.publish_user_conflict(
+            _build_facturatie_user_conflict_data(email, existing_by_email, xml)
+        )
+        await message.ack()
+        return
+
+    contact = existing_contact
+    if not is_active:
+        contact = await deactivate_contact_record(
+            sf, contact, log_value=f"CRM_ID__c {crm_id}",
+        )
+        deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        await sender.publish_user_deactivated(
+            _build_user_deactivation_data(contact, deactivated_at),
+        )
+        logger.info(
+            "Published crm.user.deactivated for Facturatie user %s (isActive=false on update)",
+            email,
+        )
+        await message.ack()
+        return
+
+    contact = await update_facturatie_contact(
+        sf,
+        contact,
+        email=email,
+        first_name=xml.findtext("firstName") or "",
+        last_name=xml.findtext("lastName") or "",
+        phone=_normalize_optional_text(xml.findtext("phone")),
+        street=_normalize_optional_text(xml.findtext("street")),
+        house_number=_normalize_optional_text(xml.findtext("houseNumber")),
+        postal_code=_normalize_optional_text(xml.findtext("postalCode")),
+        city=_normalize_optional_text(xml.findtext("city")),
+        country=_normalize_optional_text(xml.findtext("country")),
+        role=xml.findtext("role") or "",
+        company_id=_normalize_optional_text(xml.findtext("companyId")),
+    )
+    if not _get_contact_is_active(contact):
+        reactivation_update = await apply_is_active(sf, {}, True)
+        if reactivation_update:
+            contact_id = contact["Id"]
+            await asyncio.to_thread(sf.Contact.update, contact_id, reactivation_update)
+            contact = await asyncio.to_thread(sf.Contact.get, contact_id)
+            logger.info(
+                "Reactivated Contact %s for Facturatie user %s (isActive=true on update)",
+                contact_id,
+                email,
+            )
+    await sender.publish_user_updated(_build_updated_user_data(contact))
+    logger.info("Published crm.user.updated for Facturatie user %s", email)
+    await message.ack()

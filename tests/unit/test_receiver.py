@@ -633,7 +633,7 @@ class TestHandleRegistration:
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_salesforce_create_failure_requeues(self, sf_mock):
+    async def test_salesforce_create_failure_bubbles_to_wrap_handler(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_REG_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
@@ -645,12 +645,11 @@ class TestHandleRegistration:
             from src.receiver import handle_registration
 
             msg = _make_message(VALID_REG_XML)
-            await handle_registration(msg, sf_mock)
+            with pytest.raises(Exception, match="SF Create Down"):
+                await handle_registration(msg, sf_mock)
 
             mock_publish.assert_not_called()
-            # Transient error → republish acks original + publishes new copy
-            # with incremented x-retry-count (instead of raw reject(requeue=True)).
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
     @pytest.mark.asyncio
@@ -754,8 +753,8 @@ class TestHandleRegistration:
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_retry_path_publish_failure_requeues(self, sf_mock):
-        """If publish fails during retry (same registrationId), message must be requeued."""
+    async def test_retry_path_publish_failure_bubbles_to_wrap_handler(self, sf_mock):
+        """If publish fails during retry (same registrationId), exception must bubble."""
         parsed_xml = etree.fromstring(VALID_REG_XML)
 
         with (
@@ -772,12 +771,11 @@ class TestHandleRegistration:
             from src.receiver import handle_registration
 
             msg = _make_message(VALID_REG_XML)
-            await handle_registration(msg, sf_mock)
+            with pytest.raises(Exception, match="Publish failed"):
+                await handle_registration(msg, sf_mock)
 
             mock_create.assert_not_called()
-            # Transient error → republish acks original + publishes new copy
-            # with incremented x-retry-count (instead of raw reject(requeue=True)).
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
 
@@ -1195,7 +1193,7 @@ class TestHandlePlanningUserCreated:
             assert "isActive=False" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_facturatie_user_created_publish_failure_requeues(self, sf_mock):
+    async def test_facturatie_user_created_publish_failure_bubbles_to_wrap_handler(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_CREATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
@@ -1206,11 +1204,10 @@ class TestHandlePlanningUserCreated:
             from src.receiver import handle_facturatie_user_created
 
             msg = _make_message(VALID_FACTURATIE_USER_CREATED_XML)
-            await handle_facturatie_user_created(msg, sf_mock)
+            with pytest.raises(Exception, match="publish failed"):
+                await handle_facturatie_user_created(msg, sf_mock)
 
-            # Transient error → republish acks original + publishes new copy
-            # with incremented x-retry-count (instead of raw reject(requeue=True)).
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1403,28 +1400,26 @@ class TestHandleFacturatieUserUpdated:
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_unknown_crm_id_is_requeued_without_publish(self, sf_mock, caplog):
+    async def test_unknown_crm_id_raises_missing_dependency(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_UPDATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.facturatie_user_updated.get_contact_match_by_crm_id", return_value=("none", None)),
-            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
-            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
-            caplog.at_level(logging.WARNING),
         ):
+            from src.handlers._exceptions import MissingDependencyError
             from src.receiver import handle_facturatie_user_updated
 
             msg = _make_message(VALID_FACTURATIE_USER_UPDATED_XML)
-            await handle_facturatie_user_updated(msg, sf_mock)
+            with pytest.raises(MissingDependencyError) as excinfo:
+                await handle_facturatie_user_updated(msg, sf_mock)
 
+            assert excinfo.value.identifier_label == "CRM_ID__c"
             mock_publish.assert_not_called()
             mock_conflict.assert_not_called()
-            mock_republish.assert_awaited_once_with(msg, 1)
             msg.reject.assert_not_called()
-            assert "FacturatieUserUpdated deferred" in caplog.text
-            assert "CRM_ID__c" in caplog.text
+            msg.ack.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_ambiguous_crm_id_is_acked_without_publish(self, sf_mock, caplog):
@@ -1537,7 +1532,7 @@ class TestHandleFacturatieUserUpdated:
             assert "isActive=false on update" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_publish_failure_requeues(self, sf_mock):
+    async def test_publish_failure_bubbles_to_wrap_handler(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_UPDATED_XML)
         existing_contact = {**FACTURATIE_CONTACT_RETURN}
         with (
@@ -1550,9 +1545,10 @@ class TestHandleFacturatieUserUpdated:
             from src.receiver import handle_facturatie_user_updated
 
             msg = _make_message(VALID_FACTURATIE_USER_UPDATED_XML)
-            await handle_facturatie_user_updated(msg, sf_mock)
+            with pytest.raises(Exception, match="publish failed"):
+                await handle_facturatie_user_updated(msg, sf_mock)
 
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1605,26 +1601,24 @@ class TestHandleFacturatieUserDeactivated:
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_unknown_crm_id_is_requeued_without_publish(self, sf_mock, caplog):
+    async def test_unknown_crm_id_raises_missing_dependency(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_DEACTIVATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.facturatie_user_deactivated.get_contact_match_by_crm_id", return_value=("none", None)),
-            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
-            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.sender.publish_user_deactivated") as mock_publish,
-            caplog.at_level(logging.WARNING),
         ):
+            from src.handlers._exceptions import MissingDependencyError
             from src.receiver import handle_facturatie_user_deactivated
 
             msg = _make_message(VALID_FACTURATIE_USER_DEACTIVATED_XML)
-            await handle_facturatie_user_deactivated(msg, sf_mock)
+            with pytest.raises(MissingDependencyError) as excinfo:
+                await handle_facturatie_user_deactivated(msg, sf_mock)
 
+            assert excinfo.value.identifier_label == "CRM_ID__c"
             mock_publish.assert_not_called()
-            mock_republish.assert_awaited_once_with(msg, 1)
             msg.reject.assert_not_called()
-            assert "FacturatieUserDeactivated deferred" in caplog.text
-            assert "CRM_ID__c" in caplog.text
+            msg.ack.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_ambiguous_crm_id_is_acked_without_publish(self, sf_mock, caplog):
@@ -1680,7 +1674,7 @@ class TestHandleFacturatieUserDeactivated:
             msg.reject.assert_called_once_with(requeue=False)
 
     @pytest.mark.asyncio
-    async def test_salesforce_failure_requeues(self, sf_mock):
+    async def test_salesforce_failure_bubbles_to_wrap_handler(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_FACTURATIE_USER_DEACTIVATED_XML)
         existing_contact = {**FACTURATIE_CONTACT_RETURN}
         with (
@@ -1692,10 +1686,11 @@ class TestHandleFacturatieUserDeactivated:
             from src.receiver import handle_facturatie_user_deactivated
 
             msg = _make_message(VALID_FACTURATIE_USER_DEACTIVATED_XML)
-            await handle_facturatie_user_deactivated(msg, sf_mock)
+            with pytest.raises(Exception, match="SF Down"):
+                await handle_facturatie_user_deactivated(msg, sf_mock)
 
             mock_publish.assert_not_called()
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
 
@@ -2150,22 +2145,22 @@ class TestHandleFacturatieCompanyUpdated:
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_unknown_crm_id_is_requeued(self, sf_mock):
+    async def test_unknown_crm_id_raises_missing_dependency(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_FACTURATIE_COMPANY_UPDATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.facturatie_company_updated.get_account_match_by_crm_id", return_value=("none", None)),
-            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
-            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.sender.publish_company_updated") as mock_publish,
         ):
+            from src.handlers._exceptions import MissingDependencyError
             from src.receiver import handle_facturatie_company_updated
 
             msg = _make_message(VALID_FACTURATIE_COMPANY_UPDATED_XML)
-            await handle_facturatie_company_updated(msg, sf_mock)
+            with pytest.raises(MissingDependencyError) as excinfo:
+                await handle_facturatie_company_updated(msg, sf_mock)
 
+            assert excinfo.value.identifier_label == "CRM_ID__c"
             mock_publish.assert_not_called()
-            mock_republish.assert_awaited_once_with(msg, 1)
 
     @pytest.mark.asyncio
     async def test_invalid_xml_rejected(self, sf_mock):
@@ -2208,22 +2203,22 @@ class TestHandleFacturatieCompanyDeactivated:
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_unknown_crm_id_is_requeued(self, sf_mock):
+    async def test_unknown_crm_id_raises_missing_dependency(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_FACTURATIE_COMPANY_DEACTIVATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.facturatie_company_deactivated.get_account_match_by_crm_id", return_value=("none", None)),
-            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
-            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.sender.publish_company_deactivated") as mock_publish,
         ):
+            from src.handlers._exceptions import MissingDependencyError
             from src.receiver import handle_facturatie_company_deactivated
 
             msg = _make_message(VALID_FACTURATIE_COMPANY_DEACTIVATED_XML)
-            await handle_facturatie_company_deactivated(msg, sf_mock)
+            with pytest.raises(MissingDependencyError) as excinfo:
+                await handle_facturatie_company_deactivated(msg, sf_mock)
 
+            assert excinfo.value.identifier_label == "CRM_ID__c"
             mock_publish.assert_not_called()
-            mock_republish.assert_awaited_once_with(msg, 1)
 
     @pytest.mark.asyncio
     async def test_ambiguous_crm_id_is_acked(self, sf_mock, caplog):
@@ -3003,7 +2998,7 @@ class TestHandleMailingUserCreated:
             assert "ambiguous email mia.mail@example.com" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_conflict_publish_failure_requeues(self, sf_mock):
+    async def test_conflict_publish_failure_bubbles_to_wrap_handler(self, sf_mock):
         conflicting_xml = VALID_MAILING_USER_CREATED_XML.replace(
             b"<firstName>Mia</firstName>",
             b"<firstName>Different</firstName>",
@@ -3027,11 +3022,10 @@ class TestHandleMailingUserCreated:
             from src.receiver import handle_mailing_user_created
 
             msg = _make_message(conflicting_xml)
-            await handle_mailing_user_created(msg, sf_mock)
+            with pytest.raises(Exception, match="publish failed"):
+                await handle_mailing_user_created(msg, sf_mock)
 
-            # Transient error → republish acks original + publishes new copy
-            # with incremented x-retry-count (instead of raw reject(requeue=True)).
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
 
@@ -3160,28 +3154,25 @@ class TestHandleMailingUserUpdated:
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_unknown_crm_id_is_requeued_without_publish(self, sf_mock, caplog):
+    async def test_unknown_crm_id_raises_missing_dependency(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_MAILING_USER_UPDATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("none", None)),
-            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
-            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
-            caplog.at_level(logging.WARNING),
         ):
+            from src.handlers._exceptions import MissingDependencyError
             from src.receiver import handle_mailing_user_updated
 
             msg = _make_message(VALID_MAILING_USER_UPDATED_XML)
-            await handle_mailing_user_updated(msg, sf_mock)
+            with pytest.raises(MissingDependencyError) as excinfo:
+                await handle_mailing_user_updated(msg, sf_mock)
 
+            assert excinfo.value.identifier_label == "CRM_ID__c"
             mock_publish.assert_not_called()
             mock_conflict.assert_not_called()
-            mock_republish.assert_awaited_once_with(msg, 1)
             msg.reject.assert_not_called()
-            assert "MailingUserUpdated deferred" in caplog.text
-            assert "CRM_ID__c" in caplog.text
 
     @pytest.mark.asyncio
     async def test_ambiguous_crm_id_is_acked_without_publish(self, sf_mock, caplog):
@@ -3296,7 +3287,7 @@ class TestHandleMailingUserUpdated:
             assert "isActive=false on update" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_publish_failure_requeues(self, sf_mock):
+    async def test_publish_failure_bubbles_to_wrap_handler(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_MAILING_USER_UPDATED_XML)
         existing_contact = {
             **MAILING_CONTACT_RETURN,
@@ -3311,11 +3302,10 @@ class TestHandleMailingUserUpdated:
             from src.receiver import handle_mailing_user_updated
 
             msg = _make_message(VALID_MAILING_USER_UPDATED_XML)
-            await handle_mailing_user_updated(msg, sf_mock)
+            with pytest.raises(Exception, match="publish failed"):
+                await handle_mailing_user_updated(msg, sf_mock)
 
-            # Transient error → republish acks original + publishes new copy
-            # with incremented x-retry-count (instead of raw reject(requeue=True)).
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
 
@@ -3396,31 +3386,28 @@ class TestHandlePlanningUserUpdated:
             assert "Planning_ID__c is missing" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_unknown_planning_id_is_requeued_without_email_lookup(self, sf_mock, caplog):
+    async def test_unknown_planning_id_raises_missing_dependency(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_PLANNING_USER_UPDATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.planning_user_updated.has_contact_planning_id_field", return_value=True),
             patch("src.handlers.planning_user_updated.get_contact_match_by_planning_id", return_value=("none", None)),
-            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
-            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.handlers.planning_user_updated.get_contact_match_by_email") as mock_email_lookup,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
-            caplog.at_level(logging.WARNING),
         ):
+            from src.handlers._exceptions import MissingDependencyError
             from src.receiver import handle_planning_user_updated
 
             msg = _make_message(VALID_PLANNING_USER_UPDATED_XML)
-            await handle_planning_user_updated(msg, sf_mock)
+            with pytest.raises(MissingDependencyError) as excinfo:
+                await handle_planning_user_updated(msg, sf_mock)
 
+            assert excinfo.value.identifier_label == "Planning_ID__c"
             mock_email_lookup.assert_not_called()
             mock_publish.assert_not_called()
             mock_conflict.assert_not_called()
-            mock_republish.assert_awaited_once_with(msg, 1)
             msg.reject.assert_not_called()
-            assert "PlanningUserUpdated deferred" in caplog.text
-            assert "Planning_ID__c" in caplog.text
 
     @pytest.mark.asyncio
     async def test_ambiguous_planning_id_is_acked_without_publish(self, sf_mock, caplog):
@@ -3536,7 +3523,7 @@ class TestHandlePlanningUserUpdated:
             msg.reject.assert_called_once_with(requeue=False)
 
     @pytest.mark.asyncio
-    async def test_publish_failure_requeues(self, sf_mock):
+    async def test_publish_failure_bubbles_to_wrap_handler(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_PLANNING_USER_UPDATED_XML)
         existing_contact = {
             **PLANNING_CONTACT_RETURN,
@@ -3553,11 +3540,10 @@ class TestHandlePlanningUserUpdated:
             from src.receiver import handle_planning_user_updated
 
             msg = _make_message(VALID_PLANNING_USER_UPDATED_XML)
-            await handle_planning_user_updated(msg, sf_mock)
+            with pytest.raises(Exception, match="publish failed"):
+                await handle_planning_user_updated(msg, sf_mock)
 
-            # Transient error → republish acks original + publishes new copy
-            # with incremented x-retry-count (instead of raw reject(requeue=True)).
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
 
@@ -3631,27 +3617,24 @@ class TestHandlePlanningUserDeactivated:
             assert "Planning_ID__c is missing" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_unknown_planning_id_is_requeued_without_publish(self, sf_mock, caplog):
+    async def test_unknown_planning_id_raises_missing_dependency(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.planning_user_deactivated.has_contact_planning_id_field", return_value=True),
             patch("src.handlers.planning_user_deactivated.get_contact_match_by_planning_id", return_value=("none", None)),
-            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
-            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.sender.publish_user_deactivated") as mock_publish,
-            caplog.at_level(logging.WARNING),
         ):
+            from src.handlers._exceptions import MissingDependencyError
             from src.receiver import handle_planning_user_deactivated
 
             msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
-            await handle_planning_user_deactivated(msg, sf_mock)
+            with pytest.raises(MissingDependencyError) as excinfo:
+                await handle_planning_user_deactivated(msg, sf_mock)
 
+            assert excinfo.value.identifier_label == "Planning_ID__c"
             mock_publish.assert_not_called()
-            mock_republish.assert_awaited_once_with(msg, 1)
             msg.reject.assert_not_called()
-            assert "PlanningUserDeactivated deferred" in caplog.text
-            assert "Planning_ID__c" in caplog.text
 
     @pytest.mark.asyncio
     async def test_ambiguous_planning_id_is_acked_without_publish(self, sf_mock, caplog):
@@ -3758,7 +3741,7 @@ class TestHandlePlanningUserDeactivated:
             msg.reject.assert_called_once_with(requeue=False)
 
     @pytest.mark.asyncio
-    async def test_salesforce_failure_requeues(self, sf_mock):
+    async def test_salesforce_failure_bubbles_to_wrap_handler(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
         existing_contact = {
             **PLANNING_CONTACT_RETURN,
@@ -3773,16 +3756,15 @@ class TestHandlePlanningUserDeactivated:
             from src.receiver import handle_planning_user_deactivated
 
             msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
-            await handle_planning_user_deactivated(msg, sf_mock)
+            with pytest.raises(Exception, match="SF Down"):
+                await handle_planning_user_deactivated(msg, sf_mock)
 
             mock_publish.assert_not_called()
-            # Transient error → republish acks original + publishes new copy
-            # with incremented x-retry-count (instead of raw reject(requeue=True)).
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_publish_failure_requeues(self, sf_mock):
+    async def test_publish_failure_bubbles_to_wrap_handler(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_PLANNING_USER_DEACTIVATED_XML)
         existing_contact = {
             **PLANNING_CONTACT_RETURN,
@@ -3801,11 +3783,10 @@ class TestHandlePlanningUserDeactivated:
             from src.receiver import handle_planning_user_deactivated
 
             msg = _make_message(VALID_PLANNING_USER_DEACTIVATED_XML)
-            await handle_planning_user_deactivated(msg, sf_mock)
+            with pytest.raises(Exception, match="publish failed"):
+                await handle_planning_user_deactivated(msg, sf_mock)
 
-            # Transient error → republish acks original + publishes new copy
-            # with incremented x-retry-count (instead of raw reject(requeue=True)).
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
 
@@ -3854,26 +3835,23 @@ class TestHandleMailingUserDeactivated:
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_unknown_crm_id_is_requeued_without_publish(self, sf_mock, caplog):
+    async def test_unknown_crm_id_raises_missing_dependency(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_MAILING_USER_DEACTIVATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.mailing_user_deactivated.get_contact_match_by_crm_id", return_value=("none", None)),
-            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock),
-            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
             patch("src.sender.publish_user_deactivated") as mock_publish,
-            caplog.at_level(logging.WARNING),
         ):
+            from src.handlers._exceptions import MissingDependencyError
             from src.receiver import handle_mailing_user_deactivated
 
             msg = _make_message(VALID_MAILING_USER_DEACTIVATED_XML)
-            await handle_mailing_user_deactivated(msg, sf_mock)
+            with pytest.raises(MissingDependencyError) as excinfo:
+                await handle_mailing_user_deactivated(msg, sf_mock)
 
+            assert excinfo.value.identifier_label == "CRM_ID__c"
             mock_publish.assert_not_called()
-            mock_republish.assert_awaited_once_with(msg, 1)
             msg.reject.assert_not_called()
-            assert "MailingUserDeactivated deferred" in caplog.text
-            assert "CRM_ID__c" in caplog.text
 
     @pytest.mark.asyncio
     async def test_ambiguous_crm_id_is_acked_without_publish(self, sf_mock, caplog):
@@ -3932,7 +3910,7 @@ class TestHandleMailingUserDeactivated:
             msg.reject.assert_called_once_with(requeue=False)
 
     @pytest.mark.asyncio
-    async def test_salesforce_failure_requeues(self, sf_mock):
+    async def test_salesforce_failure_bubbles_to_wrap_handler(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_MAILING_USER_DEACTIVATED_XML)
         existing_contact = {
             **MAILING_CONTACT_RETURN,
@@ -3946,16 +3924,15 @@ class TestHandleMailingUserDeactivated:
             from src.receiver import handle_mailing_user_deactivated
 
             msg = _make_message(VALID_MAILING_USER_DEACTIVATED_XML)
-            await handle_mailing_user_deactivated(msg, sf_mock)
+            with pytest.raises(Exception, match="SF Down"):
+                await handle_mailing_user_deactivated(msg, sf_mock)
 
             mock_publish.assert_not_called()
-            # Transient error → republish acks original + publishes new copy
-            # with incremented x-retry-count (instead of raw reject(requeue=True)).
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_publish_failure_requeues(self, sf_mock):
+    async def test_publish_failure_bubbles_to_wrap_handler(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_MAILING_USER_DEACTIVATED_XML)
         existing_contact = {
             **MAILING_CONTACT_RETURN,
@@ -3973,11 +3950,10 @@ class TestHandleMailingUserDeactivated:
             from src.receiver import handle_mailing_user_deactivated
 
             msg = _make_message(VALID_MAILING_USER_DEACTIVATED_XML)
-            await handle_mailing_user_deactivated(msg, sf_mock)
+            with pytest.raises(Exception, match="publish failed"):
+                await handle_mailing_user_deactivated(msg, sf_mock)
 
-            # Transient error → republish acks original + publishes new copy
-            # with incremented x-retry-count (instead of raw reject(requeue=True)).
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
 
@@ -4749,7 +4725,7 @@ class TestHandleRegistrationUpdated:
             msg.reject.assert_called_once_with(requeue=False)
 
     @pytest.mark.asyncio
-    async def test_salesforce_error_requeues(self, sf_mock):
+    async def test_salesforce_error_bubbles_to_wrap_handler(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
@@ -4760,16 +4736,15 @@ class TestHandleRegistrationUpdated:
             from src.receiver import handle_registration_updated
 
             msg = _make_message(VALID_UPDATE_XML)
-            await handle_registration_updated(msg, sf_mock)
+            with pytest.raises(Exception, match="SF Down"):
+                await handle_registration_updated(msg, sf_mock)
 
             mock_publish.assert_not_called()
-            # Transient error → republish acks original + publishes new copy
-            # with incremented x-retry-count (instead of raw reject(requeue=True)).
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_publish_failure_on_update_requeues(self, sf_mock):
+    async def test_publish_failure_on_update_bubbles_to_wrap_handler(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
@@ -4781,15 +4756,14 @@ class TestHandleRegistrationUpdated:
             from src.receiver import handle_registration_updated
 
             msg = _make_message(VALID_UPDATE_XML)
-            await handle_registration_updated(msg, sf_mock)
+            with pytest.raises(Exception, match="RabbitMQ down"):
+                await handle_registration_updated(msg, sf_mock)
 
-            # Transient error → republish acks original + publishes new copy
-            # with incremented x-retry-count (instead of raw reject(requeue=True)).
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_publish_failure_on_cancel_requeues(self, sf_mock):
+    async def test_publish_failure_on_cancel_bubbles_to_wrap_handler(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_CANCEL_XML)
         existing_contact = {
             **DEACTIVATED_CONTACT_RETURN,
@@ -4810,11 +4784,10 @@ class TestHandleRegistrationUpdated:
             from src.receiver import handle_registration_updated
 
             msg = _make_message(VALID_CANCEL_XML)
-            await handle_registration_updated(msg, sf_mock)
+            with pytest.raises(Exception, match="RabbitMQ down"):
+                await handle_registration_updated(msg, sf_mock)
 
-            # Transient error → republish acks original + publishes new copy
-            # with incremented x-retry-count (instead of raw reject(requeue=True)).
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
 
@@ -4921,7 +4894,7 @@ class TestHandleSessionUpdated:
             msg.reject.assert_called_once_with(requeue=False)
 
     @pytest.mark.asyncio
-    async def test_session_update_publish_error_requeues(self, sf_mock):
+    async def test_session_update_publish_error_bubbles_to_wrap_handler(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_SESSION_UPDATED_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
@@ -4932,11 +4905,10 @@ class TestHandleSessionUpdated:
             from src.receiver import handle_session_updated
 
             msg = _make_message(VALID_SESSION_UPDATED_XML)
-            await handle_session_updated(msg, sf_mock)
+            with pytest.raises(Exception, match="RabbitMQ down"):
+                await handle_session_updated(msg, sf_mock)
 
-            # Transient error → republish acks original + publishes new copy
-            # with incremented x-retry-count (instead of raw reject(requeue=True)).
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
 
@@ -5019,11 +4991,10 @@ class TestHandlePaymentConfirmed:
             from src.receiver import handle_payment_confirmed
 
             msg = _make_message(VALID_PAYMENT_XML)
-            await handle_payment_confirmed(msg, sf_mock)
+            with pytest.raises(Exception, match="SF Down"):
+                await handle_payment_confirmed(msg, sf_mock)
 
-            # Transient error → republish acks original + publishes new copy
-            # with incremented x-retry-count (instead of raw reject(requeue=True)).
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
 
@@ -5090,7 +5061,7 @@ class TestHandleUnpaidRequested:
             msg.reject.assert_called_once_with(requeue=False)
 
     @pytest.mark.asyncio
-    async def test_unpaid_requested_salesforce_error_requeues(self, sf_mock):
+    async def test_unpaid_requested_salesforce_error_bubbles_to_wrap_handler(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_UNPAID_REQUEST_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
@@ -5100,15 +5071,14 @@ class TestHandleUnpaidRequested:
             from src.receiver import handle_unpaid_requested
 
             msg = _make_message(VALID_UNPAID_REQUEST_XML)
-            await handle_unpaid_requested(msg, sf_mock)
+            with pytest.raises(Exception, match="SF Down"):
+                await handle_unpaid_requested(msg, sf_mock)
 
-            # Transient error → republish acks original + publishes new copy
-            # with incremented x-retry-count (instead of raw reject(requeue=True)).
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_unpaid_requested_publish_error_requeues(self, sf_mock):
+    async def test_unpaid_requested_publish_error_bubbles_to_wrap_handler(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_UNPAID_REQUEST_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
@@ -5118,11 +5088,10 @@ class TestHandleUnpaidRequested:
             from src.receiver import handle_unpaid_requested
 
             msg = _make_message(VALID_UNPAID_REQUEST_XML)
-            await handle_unpaid_requested(msg, sf_mock)
+            with pytest.raises(Exception, match="RabbitMQ down"):
+                await handle_unpaid_requested(msg, sf_mock)
 
-            # Transient error → republish acks original + publishes new copy
-            # with incremented x-retry-count (instead of raw reject(requeue=True)).
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
 
@@ -5228,7 +5197,7 @@ class TestHandlePersonLookup:
             mock_publish.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_requeues_on_salesforce_error(self, sf_mock):
+    async def test_salesforce_error_bubbles_to_wrap_handler(self, sf_mock):
         parsed_xml = etree.fromstring(VALID_PERSON_LOOKUP_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
@@ -5241,11 +5210,10 @@ class TestHandlePersonLookup:
             from src.receiver import handle_person_lookup
 
             msg = _make_message(VALID_PERSON_LOOKUP_XML)
-            await handle_person_lookup(msg, sf_mock)
+            with pytest.raises(Exception, match="SF Down"):
+                await handle_person_lookup(msg, sf_mock)
 
-            # Transient error → _handle_processing_error acks original and
-            # republishes with incremented x-retry-count (no raw reject).
-            msg.ack.assert_awaited_once()
+            msg.ack.assert_not_called()
             msg.reject.assert_not_called()
 
 
@@ -5286,14 +5254,24 @@ class TestRunReceiver:
 
     @staticmethod
     def _assert_direct_callback(queue, handler):
+        # Consumers are wrapped in functools.partial(_wrap_handler, inner, queue_name).
+        # For non-sf handlers, `inner` is the handler itself.
         callback = queue.consume.call_args.args[0]
-        assert callback is handler
+        from src.receiver import _wrap_handler
+
+        assert callback.func is _wrap_handler
+        assert callback.args[0] is handler
 
     @staticmethod
     def _assert_partial_callback(queue, handler, sf_client):
+        # Consumer is partial(_wrap_handler, partial(handler, sf=sf_client), queue_name).
         callback = queue.consume.call_args.args[0]
-        assert callback.func is handler
-        assert callback.keywords["sf"] is sf_client
+        from src.receiver import _wrap_handler
+
+        assert callback.func is _wrap_handler
+        inner = callback.args[0]
+        assert inner.func is handler
+        assert inner.keywords["sf"] is sf_client
 
     @pytest.mark.asyncio
     async def test_run_receiver_registers_contract_9_queue(self):
@@ -5474,91 +5452,141 @@ class TestRunReceiver:
         assert "mailing.user.deactivated" not in queues
 
 
-class TestHandleProcessingError:
-    """Centralised error handling used by every handler's generic except-block."""
+class TestWrapHandler:
+    """Safety guarantees of the receiver's centralized failure-routing wrapper."""
 
     @pytest.fixture
     def message(self):
         msg = MagicMock()
-        msg.body = b"<Placeholder/>"
+        msg.body = b"<Probe/>"
+        msg.headers = {}
         msg.ack = AsyncMock()
         msg.reject = AsyncMock()
-        msg.headers = {}
         return msg
 
     @pytest.mark.asyncio
-    async def test_rate_limit_sleeps_and_drops_without_requeue(self, message):
-        from src.receiver import _handle_processing_error
+    async def test_no_retry_queue_acks_and_drops_without_calling_handle_failure(self, message):
+        """C9 contract: log-and-ack on any exception; never route to retry/DLQ."""
+        from src.receiver import _wrap_handler
 
-        exc = Exception("Request refused. Response content: [{'errorCode': 'REQUEST_LIMIT_EXCEEDED'}]")
-        exc.content = [{"errorCode": "REQUEST_LIMIT_EXCEEDED", "message": "TotalRequests Limit exceeded."}]
+        async def failing_handler(_msg):
+            raise RuntimeError("controlroom warning processing failed")
 
-        with patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            await _handle_processing_error("MailingUserCreated", message, exc)
+        with patch("src.receiver._handle_failure", new_callable=AsyncMock) as mock_handle_failure:
+            await _wrap_handler(
+                failing_handler, "controlroom.warning.issued", message,
+            )
 
-        mock_sleep.assert_awaited_once_with(60)
-        message.reject.assert_awaited_once_with(requeue=False)
-
-    @pytest.mark.asyncio
-    async def test_rate_limit_detected_by_string_fallback(self, message):
-        from src.receiver import _handle_processing_error
-
-        exc = RuntimeError(
-            "Salesforce query failed: REQUEST_LIMIT_EXCEEDED TotalRequests Limit exceeded."
-        )
-
-        with patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            await _handle_processing_error("FacturatieUserCreated", message, exc)
-
-        mock_sleep.assert_awaited_once_with(60)
-        message.reject.assert_awaited_once_with(requeue=False)
+        mock_handle_failure.assert_not_called()
+        message.ack.assert_awaited_once()
+        message.reject.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_transient_error_requeues_with_backoff(self, message, caplog):
-        from src.receiver import _handle_processing_error
+    async def test_no_retry_queue_swallows_ack_failure(self, message):
+        """If ack itself raises (channel closed), we must not propagate the exception."""
+        from src.receiver import _wrap_handler
+
+        message.ack = AsyncMock(side_effect=Exception("channel closed"))
+
+        async def failing_handler(_msg):
+            raise RuntimeError("boom")
+
+        with patch("src.receiver._handle_failure", new_callable=AsyncMock) as mock_handle_failure:
+            # Must not raise — _wrap_handler is the outermost layer.
+            await _wrap_handler(
+                failing_handler, "controlroom.warning.issued", message,
+            )
+
+        mock_handle_failure.assert_not_called()
+        message.ack.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_normal_queue_routes_exception_through_handle_failure(self, message):
+        """Sanity: queues NOT in _NO_RETRY_QUEUES still route via _handle_failure."""
+        from src.receiver import _wrap_handler
+
+        async def failing_handler(_msg):
+            raise RuntimeError("boom")
+
+        with patch("src.receiver._handle_failure", new_callable=AsyncMock) as mock_handle_failure:
+            await _wrap_handler(
+                failing_handler, "crm.facturatie.user.updated", message,
+            )
+
+        mock_handle_failure.assert_awaited_once()
+        call = mock_handle_failure.await_args
+        assert call.args[0] == "crm.facturatie.user.updated"
+        assert call.args[1] is message
+        assert isinstance(call.args[2], RuntimeError)
+        assert call.kwargs["work_queue"] == "crm.facturatie.user.updated"
+        # _wrap_handler does not ack/reject directly when delegating to _handle_failure;
+        # the helper itself handles message lifecycle.
+        message.ack.assert_not_called()
+        message.reject.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_meta_failure_force_rejects_when_handle_failure_raises(self, message, caplog):
+        """If _handle_failure itself raises, last-resort reject(requeue=False) prevents poison loops."""
+        from src.receiver import _wrap_handler
+
+        async def failing_handler(_msg):
+            raise RuntimeError("primary failure")
 
         with (
-            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
-            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
+            patch(
+                "src.receiver._handle_failure",
+                new_callable=AsyncMock,
+                side_effect=Exception("channel closed during retry publish"),
+            ),
             caplog.at_level(logging.ERROR),
         ):
-            await _handle_processing_error("MailingUserUpdated", message, RuntimeError("boom"))
-
-        mock_sleep.assert_awaited_once_with(1.0)
-        mock_republish.assert_awaited_once_with(message, 1)
-        message.reject.assert_not_awaited()
-        assert "attempt 1/5" in caplog.text
-        assert "sleeping 1.0s" in caplog.text
-
-    @pytest.mark.asyncio
-    async def test_transient_error_progression_reads_retry_count(self, message, caplog):
-        """After 3 previous retries, next attempt uses 2**3 = 8s backoff."""
-        from src.receiver import _handle_processing_error
-
-        message.headers = {"x-retry-count": 3}
-
-        with (
-            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
-            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
-            caplog.at_level(logging.ERROR),
-        ):
-            await _handle_processing_error("MailingUserUpdated", message, RuntimeError("still broken"))
-
-        mock_sleep.assert_awaited_once_with(8.0)
-        mock_republish.assert_awaited_once_with(message, 4)
-        assert "attempt 4/5" in caplog.text
-
-    @pytest.mark.asyncio
-    async def test_max_retry_drops_without_requeue(self, message, caplog):
-        from src.receiver import _handle_processing_error
-
-        message.headers = {"x-retry-count": 5}
-
-        with caplog.at_level(logging.ERROR):
-            await _handle_processing_error("MailingUserUpdated", message, RuntimeError("persistent failure"))
+            await _wrap_handler(
+                failing_handler, "crm.facturatie.user.updated", message,
+            )
 
         message.reject.assert_awaited_once_with(requeue=False)
-        assert "max retries (5) exceeded" in caplog.text
+        message.ack.assert_not_called()
+        assert "meta-failure" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_meta_failure_swallows_reject_failure(self, message):
+        """If both _handle_failure AND reject raise, we must not propagate either."""
+        from src.receiver import _wrap_handler
+
+        message.reject = AsyncMock(side_effect=Exception("reject also failed"))
+
+        async def failing_handler(_msg):
+            raise RuntimeError("primary failure")
+
+        with patch(
+            "src.receiver._handle_failure",
+            new_callable=AsyncMock,
+            side_effect=Exception("meta failure"),
+        ):
+            # Must not raise — last-resort fallback is best-effort.
+            await _wrap_handler(
+                failing_handler, "crm.facturatie.user.updated", message,
+            )
+
+        message.reject.assert_awaited_once_with(requeue=False)
+
+    @pytest.mark.asyncio
+    async def test_successful_handler_does_not_invoke_failure_path(self, message):
+        """Handlers that succeed must not trigger _handle_failure or reject."""
+        from src.receiver import _wrap_handler
+
+        async def ok_handler(_msg):
+            return None
+
+        with patch("src.receiver._handle_failure", new_callable=AsyncMock) as mock_handle_failure:
+            await _wrap_handler(
+                ok_handler, "crm.facturatie.user.updated", message,
+            )
+
+        mock_handle_failure.assert_not_called()
+        message.reject.assert_not_called()
+        # Handler is responsible for its own ack on success path.
+        message.ack.assert_not_called()
 
 
 class TestExponentialBackoff:
@@ -5580,106 +5608,6 @@ class TestExponentialBackoff:
         from src.receiver import _exponential_backoff_seconds
 
         assert _exponential_backoff_seconds(10, cap=5) == 5.0
-
-
-class TestHandleOutOfOrderDeferral:
-    @pytest.fixture
-    def message(self):
-        msg = MagicMock()
-        msg.body = b"<Placeholder/>"
-        msg.ack = AsyncMock()
-        msg.reject = AsyncMock()
-        msg.headers = {}
-        return msg
-
-    @pytest.mark.asyncio
-    async def test_first_attempt_sleeps_1s_and_republishes(self, message, caplog):
-        from src.receiver import _handle_out_of_order_deferral
-
-        with (
-            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
-            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
-            caplog.at_level(logging.WARNING),
-        ):
-            await _handle_out_of_order_deferral(
-                "MailingUserUpdated",
-                message,
-                identifier_label="Mailing_ID__c",
-                identifier_value="abc-123",
-            )
-
-        mock_sleep.assert_awaited_once_with(1.0)
-        mock_republish.assert_awaited_once_with(message, 1)
-        message.reject.assert_not_awaited()
-        assert "attempt 1/10" in caplog.text
-        assert "Mailing_ID__c=abc-123" in caplog.text
-
-    @pytest.mark.asyncio
-    async def test_sixth_attempt_caps_at_30s(self, message):
-        from src.receiver import _handle_out_of_order_deferral
-
-        message.headers = {"x-retry-count": 5}
-
-        with (
-            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
-            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
-        ):
-            await _handle_out_of_order_deferral(
-                "PlanningUserUpdated",
-                message,
-                identifier_label="Planning_ID__c",
-                identifier_value="xyz-789",
-            )
-
-        mock_sleep.assert_awaited_once_with(30.0)
-        mock_republish.assert_awaited_once_with(message, 6)
-        message.reject.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_attempt_counter_read_from_x_retry_count_header(self, message):
-        """Verify the counter comes from the new header, not x-death."""
-        from src.receiver import _handle_out_of_order_deferral
-
-        # x-death present but should be ignored; only x-retry-count matters.
-        message.headers = {"x-retry-count": 3, "x-death": [{"count": 99}]}
-
-        with (
-            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
-            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
-        ):
-            await _handle_out_of_order_deferral(
-                "MailingUserDeactivated",
-                message,
-                identifier_label="Mailing_ID__c",
-                identifier_value="tick-tock",
-            )
-
-        mock_sleep.assert_awaited_once_with(8.0)
-        mock_republish.assert_awaited_once_with(message, 4)
-
-    @pytest.mark.asyncio
-    async def test_max_attempts_drops_without_requeue(self, message, caplog):
-        from src.receiver import _handle_out_of_order_deferral
-
-        message.headers = {"x-retry-count": 10}
-
-        with (
-            patch("src.receiver.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
-            patch("src.handlers._transport._republish_with_retry_count", new_callable=AsyncMock) as mock_republish,
-            caplog.at_level(logging.WARNING),
-        ):
-            await _handle_out_of_order_deferral(
-                "MailingUserDeactivated",
-                message,
-                identifier_label="Mailing_ID__c",
-                identifier_value="dead-beef",
-            )
-
-        mock_sleep.assert_not_awaited()
-        mock_republish.assert_not_awaited()
-        message.reject.assert_awaited_once_with(requeue=False)
-        assert "deferred 10 times" in caplog.text
-        assert "dropping" in caplog.text
 
 
 class TestRepublishWithRetryCount:
