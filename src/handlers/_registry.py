@@ -22,6 +22,7 @@ from src.handlers import (
     facturatie_user_created,
     facturatie_user_deactivated,
     facturatie_user_updated,
+    frontend_company_created,
     frontend_registration_created,
     frontend_registration_updated,
     kassa_payment_confirmed,
@@ -55,6 +56,10 @@ QUEUE_REGISTRY: list[tuple[str, HandlerFn, bool, str | None, bool, str | None]] 
      "frontend.registration.created", True, "user.topic"),
     ("crm.frontend.registration.updated", frontend_registration_updated.handle, True,
      "frontend.registration.updated", True, "user.topic"),
+
+    # Contract 3 — Frontend → CRM: company created
+    ("crm.frontend.company.created", frontend_company_created.handle, True,
+     "frontend.company.created", True, "user.topic"),
 
     # Contracts 24/25/26 — Facturatie → CRM: user sync (consumer-prefixed queues)
     ("crm.facturatie.user.created", facturatie_user_created.handle, True,
@@ -112,8 +117,6 @@ QUEUE_REGISTRY: list[tuple[str, HandlerFn, bool, str | None, bool, str | None]] 
 # appear in this dict via PENDING_EXCHANGES + the QUEUE_REGISTRY-derived
 # computed dict in receiver.py.
 PENDING_EXCHANGES: dict[str, str] = {
-    # Contract 3 — Frontend → CRM: create company (no handler yet, waits on PM decision)
-    "frontend.company.created": "user.topic",
     # Contract 5a — Facturatie → CRM: request company data (no handler yet)
     "facturatie.company.requested": "invoice.topic",
     # Contract 12 — IoT → CRM: badge linked (R2, no handler yet)
