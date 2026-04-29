@@ -30,6 +30,25 @@ class TestLoadSchema:
 
 
 class TestValidate:
+    def test_accepts_namespaced_registration_with_lowercase_role(self) -> None:
+        xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<Registration xmlns='urn:frontend:crm:contract'>
+    <registrationId>drupal-98765</registrationId>
+    <firstName>Jan</firstName>
+    <lastName>Peeters</lastName>
+    <email>jan.peeters@example.com</email>
+    <sessionId>planning-session-123</sessionId>
+    <role>visitor</role>
+    <gdprConsent>true</gdprConsent>
+    <phone>+32470123456</phone>
+    <company>Acme BV</company>
+</Registration>"""
+
+        doc = validate(xml)
+
+        assert doc.tag == "Registration"
+        assert doc.findtext("role") == "visitor"
+
     def test_accepts_valid_planning_user_deactivated_payload(self) -> None:
         xml = b"""<?xml version='1.0' encoding='utf-8'?>
 <PlanningUserDeactivated>
