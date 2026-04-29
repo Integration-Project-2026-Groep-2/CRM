@@ -38,7 +38,7 @@ class TestValidate:
     <lastName>Peeters</lastName>
     <email>jan.peeters@example.com</email>
     <sessionId>planning-session-123</sessionId>
-    <role>VISITOR</role>
+    <role>visitor</role>
     <gdprConsent>true</gdprConsent>
     <phone>+32470123456</phone>
     <company>Acme BV</company>
@@ -90,20 +90,23 @@ class TestValidate:
         with pytest.raises(ValueError, match="unexpected namespace"):
             validate(invalid_xml)
 
-    def test_rejects_registration_with_lowercase_role(self) -> None:
-        invalid_xml = b"""<?xml version='1.0' encoding='utf-8'?>
+    def test_accepts_registration_with_role_before_session_id(self) -> None:
+        xml = b"""<?xml version='1.0' encoding='utf-8'?>
 <Registration>
     <registrationId>drupal-98765</registrationId>
     <firstName>Jan</firstName>
     <lastName>Peeters</lastName>
     <email>jan.peeters@example.com</email>
-    <sessionId>planning-session-123</sessionId>
     <role>visitor</role>
+    <sessionId>planning-session-123</sessionId>
     <gdprConsent>true</gdprConsent>
 </Registration>"""
 
-        with pytest.raises(ValueError, match="XML validation failed"):
-            validate(invalid_xml)
+        doc = validate(xml)
+
+        assert doc.tag == "Registration"
+        assert doc.findtext("sessionId") == "planning-session-123"
+        assert doc.findtext("role") == "VISITOR"
 
     def test_accepts_valid_planning_user_deactivated_payload(self) -> None:
         xml = b"""<?xml version='1.0' encoding='utf-8'?>
