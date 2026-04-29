@@ -30,7 +30,7 @@ class TestLoadSchema:
 
 
 class TestValidate:
-    def test_accepts_namespaced_registration_with_lowercase_role(self) -> None:
+    def test_accepts_namespaced_registration_with_allowed_frontend_namespace(self) -> None:
         xml = b"""<?xml version='1.0' encoding='utf-8'?>
 <Registration xmlns='urn:frontend:crm:contract'>
     <registrationId>drupal-98765</registrationId>
@@ -38,7 +38,7 @@ class TestValidate:
     <lastName>Peeters</lastName>
     <email>jan.peeters@example.com</email>
     <sessionId>planning-session-123</sessionId>
-    <role>visitor</role>
+    <role>VISITOR</role>
     <gdprConsent>true</gdprConsent>
     <phone>+32470123456</phone>
     <company>Acme BV</company>
@@ -47,7 +47,63 @@ class TestValidate:
         doc = validate(xml)
 
         assert doc.tag == "Registration"
-        assert doc.findtext("role") == "visitor"
+        assert doc.findtext("role") == "VISITOR"
+
+    def test_rejects_namespaced_registration_with_unknown_namespace(self) -> None:
+        invalid_xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<Registration xmlns='urn:malicious:foo'>
+    <registrationId>drupal-98765</registrationId>
+    <firstName>Jan</firstName>
+    <lastName>Peeters</lastName>
+    <email>jan.peeters@example.com</email>
+    <sessionId>planning-session-123</sessionId>
+    <role>VISITOR</role>
+    <gdprConsent>true</gdprConsent>
+</Registration>"""
+
+        with pytest.raises(ValueError, match="unexpected namespace"):
+            validate(invalid_xml)
+
+    def test_rejects_namespaced_attributes_on_allowed_frontend_namespace(self) -> None:
+        invalid_xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<Registration xmlns='urn:frontend:crm:contract' xmlns:xsi='http://www.w3.org/2001/XMLSchema-instance'>
+    <registrationId>drupal-98765</registrationId>
+    <firstName>Jan</firstName>
+    <lastName>Peeters</lastName>
+    <email>jan.peeters@example.com</email>
+    <sessionId>planning-session-123</sessionId>
+    <role xsi:type='xsd:string'>VISITOR</role>
+    <gdprConsent>true</gdprConsent>
+</Registration>"""
+
+        with pytest.raises(ValueError, match="namespaced attributes"):
+            validate(invalid_xml)
+
+    def test_rejects_namespaced_non_frontend_contract(self) -> None:
+        invalid_xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<PlanningUserDeactivated xmlns='urn:frontend:crm:contract'>
+    <id>423e4567-e89b-42d3-a456-426614174030</id>
+    <email>sofie.declercq@example.com</email>
+    <deactivatedAt>2026-04-15T16:00:00Z</deactivatedAt>
+</PlanningUserDeactivated>"""
+
+        with pytest.raises(ValueError, match="unexpected namespace"):
+            validate(invalid_xml)
+
+    def test_rejects_registration_with_lowercase_role(self) -> None:
+        invalid_xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<Registration>
+    <registrationId>drupal-98765</registrationId>
+    <firstName>Jan</firstName>
+    <lastName>Peeters</lastName>
+    <email>jan.peeters@example.com</email>
+    <sessionId>planning-session-123</sessionId>
+    <role>visitor</role>
+    <gdprConsent>true</gdprConsent>
+</Registration>"""
+
+        with pytest.raises(ValueError, match="XML validation failed"):
+            validate(invalid_xml)
 
     def test_accepts_valid_planning_user_deactivated_payload(self) -> None:
         xml = b"""<?xml version='1.0' encoding='utf-8'?>
