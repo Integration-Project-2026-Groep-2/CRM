@@ -13,6 +13,7 @@ Contract 32 + 22: planning.user.deactivated → crm.user.deactivated
 """
 
 import logging
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -542,7 +543,7 @@ class TestHandleRegistration:
     # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_duplicate_email_logged_and_ignored(self, sf_mock, caplog):
+    async def test_duplicate_email_publishes_user_conflict(self, sf_mock, caplog):
         parsed_xml = etree.fromstring(VALID_REG_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
@@ -554,9 +555,11 @@ class TestHandleRegistration:
                     "FirstName": "Other",
                     "LastName": "Person",
                     "Role__c": "VISITOR",
+                    "Company_ID__c": "Old Co",
                 },
             ),
             patch("src.handlers.frontend_registration_created.create_contact") as mock_create,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
             patch("src.sender.publish_user_confirmed") as mock_publish,
             patch("src.sender.publish_mail_requested"),
             caplog.at_level(logging.WARNING),
@@ -570,6 +573,24 @@ class TestHandleRegistration:
             mock_publish.assert_not_called()
             msg.ack.assert_called_once()
             assert "incompatible person fields" in caplog.text
+
+            mock_conflict.assert_called_once()
+            payload = mock_conflict.call_args.args[0]
+            assert payload["email"] == "john.doe@example.com"
+            assert payload["existingValue"] == {
+                "firstName": "Other",
+                "lastName": "Person",
+                "company": "Old Co",
+            }
+            assert payload["incomingValue"] == {
+                "firstName": "John",
+                "lastName": "Doe",
+                "company": "Acme Corp",
+            }
+            assert re.match(
+                r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$",
+                payload["detectedAt"],
+            ), f"detectedAt={payload['detectedAt']!r} is not a UTC ISO-8601 timestamp"
 
     @pytest.mark.asyncio
     async def test_existing_contact_with_new_registration_reuses_contact_and_creates_session_link(self, sf_mock):
