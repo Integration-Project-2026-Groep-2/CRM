@@ -37,6 +37,20 @@ _SECURE_PARSER = etree.XMLParser(
 )
 
 
+def _strip_element_namespaces(root: etree._Element) -> etree._Element:
+    """Normalize an XML tree to local names so no-namespace XSDs can validate it.
+
+    Frontend occasionally sends payloads with a default namespace on the root
+    (e.g. ``xmlns=\"urn:frontend:crm:contract\"``), while our schema is defined
+    without a targetNamespace. This helper strips element namespaces before
+    validation so both forms remain accepted.
+    """
+    for element in root.iter():
+        if isinstance(element.tag, str) and element.tag.startswith("{"):
+            element.tag = element.tag.split("}", 1)[1]
+    return root
+
+
 def load_schema(path: Path = SCHEMA_PATH) -> etree.XMLSchema:
     """Load and parse an XSD schema file.
 
@@ -91,6 +105,7 @@ def validate(xml_bytes: bytes) -> etree._Element:
     """
     schema = _get_schema()
     doc = etree.fromstring(xml_bytes, _SECURE_PARSER)
+    doc = _strip_element_namespaces(doc)
     if not schema.validate(doc):
         raise ValueError(f"XML validation failed: {schema.error_log}")
     return doc
