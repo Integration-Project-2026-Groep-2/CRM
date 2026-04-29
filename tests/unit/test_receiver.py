@@ -561,6 +561,7 @@ class TestHandleRegistration:
             patch("src.handlers.frontend_registration_created.create_contact") as mock_create,
             patch("src.sender.publish_user_conflict") as mock_conflict,
             patch("src.sender.publish_user_confirmed") as mock_publish,
+            patch("src.sender.publish_user_conflict") as mock_conflict,
             patch("src.sender.publish_mail_requested"),
             caplog.at_level(logging.WARNING),
         ):
@@ -571,6 +572,7 @@ class TestHandleRegistration:
 
             mock_create.assert_not_called()
             mock_publish.assert_not_called()
+            mock_conflict.assert_called_once()
             msg.ack.assert_called_once()
             assert "incompatible person fields" in caplog.text
 
