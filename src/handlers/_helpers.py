@@ -89,6 +89,28 @@ def _has_conflicting_optional_value(existing_value: str | None, incoming_value: 
     return normalized_existing is not None and normalized_existing != normalized_incoming
 
 
+def _build_registration_conflict_data(email: str, contact: dict, xml: etree._Element) -> dict:
+    """Build a Contract 15 payload from an existing Contact and incoming Contract 1 registration.
+
+    `detectedAt` is minted server-side: the inbound Registration XSD has no
+    `detectedAt` element, so the timestamp must be generated here.
+    """
+    return {
+        "email": email,
+        "existingValue": _build_conflict_value(
+            contact.get("FirstName"),
+            contact.get("LastName"),
+            contact.get("Company_ID__c"),
+        ),
+        "incomingValue": _build_conflict_value(
+            xml.findtext("firstName"),
+            xml.findtext("lastName"),
+            xml.findtext("company"),
+        ),
+        "detectedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Contact identity / registration compatibility (frontend registration reuse)
 # ---------------------------------------------------------------------------

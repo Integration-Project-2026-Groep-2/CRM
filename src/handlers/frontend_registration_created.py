@@ -12,6 +12,7 @@ import aio_pika
 from src import sender, xml_validator
 from src.handlers._helpers import (
     _build_mail_display_name,
+    _build_registration_conflict_data,
     _registration_fields_are_compatible,
 )
 from src.salesforce.contacts import _build_user_data
@@ -67,6 +68,9 @@ async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
                 "Conflict: email %s exists with incompatible person fields for registrationId %s",
                 email,
                 registration_id,
+            )
+            await sender.publish_user_conflict(
+                _build_registration_conflict_data(email, existing_contact, xml)
             )
             await message.ack()
             return
