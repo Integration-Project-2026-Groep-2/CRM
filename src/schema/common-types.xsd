@@ -78,6 +78,8 @@
     <xs:restriction base="xs:string">
       <xs:enumeration value="VISITOR"/>
       <xs:enumeration value="COMPANY_CONTACT"/>
+      <xs:enumeration value="visitor"/>
+      <xs:enumeration value="company_contact"/>
     </xs:restriction>
   </xs:simpleType>
 
