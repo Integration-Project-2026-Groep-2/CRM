@@ -27,8 +27,6 @@ if TYPE_CHECKING:
     from simple_salesforce import Salesforce
 
 logger = logging.getLogger(__name__)
-
-
 async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
     """Contract 1 — Frontend -> CRM: new registration.
 

@@ -122,8 +122,6 @@ def _build_registration_conflict_data(email: str, contact: dict, xml: etree._Ele
         ),
         "detectedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-
-
 # ---------------------------------------------------------------------------
 # Contact identity / registration compatibility (frontend registration reuse)
 # ---------------------------------------------------------------------------
