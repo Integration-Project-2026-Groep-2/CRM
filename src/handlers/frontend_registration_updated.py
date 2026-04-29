@@ -16,6 +16,7 @@ from src.handlers._helpers import (
     _build_company_deactivation_data,
     _contact_has_native_identity,
     _normalize_optional_text,
+    _normalize_registration_role,
 )
 from src.salesforce.contacts import _build_updated_user_data, _build_user_deactivation_data
 from src.salesforce_client import (
@@ -104,6 +105,8 @@ async def _handle_update(
         for xml_field, sf_field in field_mapping.items():
             value = updated_fields.findtext(xml_field)
             if value is not None:
+                if xml_field == "role":
+                    value = _normalize_registration_role(value)
                 update_data[sf_field] = value
 
     contact = await upsert_contact_by_email(sf, email, update_data)

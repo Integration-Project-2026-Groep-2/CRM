@@ -35,6 +35,19 @@ def _normalize_email_for_compare(value: str | None) -> str | None:
     return normalized.casefold()
 
 
+def _normalize_registration_role(value: str | None) -> str | None:
+    """Normalize frontend role values to the canonical Salesforce picklist form."""
+    normalized = _normalize_optional_text(value)
+    if normalized is None:
+        return None
+
+    role_map = {
+        "visitor": "VISITOR",
+        "company_contact": "COMPANY_CONTACT",
+    }
+    return role_map.get(normalized.casefold(), normalized)
+
+
 # ---------------------------------------------------------------------------
 # Name formatting
 # ---------------------------------------------------------------------------
@@ -109,8 +122,6 @@ def _build_registration_conflict_data(email: str, contact: dict, xml: etree._Ele
         ),
         "detectedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-
-
 # ---------------------------------------------------------------------------
 # Contact identity / registration compatibility (frontend registration reuse)
 # ---------------------------------------------------------------------------
@@ -129,7 +140,7 @@ def _registration_fields_are_compatible(contact: dict, xml: etree._Element) -> b
     comparisons = (
         ("FirstName", xml.findtext("firstName")),
         ("LastName", xml.findtext("lastName")),
-        ("Role__c", xml.findtext("role")),
+        ("Role__c", _normalize_registration_role(xml.findtext("role"))),
     )
     for sf_field, incoming_value in comparisons:
         normalized_existing = _normalize_optional_text(contact.get(sf_field))
