@@ -27,7 +27,6 @@ async def main():
     <firstName>{first_name}</firstName>
     <lastName>{last_name}</lastName>
     <email>{email}</email>
-    <sessionId>SESS-001</sessionId>
     <role>VISITOR</role>
     <gdprConsent>true</gdprConsent>
     <phone>{phone}</phone>

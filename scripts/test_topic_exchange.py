@@ -60,7 +60,6 @@ INBOUND_TESTS: list[TestCase] = [
     <firstName>Exchange</firstName>
     <lastName>Test</lastName>
     <email>exchange.test@example.com</email>
-    <sessionId>SESS-001</sessionId>
     <role>VISITOR</role>
     <gdprConsent>true</gdprConsent>
 </Registration>""",
@@ -423,7 +422,6 @@ NEGATIVE_CASES: list[NegativeTestCase] = [
     <firstName>Should</firstName>
     <lastName>NotArrive</lastName>
     <email>negative@example.com</email>
-    <sessionId>SESS-001</sessionId>
     <role>VISITOR</role>
     <gdprConsent>true</gdprConsent>
 </Registration>""",

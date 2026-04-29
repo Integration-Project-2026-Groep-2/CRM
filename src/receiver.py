@@ -9,6 +9,7 @@ import aio_pika
 from aio_pika import ExchangeType
 from aio_pika.abc import AbstractChannel, AbstractRobustConnection
 
+from src import xml_validator
 from src.config import Config
 from src.handlers._registry import PENDING_EXCHANGES, QUEUE_REGISTRY
 from src.handlers._transport import _handle_failure
@@ -117,6 +118,13 @@ async def _wrap_handler(
     """
     try:
         await handler(message)
+        if xml_validator.reorder_was_applied():
+            logger.warning(
+                "frontend.reorder_applied queue=%s message_id=%s — Frontend payload accepted after element reorder; "
+                "producer is out of spec, please notify Frontend team.",
+                queue_name,
+                message.message_id,
+            )
     except Exception as exc:  # noqa: BLE001
         if queue_name in _NO_RETRY_QUEUES:
             logger.error(

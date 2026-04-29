@@ -416,7 +416,6 @@ class TestContract1Registration:
     <firstName>E2E</firstName>
     <lastName>Test</lastName>
     <email>{email}</email>
-    <sessionId>SESS-E2E-001</sessionId>
     <role>VISITOR</role>
     <gdprConsent>true</gdprConsent>
 </Registration>"""
@@ -453,7 +452,6 @@ class TestContract1Registration:
     <firstName>Mail</firstName>
     <lastName>Test</lastName>
     <email>{email}</email>
-    <sessionId>SESS-E2E-002</sessionId>
     <role>VISITOR</role>
     <gdprConsent>true</gdprConsent>
 </Registration>"""
@@ -483,7 +481,6 @@ class TestContract1Registration:
     <firstName>NoGdpr</firstName>
     <lastName>Test</lastName>
     <email>{_unique_email()}</email>
-    <sessionId>SESS-E2E-003</sessionId>
     <role>VISITOR</role>
     <gdprConsent>false</gdprConsent>
 </Registration>"""
@@ -578,7 +575,6 @@ class TestContract27MailingUserCreated:
     <firstName>Existing</firstName>
     <lastName>User</lastName>
     <email>{email}</email>
-    <sessionId>SESS-E2E-MAIL-001</sessionId>
     <role>VISITOR</role>
     <gdprConsent>true</gdprConsent>
 </Registration>"""
@@ -990,7 +986,6 @@ class TestContract2Updated:
     <firstName>Before</firstName>
     <lastName>Update</lastName>
     <email>{email}</email>
-    <sessionId>SESS-E2E-004</sessionId>
     <role>VISITOR</role>
     <gdprConsent>true</gdprConsent>
 </Registration>"""
@@ -1051,7 +1046,6 @@ class TestContract2Cancelled:
     <firstName>ToCancel</firstName>
     <lastName>User</lastName>
     <email>{email}</email>
-    <sessionId>SESS-E2E-005</sessionId>
     <role>VISITOR</role>
     <gdprConsent>true</gdprConsent>
 </Registration>"""
@@ -1129,7 +1123,6 @@ class TestContract16PaymentConfirmed:
     <firstName>Payment</firstName>
     <lastName>Test</lastName>
     <email>{email}</email>
-    <sessionId>SESS-E2E-006</sessionId>
     <role>VISITOR</role>
     <gdprConsent>true</gdprConsent>
 </Registration>"""
@@ -1197,7 +1190,6 @@ class TestContract17UnpaidRequested:
     <firstName>Paid</firstName>
     <lastName>Person</lastName>
     <email>{paid_email}</email>
-    <sessionId>SESS-E2E-017A</sessionId>
     <role>VISITOR</role>
     <gdprConsent>true</gdprConsent>
 </Registration>"""
@@ -1207,7 +1199,6 @@ class TestContract17UnpaidRequested:
     <firstName>Unpaid</firstName>
     <lastName>Person</lastName>
     <email>{unpaid_email}</email>
-    <sessionId>SESS-E2E-017B</sessionId>
     <role>VISITOR</role>
     <gdprConsent>true</gdprConsent>
 </Registration>"""
@@ -1300,7 +1291,6 @@ class TestContract10PersonLookup:
     <firstName>Lookup</firstName>
     <lastName>Found</lastName>
     <email>{email}</email>
-    <sessionId>SESS-E2E-010A</sessionId>
     <role>VISITOR</role>
     <gdprConsent>true</gdprConsent>
 </Registration>"""

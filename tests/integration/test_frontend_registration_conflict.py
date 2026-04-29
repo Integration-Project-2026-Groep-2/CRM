@@ -39,7 +39,6 @@ VALID_REG_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <firstName>John</firstName>
     <lastName>Doe</lastName>
     <email>conflict.it@example.com</email>
-    <sessionId>SESS-IT</sessionId>
     <role>VISITOR</role>
     <gdprConsent>true</gdprConsent>
     <company>Acme Corp</company>

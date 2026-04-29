@@ -1215,7 +1215,6 @@ components:
               <firstName>Jan</firstName>
               <lastName>Janssen</lastName>
               <email>jan.janssen@example.com</email>
-              <sessionId>SESSION-001</sessionId>
               <role>VISITOR</role>
               <gdprConsent>true</gdprConsent>
               <phone>+32471234567</phone>
@@ -1228,7 +1227,6 @@ components:
               <firstName>Lien</firstName>
               <lastName>Vermeersch</lastName>
               <email>lien.vermeersch@techbedrijf.be</email>
-              <sessionId>SESSION-001</sessionId>
               <role>COMPANY_CONTACT</role>
               <gdprConsent>true</gdprConsent>
               <company>Bedrijf NV</company>
@@ -2282,7 +2280,6 @@ components:
         - firstName
         - lastName
         - email
-        - sessionId
         - role
         - gdprConsent
       properties:
@@ -2303,11 +2300,6 @@ components:
         phone:
           type: string
           description: Optioneel — internationaal formaat (+32...)
-        sessionId:
-          type: string
-          description: >-
-            Planning-sessie-id. CRM bewaart dit op de sessie-inschrijving, niet
-            op het canonieke Contact.
         role:
           type: string
           enum:
