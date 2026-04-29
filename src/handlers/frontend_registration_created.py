@@ -13,6 +13,7 @@ from src import sender, xml_validator
 from src.handlers._helpers import (
     _build_mail_display_name,
     _build_registration_conflict_data,
+    _normalize_registration_role,
     _registration_fields_are_compatible,
 )
 from src.salesforce.contacts import _build_user_data
@@ -26,8 +27,6 @@ if TYPE_CHECKING:
     from simple_salesforce import Salesforce
 
 logger = logging.getLogger(__name__)
-
-
 async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
     """Contract 1 — Frontend -> CRM: new registration.
 
@@ -55,7 +54,7 @@ async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
         await message.reject(requeue=False)
         return
 
-    role = xml.findtext("role")
+    role = _normalize_registration_role(xml.findtext("role"))
     company = xml.findtext("company")
     if role == "COMPANY_CONTACT" and not company:
         logger.warning("COMPANY_CONTACT registration without company field for %s", email)
@@ -103,7 +102,7 @@ async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
         "FirstName": xml.findtext("firstName"),
         "LastName": xml.findtext("lastName"),
         "Email": email,
-        "Role__c": xml.findtext("role"),
+        "Role__c": role,
         "GDPR_Consent__c": xml.findtext("gdprConsent") in ("true", "1"),
         "Registration_ID__c": registration_id,
     }

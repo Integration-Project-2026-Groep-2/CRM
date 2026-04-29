@@ -571,10 +571,9 @@ class TestHandleRegistration:
 
             mock_create.assert_not_called()
             mock_publish.assert_not_called()
+            mock_conflict.assert_called_once()
             msg.ack.assert_called_once()
             assert "incompatible person fields" in caplog.text
-
-            mock_conflict.assert_called_once()
             payload = mock_conflict.call_args.args[0]
             assert payload["email"] == "john.doe@example.com"
             assert payload["existingValue"] == {
@@ -770,6 +769,27 @@ class TestHandleRegistration:
             mock_publish.assert_called_once()
             user_data = mock_publish.call_args[0][0]
             assert "phone" not in user_data
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_registration_lowercase_visitor_role_normalizes_to_picklist(self, sf_mock):
+        xml_lower_role = VALID_REG_XML.replace(b"<role>VISITOR</role>", b"<role>visitor</role>")
+        parsed_xml = etree.fromstring(xml_lower_role)
+
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.handlers.frontend_registration_created.get_contact_by_email", return_value=None),
+            patch("src.handlers.frontend_registration_created.create_contact", return_value=CONTACT_RETURN) as mock_create,
+            patch("src.sender.publish_user_confirmed"),
+            patch("src.sender.publish_mail_requested"),
+        ):
+            from src.receiver import handle_registration
+
+            msg = _make_message(xml_lower_role)
+            await handle_registration(msg, sf_mock)
+
+            create_payload = mock_create.call_args.args[1]
+            assert create_payload["Role__c"] == "VISITOR"
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio

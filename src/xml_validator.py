@@ -13,6 +13,9 @@ KASSA_SCHEMA_PATH = Path(__file__).parent / "schema" / "contracts" / "kassa-user
 _schema: etree.XMLSchema | None = None
 _kassa_schema: etree.XMLSchema | None = None
 
+_ALLOWED_FRONTEND_NAMESPACE = "urn:frontend:crm:contract"
+_ALLOWED_FRONTEND_NAMESPACED_ROOTS = {"Registration", "RegistrationChange"}
+
 # Hardened parser for untrusted inbound XML.
 #
 # Defaults on lxml's standard parser block external entity resolution but still
@@ -35,6 +38,63 @@ _SECURE_PARSER = etree.XMLParser(
     load_dtd=False,
     huge_tree=False,
 )
+
+
+def _split_tag_namespace(tag: str) -> tuple[str | None, str]:
+    """Return (namespace, localname) from an lxml tag name."""
+    if tag.startswith("{"):
+        namespace, local_name = tag[1:].split("}", 1)
+        return namespace, local_name
+    return None, tag
+
+
+def _normalize_frontend_namespace_if_allowed(root: etree._Element) -> etree._Element:
+    """Strip only the known frontend namespace for specific inbound roots.
+
+    Our schemas are defined without targetNamespace. To maintain compatibility
+    with Frontend payloads that still include a default namespace, we only
+    normalize that single known namespace for the two frontend registration
+    roots. Any other namespace usage is rejected.
+    """
+    if not isinstance(root.tag, str):
+        return root
+
+    root_namespace, root_local_name = _split_tag_namespace(root.tag)
+    if root_namespace is None:
+        return root
+
+    if (
+        root_namespace != _ALLOWED_FRONTEND_NAMESPACE
+        or root_local_name not in _ALLOWED_FRONTEND_NAMESPACED_ROOTS
+    ):
+        raise ValueError(
+            f"XML validation failed: unexpected namespace '{root_namespace}' on root '{root_local_name}'"
+        )
+
+    normalized = etree.fromstring(etree.tostring(root), _SECURE_PARSER)
+    for element in normalized.iter():
+        if not isinstance(element.tag, str):
+            continue
+
+        element_namespace, element_local_name = _split_tag_namespace(element.tag)
+        if element_namespace is not None:
+            if element_namespace != _ALLOWED_FRONTEND_NAMESPACE:
+                raise ValueError(
+                    "XML validation failed: mixed element namespaces are not allowed"
+                )
+            element.tag = element_local_name
+
+        for attribute_name in element.attrib:
+            if not isinstance(attribute_name, str):
+                continue
+            attribute_namespace, _ = _split_tag_namespace(attribute_name)
+            if attribute_namespace is not None:
+                raise ValueError(
+                    "XML validation failed: namespaced attributes are not allowed"
+                )
+
+    etree.cleanup_namespaces(normalized)
+    return normalized
 
 
 def load_schema(path: Path = SCHEMA_PATH) -> etree.XMLSchema:
@@ -91,6 +151,7 @@ def validate(xml_bytes: bytes) -> etree._Element:
     """
     schema = _get_schema()
     doc = etree.fromstring(xml_bytes, _SECURE_PARSER)
+    doc = _normalize_frontend_namespace_if_allowed(doc)
     if not schema.validate(doc):
         raise ValueError(f"XML validation failed: {schema.error_log}")
     return doc
