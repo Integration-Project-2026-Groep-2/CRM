@@ -215,6 +215,7 @@ from src.handlers.facturatie_company_updated import handle as handle_facturatie_
 from src.handlers.facturatie_user_created import handle as handle_facturatie_user_created  # noqa: E402, F401
 from src.handlers.facturatie_user_deactivated import handle as handle_facturatie_user_deactivated  # noqa: E402, F401
 from src.handlers.facturatie_user_updated import handle as handle_facturatie_user_updated  # noqa: E402, F401
+from src.handlers.frontend_company_created import handle as handle_company_created  # noqa: E402, F401
 from src.handlers.frontend_registration_created import handle as handle_registration  # noqa: E402, F401
 from src.handlers.frontend_registration_updated import handle as handle_registration_updated  # noqa: E402, F401
 from src.handlers.kassa_payment_confirmed import handle as handle_payment_confirmed  # noqa: E402, F401
