@@ -15,6 +15,38 @@ _kassa_schema: etree.XMLSchema | None = None
 
 _ALLOWED_FRONTEND_NAMESPACE = "urn:frontend:crm:contract"
 _ALLOWED_FRONTEND_NAMESPACED_ROOTS = {"Registration", "RegistrationChange"}
+_ALLOWED_FRONTEND_CHILD_ORDER: dict[str, tuple[str, ...]] = {
+    "Registration": (
+        "registrationId",
+        "firstName",
+        "lastName",
+        "email",
+        "sessionId",
+        "role",
+        "gdprConsent",
+        "phone",
+        "company",
+    ),
+    "RegistrationChange": (
+        "registrationId",
+        "email",
+        "sessionId",
+        "changeType",
+        "updatedFields",
+    ),
+    "updatedFields": (
+        "firstName",
+        "lastName",
+        "email",
+        "phone",
+        "role",
+        "company",
+    ),
+}
+_FRONTEND_ROLE_NORMALIZATION = {
+    "visitor": "VISITOR",
+    "company_contact": "COMPANY_CONTACT",
+}
 
 # Hardened parser for untrusted inbound XML.
 #
@@ -97,6 +129,59 @@ def _normalize_frontend_namespace_if_allowed(root: etree._Element) -> etree._Ele
     return normalized
 
 
+def _reorder_children_if_needed(element: etree._Element) -> None:
+    """Reorder known frontend payload children into their schema sequence."""
+    expected_order = _ALLOWED_FRONTEND_CHILD_ORDER.get(str(element.tag))
+    if expected_order is None:
+        return
+
+    children = [child for child in element if isinstance(child.tag, str)]
+    if len(children) < 2:
+        return
+
+    child_map: dict[str, list[etree._Element]] = {}
+    for child in children:
+        child_map.setdefault(child.tag, []).append(child)
+
+    if not any(tag in child_map for tag in expected_order):
+        return
+
+    reordered_children: list[etree._Element] = []
+    seen_ids: set[int] = set()
+    for expected_tag in expected_order:
+        for child in child_map.get(expected_tag, []):
+            reordered_children.append(child)
+            seen_ids.add(id(child))
+
+    for child in children:
+        if id(child) not in seen_ids:
+            reordered_children.append(child)
+
+    if reordered_children != children:
+        element[:] = reordered_children
+
+
+def _normalize_frontend_registration_payload(root: etree._Element) -> etree._Element:
+    """Normalize supported frontend registration payloads before validation."""
+    if not isinstance(root.tag, str):
+        return root
+
+    for element in root.iter():
+        if not isinstance(element.tag, str):
+            continue
+
+        if element.tag == "role" and element.text is not None:
+            normalized_role = _FRONTEND_ROLE_NORMALIZATION.get(element.text.strip().casefold())
+            if normalized_role is not None:
+                element.text = normalized_role
+
+    for element in root.iter():
+        if isinstance(element.tag, str):
+            _reorder_children_if_needed(element)
+
+    return root
+
+
 def load_schema(path: Path = SCHEMA_PATH) -> etree.XMLSchema:
     """Load and parse an XSD schema file.
 
@@ -152,6 +237,7 @@ def validate(xml_bytes: bytes) -> etree._Element:
     schema = _get_schema()
     doc = etree.fromstring(xml_bytes, _SECURE_PARSER)
     doc = _normalize_frontend_namespace_if_allowed(doc)
+    doc = _normalize_frontend_registration_payload(doc)
     if not schema.validate(doc):
         raise ValueError(f"XML validation failed: {schema.error_log}")
     return doc
