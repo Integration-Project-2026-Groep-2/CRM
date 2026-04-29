@@ -50,7 +50,6 @@ async def main():
     <firstName>Docker</firstName>
     <lastName>TestUser</lastName>
     <email>{email}</email>
-    <sessionId>SESS-001</sessionId>
     <role>VISITOR</role>
     <gdprConsent>true</gdprConsent>
     <phone>+32412345678</phone>

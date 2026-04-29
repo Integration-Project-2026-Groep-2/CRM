@@ -37,7 +37,6 @@ class TestValidate:
     <firstName>Jan</firstName>
     <lastName>Peeters</lastName>
     <email>jan.peeters@example.com</email>
-    <sessionId>planning-session-123</sessionId>
     <role>visitor</role>
     <gdprConsent>true</gdprConsent>
     <phone>+32470123456</phone>
@@ -56,7 +55,6 @@ class TestValidate:
     <firstName>Jan</firstName>
     <lastName>Peeters</lastName>
     <email>jan.peeters@example.com</email>
-    <sessionId>planning-session-123</sessionId>
     <role>VISITOR</role>
     <gdprConsent>true</gdprConsent>
 </Registration>"""
@@ -71,7 +69,6 @@ class TestValidate:
     <firstName>Jan</firstName>
     <lastName>Peeters</lastName>
     <email>jan.peeters@example.com</email>
-    <sessionId>planning-session-123</sessionId>
     <role xsi:type='xsd:string'>VISITOR</role>
     <gdprConsent>true</gdprConsent>
 </Registration>"""
@@ -90,7 +87,7 @@ class TestValidate:
         with pytest.raises(ValueError, match="unexpected namespace"):
             validate(invalid_xml)
 
-    def test_accepts_registration_with_role_before_session_id(self) -> None:
+    def test_accepts_registration_with_lowercase_role_normalized(self) -> None:
         xml = b"""<?xml version='1.0' encoding='utf-8'?>
 <Registration>
     <registrationId>drupal-98765</registrationId>
@@ -98,15 +95,163 @@ class TestValidate:
     <lastName>Peeters</lastName>
     <email>jan.peeters@example.com</email>
     <role>visitor</role>
-    <sessionId>planning-session-123</sessionId>
     <gdprConsent>true</gdprConsent>
 </Registration>"""
 
         doc = validate(xml)
 
         assert doc.tag == "Registration"
-        assert doc.findtext("sessionId") == "planning-session-123"
         assert doc.findtext("role") == "VISITOR"
+
+    def test_accepts_registration_with_unordered_children(self) -> None:
+        xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<Registration>
+    <lastName>Peeters</lastName>
+    <firstName>Jan</firstName>
+    <registrationId>drupal-98765</registrationId>
+    <email>jan.peeters@example.com</email>
+    <gdprConsent>true</gdprConsent>
+    <role>VISITOR</role>
+</Registration>"""
+
+        doc = validate(xml)
+
+        assert doc.tag == "Registration"
+        assert doc.findtext("firstName") == "Jan"
+        assert doc.findtext("lastName") == "Peeters"
+
+    def test_rejects_registration_with_session_id(self) -> None:
+        """sessionId is not part of Contract 1 since 2026-04-29 — XSD must reject it."""
+        invalid_xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<Registration>
+    <registrationId>drupal-98765</registrationId>
+    <firstName>Jan</firstName>
+    <lastName>Peeters</lastName>
+    <email>jan.peeters@example.com</email>
+    <sessionId>planning-session-123</sessionId>
+    <role>VISITOR</role>
+    <gdprConsent>true</gdprConsent>
+</Registration>"""
+
+        with pytest.raises(ValueError, match="XML validation failed"):
+            validate(invalid_xml)
+
+    def test_rejects_registration_with_unknown_role(self) -> None:
+        """Lowercase role values not in normalisation map (e.g. 'speaker') must still fail."""
+        invalid_xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<Registration>
+    <registrationId>drupal-98765</registrationId>
+    <firstName>Jan</firstName>
+    <lastName>Peeters</lastName>
+    <email>jan.peeters@example.com</email>
+    <role>speaker</role>
+    <gdprConsent>true</gdprConsent>
+</Registration>"""
+
+        with pytest.raises(ValueError, match="XML validation failed"):
+            validate(invalid_xml)
+
+    def test_accepts_registration_change_with_unordered_children(self) -> None:
+        xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<RegistrationChange>
+    <registrationId>drupal-98765</registrationId>
+    <changeType>updated</changeType>
+    <sessionId>423e4567-e89b-42d3-a456-426614174030</sessionId>
+    <email>jan.peeters@example.com</email>
+</RegistrationChange>"""
+
+        doc = validate(xml)
+
+        assert doc.tag == "RegistrationChange"
+        children = [c.tag for c in doc if isinstance(c.tag, str)]
+        assert children == ["registrationId", "email", "sessionId", "changeType"]
+
+    def test_accepts_updated_fields_with_unordered_children_and_lowercase_role(self) -> None:
+        xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<RegistrationChange>
+    <email>jan.peeters@example.com</email>
+    <sessionId>423e4567-e89b-42d3-a456-426614174030</sessionId>
+    <changeType>updated</changeType>
+    <updatedFields>
+        <role>company_contact</role>
+        <firstName>Jan</firstName>
+        <lastName>Peeters</lastName>
+    </updatedFields>
+</RegistrationChange>"""
+
+        doc = validate(xml)
+
+        updated = doc.find("updatedFields")
+        assert updated is not None
+        children = [c.tag for c in updated if isinstance(c.tag, str)]
+        assert children == ["firstName", "lastName", "role"]
+        assert updated.findtext("role") == "COMPANY_CONTACT"
+
+    def test_does_not_normalize_role_in_non_frontend_payload(self) -> None:
+        """C30 PlanningUserCreated has its own role enum — our frontend
+        normaliser must not silently uppercase it. Lowercase must still fail."""
+        invalid_xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<PlanningUserCreated>
+    <id>423e4567-e89b-42d3-a456-426614174030</id>
+    <email>sofie@example.com</email>
+    <firstName>Sofie</firstName>
+    <lastName>De Clercq</lastName>
+    <role>visitor</role>
+    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
+    <createdAt>2026-04-15T16:00:00Z</createdAt>
+</PlanningUserCreated>"""
+
+        with pytest.raises(ValueError, match="XML validation failed"):
+            validate(invalid_xml)
+
+    def test_warning_log_emitted_on_actual_reorder(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<Registration>
+    <lastName>Peeters</lastName>
+    <firstName>Jan</firstName>
+    <registrationId>drupal-98765</registrationId>
+    <email>jan.peeters@example.com</email>
+    <role>VISITOR</role>
+    <gdprConsent>true</gdprConsent>
+</Registration>"""
+
+        with caplog.at_level("WARNING", logger="src.xml_validator"):
+            validate(xml)
+
+        from src.xml_validator import reorder_was_applied
+
+        assert reorder_was_applied() is True
+        assert any(
+            "frontend.reorder_applied" in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_no_warning_when_order_is_correct(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<Registration>
+    <registrationId>drupal-98765</registrationId>
+    <firstName>Jan</firstName>
+    <lastName>Peeters</lastName>
+    <email>jan.peeters@example.com</email>
+    <role>VISITOR</role>
+    <gdprConsent>true</gdprConsent>
+</Registration>"""
+
+        with caplog.at_level("WARNING", logger="src.xml_validator"):
+            validate(xml)
+
+        from src.xml_validator import reorder_was_applied
+
+        assert reorder_was_applied() is False
+        assert not any(
+            "frontend.reorder_applied" in record.getMessage()
+            for record in caplog.records
+        )
 
     def test_accepts_valid_planning_user_deactivated_payload(self) -> None:
         xml = b"""<?xml version='1.0' encoding='utf-8'?>

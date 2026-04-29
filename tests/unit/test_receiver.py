@@ -117,7 +117,6 @@ VALID_REG_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <firstName>John</firstName>
     <lastName>Doe</lastName>
     <email>john.doe@example.com</email>
-    <sessionId>SESS-001</sessionId>
     <role>VISITOR</role>
     <gdprConsent>true</gdprConsent>
     <phone>+32412345678</phone>

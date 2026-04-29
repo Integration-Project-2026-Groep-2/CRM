@@ -157,7 +157,7 @@ class TestIncludeGraph:
         (
             b"<Registration><registrationId>r1</registrationId>"
             b"<firstName>A</firstName><lastName>B</lastName>"
-            b"<email>x@y.be</email><sessionId>s1</sessionId>"
+            b"<email>x@y.be</email>"
             b"<role>VISITOR</role><gdprConsent>true</gdprConsent></Registration>",
             "Registration",
         ),

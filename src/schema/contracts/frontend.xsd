@@ -17,7 +17,6 @@
         <xs:element name="firstName"      type="xs:string"/>
         <xs:element name="lastName"       type="xs:string"/>
         <xs:element name="email"          type="EmailType"/>
-        <xs:element name="sessionId"      type="xs:string"/>
         <xs:element name="role"           type="RegistrationRoleType"/>
         <xs:element name="gdprConsent"    type="xs:boolean"/>
         <xs:element name="phone"          type="xs:string" minOccurs="0"/>

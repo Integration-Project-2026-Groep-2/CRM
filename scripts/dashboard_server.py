@@ -299,7 +299,6 @@ async def handle_crud_create(request: web.Request) -> web.Response:
     <firstName>Shift{r}</firstName>
     <lastName>Deelnemer{r}</lastName>
     <email>{email}</email>
-    <sessionId>SESS-SHIFT-001</sessionId>
     <role>VISITOR</role>
     <gdprConsent>true</gdprConsent>
     <phone>+3247{r}</phone>
