@@ -2,6 +2,13 @@
 <!--
   Kassa → CRM producer user contracts (C36-C38).
   Standalone schema for the producer payloads. Geen targetNamespace.
+
+  Mixed-naming intentional: C36/C37 gebruiken <KassaUser*> om collision met
+  Facturatie's <UserCreated>/<UserUpdated> (master schema, C24/C25) te vermijden.
+  C38 hergebruikt <UserDeactivated> uit master schema (gedeeld met C22 outbound
+  + C26 Facturatie inbound); deze file blijft daarom standalone — een
+  <xs:include> in crm-schema-v1.xsd zou een duplicate-element compile-error
+  geven op <UserDeactivated>.
 -->
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
            elementFormDefault="unqualified">
@@ -12,7 +19,7 @@
        CONTRACT 36 — Kassa → CRM: user aanmaken
        Queue: crm.kassa.user.created (routing key: kassa.user.created) | durable: true
   ============================================================ -->
-  <xs:element name="UserCreated">
+  <xs:element name="KassaUserCreated">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="userId"    type="UUIDType"/>
@@ -31,7 +38,7 @@
        CONTRACT 37 — Kassa → CRM: user bijwerken
        Queue: crm.kassa.user.updated (routing key: kassa.user.updated) | durable: true
   ============================================================ -->
-  <xs:element name="UserUpdated">
+  <xs:element name="KassaUserUpdated">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="userId"    type="UUIDType"/>

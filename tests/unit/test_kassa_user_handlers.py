@@ -6,7 +6,7 @@ import pytest
 from lxml import etree
 
 VALID_KASSA_USER_CREATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
-<UserCreated>
+<KassaUserCreated>
     <userId>523e4567-e89b-42d3-a456-426614174036</userId>
     <firstName>Karel</firstName>
     <lastName>Kassa</lastName>
@@ -15,10 +15,10 @@ VALID_KASSA_USER_CREATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <badgeCode>BADGE-036</badgeCode>
     <role>VISITOR</role>
     <createdAt>2026-04-25T09:30:00Z</createdAt>
-</UserCreated>"""
+</KassaUserCreated>"""
 
 VALID_KASSA_USER_UPDATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
-<UserUpdated>
+<KassaUserUpdated>
     <userId>523e4567-e89b-42d3-a456-426614174036</userId>
     <firstName>Karel</firstName>
     <lastName>Update</lastName>
@@ -27,7 +27,7 @@ VALID_KASSA_USER_UPDATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <badgeCode>BADGE-036A</badgeCode>
     <role>COMPANY_CONTACT</role>
     <updatedAt>2026-04-25T10:00:00Z</updatedAt>
-</UserUpdated>"""
+</KassaUserUpdated>"""
 
 VALID_KASSA_USER_DEACTIVATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
 <UserDeactivated>
