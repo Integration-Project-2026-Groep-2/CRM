@@ -1,5 +1,6 @@
 """XML validation against XSD schema using lxml."""
 
+import contextvars
 import logging
 from pathlib import Path
 
@@ -15,6 +16,49 @@ _kassa_schema: etree.XMLSchema | None = None
 
 _ALLOWED_FRONTEND_NAMESPACE = "urn:frontend:crm:contract"
 _ALLOWED_FRONTEND_NAMESPACED_ROOTS = {"Registration", "RegistrationChange"}
+_ALLOWED_FRONTEND_CHILD_ORDER: dict[str, tuple[str, ...]] = {
+    "Registration": (
+        "registrationId",
+        "firstName",
+        "lastName",
+        "email",
+        "role",
+        "gdprConsent",
+        "phone",
+        "company",
+    ),
+    "RegistrationChange": (
+        "registrationId",
+        "email",
+        "sessionId",
+        "changeType",
+        "updatedFields",
+    ),
+    "updatedFields": (
+        "firstName",
+        "lastName",
+        "email",
+        "phone",
+        "role",
+        "company",
+    ),
+}
+_FRONTEND_ROLE_NORMALIZATION = {
+    "visitor": "VISITOR",
+    "company_contact": "COMPANY_CONTACT",
+}
+
+# Set to True by _reorder_children_if_needed when it actually mutates the tree.
+# The receiver wrapper reads this via reorder_was_applied() so it can stamp an
+# x-frontend-reorder-applied header for Controlroom observability.
+_REORDER_APPLIED: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "frontend_reorder_applied", default=False
+)
+
+
+def reorder_was_applied() -> bool:
+    """Return whether the most recent validate() call mutated child order."""
+    return _REORDER_APPLIED.get()
 
 # Hardened parser for untrusted inbound XML.
 #
@@ -97,6 +141,78 @@ def _normalize_frontend_namespace_if_allowed(root: etree._Element) -> etree._Ele
     return normalized
 
 
+def _reorder_children_if_needed(element: etree._Element) -> None:
+    """Reorder known frontend payload children into their schema sequence."""
+    expected_order = _ALLOWED_FRONTEND_CHILD_ORDER.get(str(element.tag))
+    if expected_order is None:
+        return
+
+    children = [child for child in element if isinstance(child.tag, str)]
+    if len(children) < 2:
+        return
+
+    child_map: dict[str, list[etree._Element]] = {}
+    for child in children:
+        child_map.setdefault(child.tag, []).append(child)
+
+    if not any(tag in child_map for tag in expected_order):
+        return
+
+    reordered_children: list[etree._Element] = []
+    seen_ids: set[int] = set()
+    for expected_tag in expected_order:
+        for child in child_map.get(expected_tag, []):
+            reordered_children.append(child)
+            seen_ids.add(id(child))
+
+    for child in children:
+        if id(child) not in seen_ids:
+            reordered_children.append(child)
+
+    if reordered_children != children:
+        original_order = [child.tag for child in children]
+        new_order = [child.tag for child in reordered_children]
+        logger.warning(
+            "frontend.reorder_applied tag=%s original=%s normalized=%s",
+            element.tag,
+            original_order,
+            new_order,
+        )
+        _REORDER_APPLIED.set(True)
+        element[:] = reordered_children
+
+
+def _normalize_frontend_registration_payload(root: etree._Element) -> etree._Element:
+    """Normalize supported frontend registration payloads before validation.
+
+    Scoped to Registration / RegistrationChange roots only. Other inbound
+    contracts (C24/C30/C36 and friends) carry their own <role> element with a
+    different role enum (UserRoleType, PlanningUserRoleType, etc.) and their
+    own child sequence — those must continue to fail strict validation if the
+    sender is out of spec, so we skip them here.
+    """
+    if not isinstance(root.tag, str):
+        return root
+
+    if root.tag not in _ALLOWED_FRONTEND_NAMESPACED_ROOTS:
+        return root
+
+    for element in root.iter():
+        if not isinstance(element.tag, str):
+            continue
+
+        if element.tag == "role" and element.text is not None:
+            normalized_role = _FRONTEND_ROLE_NORMALIZATION.get(element.text.strip().casefold())
+            if normalized_role is not None:
+                element.text = normalized_role
+
+    for element in root.iter():
+        if isinstance(element.tag, str):
+            _reorder_children_if_needed(element)
+
+    return root
+
+
 def load_schema(path: Path = SCHEMA_PATH) -> etree.XMLSchema:
     """Load and parse an XSD schema file.
 
@@ -149,9 +265,11 @@ def validate(xml_bytes: bytes) -> etree._Element:
         etree.XMLSyntaxError: If the XML is malformed or contains entity
             references when entity resolution is disabled.
     """
+    _REORDER_APPLIED.set(False)
     schema = _get_schema()
     doc = etree.fromstring(xml_bytes, _SECURE_PARSER)
     doc = _normalize_frontend_namespace_if_allowed(doc)
+    doc = _normalize_frontend_registration_payload(doc)
     if not schema.validate(doc):
         raise ValueError(f"XML validation failed: {schema.error_log}")
     return doc
