@@ -190,9 +190,9 @@ class TestValidate:
         assert doc.findtext("lastName") == "Peeters"
 
     def test_accepts_kassa_user_created_with_valid_names(self) -> None:
-        """Kassa producer schema accepts the shared user-created root."""
+        """Kassa producer schema accepts the dedicated KassaUserCreated root."""
         xml = b"""<?xml version='1.0' encoding='utf-8'?>
-<UserCreated>
+<KassaUserCreated>
     <userId>523e4567-e89b-42d3-a456-426614174036</userId>
     <firstName>Karel</firstName>
     <lastName>Kassa</lastName>
@@ -200,16 +200,16 @@ class TestValidate:
     <badgeCode>BADGE-036</badgeCode>
     <role>VISITOR</role>
     <createdAt>2026-04-25T09:30:00Z</createdAt>
-</UserCreated>"""
+</KassaUserCreated>"""
 
         doc = validate_kassa(xml)
 
-        assert doc.tag == "UserCreated"
+        assert doc.tag == "KassaUserCreated"
 
     def test_rejects_kassa_user_created_with_empty_badge_code(self) -> None:
         """Kassa producer schema rejects empty badgeCode values."""
         invalid_xml = b"""<?xml version='1.0' encoding='utf-8'?>
-<UserCreated>
+<KassaUserCreated>
     <userId>523e4567-e89b-42d3-a456-426614174036</userId>
     <firstName>Karel</firstName>
     <lastName>Kassa</lastName>
@@ -217,7 +217,7 @@ class TestValidate:
     <badgeCode></badgeCode>
     <role>VISITOR</role>
     <createdAt>2026-04-25T09:30:00Z</createdAt>
-</UserCreated>"""
+</KassaUserCreated>"""
 
         with pytest.raises(ValueError, match="XML validation failed"):
             validate_kassa(invalid_xml)

@@ -358,62 +358,6 @@ PLANNING_UPDATED_CONTACT_RETURN = {
     "Phone": "+32470999999",
 }
 
-VALID_KASSA_USER_CREATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
-<UserCreated>
-    <userId>523e4567-e89b-42d3-a456-426614174036</userId>
-    <firstName>Karel</firstName>
-    <lastName>Kassa</lastName>
-    <email>karel.kassa@example.com</email>
-    <companyId>c5d4e5f6-a7b8-4901-8d23-ef4567ab8936</companyId>
-    <badgeCode>BADGE-036</badgeCode>
-    <role>VISITOR</role>
-    <createdAt>2026-04-25T09:30:00Z</createdAt>
-</UserCreated>"""
-
-VALID_KASSA_USER_UPDATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
-<UserUpdated>
-    <userId>523e4567-e89b-42d3-a456-426614174036</userId>
-    <firstName>Karel</firstName>
-    <lastName>Update</lastName>
-    <email>karel.update@example.com</email>
-    <companyId>c5d4e5f6-a7b8-4901-8d23-ef4567ab8936</companyId>
-    <badgeCode>BADGE-036A</badgeCode>
-    <role>COMPANY_CONTACT</role>
-    <updatedAt>2026-04-25T10:00:00Z</updatedAt>
-</UserUpdated>"""
-
-VALID_KASSA_USER_DEACTIVATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
-<UserDeactivated>
-    <id>523e4567-e89b-42d3-a456-426614174036</id>
-    <email>karel.kassa@example.com</email>
-    <deactivatedAt>2026-04-25T16:00:00Z</deactivatedAt>
-</UserDeactivated>"""
-
-KASSA_CONTACT_RETURN = {
-    "Id": "003000000000036",
-    "CRM_ID__c": "523e4567-e89b-42d3-a456-426614174136",
-    "Kassa_ID__c": "523e4567-e89b-42d3-a456-426614174036",
-    "Email": "karel.kassa@example.com",
-    "FirstName": "Karel",
-    "LastName": "Kassa",
-    "Role__c": "VISITOR",
-    "Badge_Code__c": "BADGE-036",
-    "Company_ID__c": "c5d4e5f6-a7b8-4901-8d23-ef4567ab8936",
-}
-
-KASSA_UPDATED_CONTACT_RETURN = {
-    "Id": "003000000000036",
-    "CRM_ID__c": "523e4567-e89b-42d3-a456-426614174136",
-    "Kassa_ID__c": "523e4567-e89b-42d3-a456-426614174036",
-    "Email": "karel.update@example.com",
-    "FirstName": "Karel",
-    "LastName": "Update",
-    "Role__c": "COMPANY_CONTACT",
-    "Badge_Code__c": "BADGE-036A",
-    "Company_ID__c": "c5d4e5f6-a7b8-4901-8d23-ef4567ab8936",
-}
-
-
 def _registration_patches(
     parsed_xml=None, existing_contact=None, created_contact=None
 ):
