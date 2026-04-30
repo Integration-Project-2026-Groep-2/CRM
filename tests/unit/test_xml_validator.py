@@ -413,10 +413,13 @@ class TestValidate:
         assert doc.findtext("lastName") == "Peeters"
 
     def test_accepts_kassa_user_created_with_valid_names(self) -> None:
-        """Kassa producer schema accepts the dedicated KassaUserCreated root."""
+        """Kassa producer schema accepts the dedicated KassaUserCreated root.
+
+        userId is xs:positiveInteger since 2026-04-30 (Kassa migrated from UUID).
+        """
         xml = b"""<?xml version='1.0' encoding='utf-8'?>
 <KassaUserCreated>
-    <userId>523e4567-e89b-42d3-a456-426614174036</userId>
+    <userId>1036</userId>
     <firstName>Karel</firstName>
     <lastName>Kassa</lastName>
     <email>karel.kassa@example.com</email>
@@ -428,12 +431,37 @@ class TestValidate:
         doc = validate_kassa(xml)
 
         assert doc.tag == "KassaUserCreated"
+        assert doc.findtext("userId") == "1036"
 
-    def test_rejects_kassa_user_created_with_empty_badge_code(self) -> None:
-        """Kassa producer schema rejects empty badgeCode values."""
+    def test_rejects_kassa_user_created_with_uuid_userid(self) -> None:
+        """Regression: C36 userId must be a positive integer, not a UUID.
+
+        Pre-2026-04-30 the schema accepted UUIDType; rejecting UUIDs now
+        prevents an accidental rollback to the old format.
+        """
         invalid_xml = b"""<?xml version='1.0' encoding='utf-8'?>
 <KassaUserCreated>
     <userId>523e4567-e89b-42d3-a456-426614174036</userId>
+    <firstName>Karel</firstName>
+    <lastName>Kassa</lastName>
+    <email>karel.kassa@example.com</email>
+    <badgeCode>BADGE-036</badgeCode>
+    <role>VISITOR</role>
+    <createdAt>2026-04-25T09:30:00Z</createdAt>
+</KassaUserCreated>"""
+
+        with pytest.raises(ValueError, match="XML validation failed"):
+            validate_kassa(invalid_xml)
+
+    def test_accepts_kassa_user_created_with_empty_badge_code(self) -> None:
+        """Since 2026-04-30 the C36 schema accepts empty badgeCode (xs:string).
+
+        Handler normalizes empty values via _normalize_optional_text and
+        omits Badge_Code__c from the Salesforce payload.
+        """
+        xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<KassaUserCreated>
+    <userId>1036</userId>
     <firstName>Karel</firstName>
     <lastName>Kassa</lastName>
     <email>karel.kassa@example.com</email>
@@ -442,8 +470,10 @@ class TestValidate:
     <createdAt>2026-04-25T09:30:00Z</createdAt>
 </KassaUserCreated>"""
 
-        with pytest.raises(ValueError, match="XML validation failed"):
-            validate_kassa(invalid_xml)
+        doc = validate_kassa(xml)
+
+        assert doc.tag == "KassaUserCreated"
+        assert doc.findtext("badgeCode") == ""
 
 
 class TestFacturatieCompanySync:
