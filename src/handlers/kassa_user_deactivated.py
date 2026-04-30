@@ -1,4 +1,4 @@
-"""Handler for Kassa → CRM: deactivate an existing Kassa-linked user.
+"""Handler for Kassa → CRM: deactivate an existing CRM-linked user.
 
 Queue: crm.kassa.user.deactivated (routing key: kassa.user.deactivated)
 Exchange: user.topic | durable: true
@@ -15,8 +15,7 @@ from src.handlers._helpers import _normalize_email_for_compare
 from src.salesforce.contacts import _build_user_deactivation_data
 from src.salesforce_client import (
     deactivate_contact_record,
-    get_contact_match_by_kassa_id,
-    has_contact_kassa_id_field,
+    get_contact_match_by_crm_id,
 )
 
 if TYPE_CHECKING:
@@ -26,7 +25,11 @@ logger = logging.getLogger(__name__)
 
 
 async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
-    """Contract 38 — Kassa -> CRM: deactivate an existing Kassa-linked user."""
+    """Contract 38 — Kassa -> CRM: deactivate an existing CRM-linked user.
+
+    The `<id>` element carries the CRM master UUID. CRM resolves the Contact by
+    `CRM_ID__c` and performs a soft delete only (GDPR audit trail).
+    """
     try:
         xml = xml_validator.validate_kassa(message.body)
     except Exception as exc:  # noqa: BLE001
@@ -34,25 +37,18 @@ async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
         await message.reject(requeue=False)
         return
 
-    if not await has_contact_kassa_id_field(sf):
-        logger.error(
-            "KassaUserDeactivated rejected — Salesforce Contact field Kassa_ID__c is missing",
-        )
-        await message.reject(requeue=False)
-        return
-
-    kassa_id = xml.findtext("id") or ""
+    crm_id = xml.findtext("id") or ""
     email = xml.findtext("email") or ""
     deactivated_at = xml.findtext("deactivatedAt") or ""
 
-    match_status, existing_contact = await get_contact_match_by_kassa_id(sf, kassa_id)
+    match_status, existing_contact = await get_contact_match_by_crm_id(sf, crm_id)
     if match_status == "none":
-        raise MissingDependencyError("Kassa_ID__c", kassa_id)
+        raise MissingDependencyError("CRM_ID__c", crm_id)
 
     if match_status == "ambiguous":
         logger.warning(
-            "KassaUserDeactivated ignored — ambiguous Kassa_ID__c %s in Salesforce",
-            kassa_id,
+            "KassaUserDeactivated ignored — ambiguous CRM_ID__c %s in Salesforce",
+            crm_id,
         )
         await message.ack()
         return
@@ -61,8 +57,8 @@ async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
     incoming_email = _normalize_email_for_compare(email)
     if existing_email is not None and incoming_email is not None and existing_email != incoming_email:
         logger.warning(
-            "KassaUserDeactivated email mismatch — Kassa_ID__c %s resolved to %s but payload contained %s; proceeding with soft delete",
-            kassa_id,
+            "KassaUserDeactivated email mismatch — CRM_ID__c %s resolved to %s but payload contained %s; proceeding with soft delete",
+            crm_id,
             existing_contact.get("Email"),
             email,
         )
@@ -70,10 +66,10 @@ async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
     contact = await deactivate_contact_record(
         sf,
         existing_contact,
-        log_value=f"Kassa_ID__c {kassa_id}",
+        log_value=f"CRM_ID__c {crm_id}",
     )
     await sender.publish_user_deactivated(
         _build_user_deactivation_data(contact, deactivated_at)
     )
-    logger.info("Published crm.user.deactivated for Kassa_ID__c %s", kassa_id)
+    logger.info("Published crm.user.deactivated for Kassa CRM_ID__c %s", crm_id)
     await message.ack()
