@@ -1248,7 +1248,6 @@ components:
             <RegistrationChange>
               <registrationId>REG-20260415-001</registrationId>
               <email>jan.janssen@example.com</email>
-              <sessionId>SESSION-001</sessionId>
               <changeType>updated</changeType>
               <updatedFields>
                 <firstName>Johan</firstName>
@@ -1260,7 +1259,6 @@ components:
             <RegistrationChange>
               <registrationId>REG-20260415-001</registrationId>
               <email>jan.janssen@example.com</email>
-              <sessionId>SESSION-001</sessionId>
               <changeType>cancelled</changeType>
             </RegistrationChange>
 
@@ -2324,33 +2322,29 @@ components:
       type: object
       required:
         - email
-        - sessionId
         - changeType
       description: >
-        Bij updated: Contact en bijhorende sessie-inschrijving bijwerken.
-        Bij cancelled: eerst de sessie-inschrijving deactiveren; alleen als er
-        geen actieve sessie-inschrijvingen meer overblijven voor dat Contact
-        publiceert CRM crm.user.deactivated. Als een legacy Contact nog geen
-        matchende sessie-inschrijving heeft, valt CRM alleen terug op
-        Contactniveau wanneer er geen andere actieve sessie-inschrijvingen en
-        geen native Planning/Mailing-identiteit meer zijn, zodat cancelled
-        downstream nog steeds een veilige soft delete kan triggeren.
+        Bij updated: Contact bijwerken in Salesforce en crm.user.updated
+        publiceren. Bij cancelled: Contact soft-deletten (met split-brain
+        bescherming voor native Planning/Mailing/Facturatie/Kassa
+        identiteiten) en crm.user.deactivated publiceren; eventuele
+        company-cascade naar crm.company.deactivated.
+        Sessie-deelname (welke gebruiker zit in welke sessie) is sinds
+        2026-04-29 Planning's verantwoordelijkheid — Frontend publiceert
+        sessiekeuze rechtstreeks naar Planning, CRM raakt de sessie-junction
+        niet meer.
         US-46 (offline buffering R3): zelfde queue, lokale buffer in receiver.
         US-34/US-35 (R2): bij conflicterende data crm.user.conflict publiceren.
       properties:
         registrationId:
           type: string
           description: >-
-            Optioneel — aanbevolen. Correleert met registrationId uit
-            RegistrationCreated en identificeert de sessie-inschrijving
-            eenduidig wanneer één Contact meerdere sessies heeft. Een replay van
-            RegistrationCreated mag alleen als pure retry behandeld worden
-            wanneer deze sessie-inschrijving nog actief is.
+            Optioneel — correleert met registrationId uit RegistrationCreated.
+            CRM gebruikt het niet voor lookup; alleen voor logging en
+            traceerbaarheid.
         email:
           type: string
           format: email
-        sessionId:
-          type: string
         changeType:
           type: string
           enum:
@@ -3380,10 +3374,9 @@ components:
         registrationId:
           type: string
           description: >-
-            Optioneel, aanbevolen — correleert met registrationId uit
-            RegistrationCreated. Nodig als een persoon voor meerdere sessies
-            is ingeschreven zodat CRM de juiste inschrijving kan markeren
-            als betaald.
+            Optioneel — geaccepteerd voor traceerbaarheid maar sinds 2026-04-29
+            niet meer gebruikt voor lookup. CRM houdt Paid_At__c per Contact
+            (niet per sessie); sessie-betalingsstatus zit bij Kassa zelf.
         amount:
           type: number
           minimum: 0
@@ -3395,9 +3388,9 @@ components:
           type: string
           format: date-time
           description: >-
-            Betalingstijdstip voor de sessie-inschrijving. CRM houdt
-            Contact.Paid_At__c alleen bij als monotone compatibiliteitswaarde:
-            een ouder event mag die afgeleide niet terugzetten.
+            Betalingstijdstip. CRM stamps dit op Contact.Paid_At__c als
+            monotone waarde — ouder event mag een nieuwere waarde niet
+            terugzetten.
 
     UnpaidRequest:
       type: object

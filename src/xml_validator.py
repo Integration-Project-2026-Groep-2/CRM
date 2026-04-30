@@ -30,7 +30,6 @@ _ALLOWED_FRONTEND_CHILD_ORDER: dict[str, tuple[str, ...]] = {
     "RegistrationChange": (
         "registrationId",
         "email",
-        "sessionId",
         "changeType",
         "updatedFields",
     ),

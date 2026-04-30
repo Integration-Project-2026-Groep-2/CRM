@@ -2378,14 +2378,7 @@ async def test_get_unpaid_contacts_skips_invalid_crm_ids(sf, caplog):
 
 @pytest.mark.asyncio
 async def test_update_payment_status_updates_via_crm_id(sf):
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "a01000000000001"}]}
-    sf.Session_Registration__c.get.return_value = {
-        "Id": "a01000000000001",
-        "Registration_ID__c": "REG-123",
-        "Session_ID__c": "SESS-001",
-        "Contact__c": "003000000000040",
-        "Is_Active__c": True,
-    }
+    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000040"}]}
     sf.Contact.get.side_effect = [
         {
             "Id": "003000000000040",
@@ -2408,21 +2401,19 @@ async def test_update_payment_status_updates_via_crm_id(sf):
         paid_at="2026-04-02T10:00:00Z",
     )
 
-    sf.Session_Registration__c.update.assert_called_once_with(
-        "a01000000000001", {"Paid_At__c": "2026-04-02T10:00:00Z"}
-    )
     sf.Contact.update.assert_called_once_with(
         "003000000000040", {"Paid_At__c": "2026-04-02T10:00:00Z"}
     )
+    sf.Session_Registration__c.update.assert_not_called()
     assert result["Paid_At__c"] == "2026-04-02T10:00:00Z"
 
 
 @pytest.mark.asyncio
 async def test_update_payment_status_advances_contact_timestamp_when_newer(sf):
-    sf.query.side_effect = [
-        {"totalSize": 1, "records": [{"Id": "003000000000041"}]},
-        {"totalSize": 1, "records": [{"Id": "a01000000000002"}]},
-    ]
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{"Id": "003000000000041"}],
+    }
     sf.Contact.get.side_effect = [
         {
             "Id": "003000000000041",
@@ -2436,13 +2427,6 @@ async def test_update_payment_status_advances_contact_timestamp_when_newer(sf):
             "Paid_At__c": "2026-04-02T11:00:00Z",
         },
     ]
-    sf.Session_Registration__c.get.return_value = {
-        "Id": "a01000000000002",
-        "Registration_ID__c": "REG-UNIQUE",
-        "Session_ID__c": "SESS-002",
-        "Contact__c": "003000000000041",
-        "Is_Active__c": True,
-    }
 
     result = await update_payment_status(
         sf,
@@ -2452,12 +2436,10 @@ async def test_update_payment_status_advances_contact_timestamp_when_newer(sf):
         paid_at="2026-04-02T11:00:00Z",
     )
 
-    sf.Session_Registration__c.update.assert_called_once_with(
-        "a01000000000002", {"Paid_At__c": "2026-04-02T11:00:00Z"}
-    )
     sf.Contact.update.assert_called_once_with(
         "003000000000041", {"Paid_At__c": "2026-04-02T11:00:00Z"}
     )
+    sf.Session_Registration__c.update.assert_not_called()
     assert result["Email"] == "unique@example.com"
 
 
@@ -2482,19 +2464,8 @@ async def test_update_payment_status_returns_none_for_ambiguous_email(sf):
 
 @pytest.mark.asyncio
 async def test_update_payment_status_returns_none_for_registration_id_mismatch(sf):
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "a01000000000003"}]}
-    sf.Session_Registration__c.get.return_value = {
-        "Id": "a01000000000003",
-        "Registration_ID__c": "REG-NEW",
-        "Session_ID__c": "SESS-003",
-        "Contact__c": "003000000000043",
-        "Is_Active__c": True,
-    }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000043",
-        "CRM_ID__c": "different-user",
-        "Email": "mismatch@example.com",
-    }
+    """Met Contact-only flow geldt: als CRM_ID__c lookup faalt, return None."""
+    sf.query.return_value = {"totalSize": 0, "records": []}
 
     result = await update_payment_status(
         sf,
@@ -2505,16 +2476,15 @@ async def test_update_payment_status_returns_none_for_registration_id_mismatch(s
     )
 
     assert result is None
-    sf.Session_Registration__c.update.assert_not_called()
     sf.Contact.update.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_update_payment_status_does_not_move_contact_timestamp_backwards(sf):
-    sf.query.side_effect = [
-        {"totalSize": 1, "records": [{"Id": "003000000000044"}]},
-        {"totalSize": 1, "records": [{"Id": "a01000000000004"}]},
-    ]
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{"Id": "003000000000044"}],
+    }
     sf.Contact.get.side_effect = [
         {
             "Id": "003000000000044",
@@ -2529,13 +2499,6 @@ async def test_update_payment_status_does_not_move_contact_timestamp_backwards(s
             "Paid_At__c": "2026-04-02T12:00:00Z",
         },
     ]
-    sf.Session_Registration__c.get.return_value = {
-        "Id": "a01000000000004",
-        "Registration_ID__c": "REG-BACK",
-        "Session_ID__c": "SESS-004",
-        "Contact__c": "003000000000044",
-        "Is_Active__c": True,
-    }
 
     result = await update_payment_status(
         sf,
@@ -2545,22 +2508,16 @@ async def test_update_payment_status_does_not_move_contact_timestamp_backwards(s
         paid_at="2026-04-02T11:00:00Z",
     )
 
-    sf.Session_Registration__c.update.assert_called_once_with(
-        "a01000000000004", {"Paid_At__c": "2026-04-02T11:00:00Z"}
-    )
     sf.Contact.update.assert_not_called()
+    sf.Session_Registration__c.update.assert_not_called()
     assert result["Paid_At__c"] == "2026-04-02T12:00:00Z"
 
 
 @pytest.mark.asyncio
 async def test_update_payment_status_overwrites_invalid_existing_contact_timestamp(sf, caplog):
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "a01000000000005"}]}
-    sf.Session_Registration__c.get.return_value = {
-        "Id": "a01000000000005",
-        "Registration_ID__c": "REG-BAD-TS",
-        "Session_ID__c": "SESS-005",
-        "Contact__c": "003000000000045",
-        "Is_Active__c": True,
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{"Id": "003000000000045"}],
     }
     sf.Contact.get.side_effect = [
         {
@@ -2586,12 +2543,10 @@ async def test_update_payment_status_overwrites_invalid_existing_contact_timesta
             paid_at="2026-04-02T13:00:00Z",
         )
 
-    sf.Session_Registration__c.update.assert_called_once_with(
-        "a01000000000005", {"Paid_At__c": "2026-04-02T13:00:00Z"}
-    )
     sf.Contact.update.assert_called_once_with(
         "003000000000045", {"Paid_At__c": "2026-04-02T13:00:00Z"}
     )
+    sf.Session_Registration__c.update.assert_not_called()
     assert "invalid Paid_At__c value" in caplog.text
     assert result["Paid_At__c"] == "2026-04-02T13:00:00Z"
 

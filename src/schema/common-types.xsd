@@ -124,6 +124,20 @@
     </xs:sequence>
   </xs:complexType>
 
+  <!-- Contract 2 (RegistrationChange): wijzigbare velden bij changeType=updated.
+       Gerefereerd vanuit canonieke ClickUp-spec; alle velden optioneel zodat
+       Frontend partial updates kan sturen. -->
+  <xs:complexType name="RegistrationUpdatedFieldsType">
+    <xs:sequence>
+      <xs:element name="firstName" type="xs:string"            minOccurs="0"/>
+      <xs:element name="lastName"  type="xs:string"            minOccurs="0"/>
+      <xs:element name="email"     type="EmailType"            minOccurs="0"/>
+      <xs:element name="phone"     type="xs:string"            minOccurs="0"/>
+      <xs:element name="role"      type="RegistrationRoleType" minOccurs="0"/>
+      <xs:element name="company"   type="xs:string"            minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+
   <!-- ============================================================
        CANONIEKE COMPLEX TYPES
        Master data owner: CRM.

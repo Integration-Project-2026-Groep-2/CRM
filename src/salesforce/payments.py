@@ -1,9 +1,9 @@
 """Payment-related Salesforce operations.
 
 Covers Contract 16 (payment confirmed) and Contract 17 (unpaid participants
-list). Both contracts derive payment state from Session_Registration__c
-records; the compatibility `Contact.Paid_At__c` field is maintained so
-legacy Contract 16/17 consumers that query Contact directly keep working.
+list). Sinds 2026-04-29 schrijft C16 ``Paid_At__c`` rechtstreeks op het Contact
+(geen junction). C17b leunt voorlopig nog op ``Session_Registration__c`` voor
+historische rijen — een herontwerp wacht op PM-input (zie ClickUp C17b spec).
 """
 
 import asyncio
@@ -22,10 +22,6 @@ from src.salesforce.contacts import (
     find_unique_contact_by_email,
     get_contact_by_crm_id,
 )
-from src.salesforce.sessions import (
-    get_session_registration_by_registration_id,
-    get_unique_active_session_registration_for_contact,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +33,23 @@ async def get_unpaid_contacts(sf: Salesforce) -> list[dict[str, Any]]:
 
     Records missing CRM_ID__c or Email are skipped because they cannot be
     serialized into the outbound XML contract safely.
+
+    TODO(C17b-redesign): deze query leunt nog op de ``Session_Registration__c``
+    junction die per 2026-04-29 niet meer geschreven wordt door C2/C16.
+    Voor historische rijen blijft het werken; voor nieuwe registraties
+    (zonder junction-rij) levert dit lege resultaten. Twee opties wachten op
+    PM-beslissing:
+      A) Globaal: alle Contacts met ``Paid_At__c IS NULL`` zonder sessie-context.
+      B) Planning levert deelnemers-per-sessie via een nieuw inbound contract;
+         CRM filtert op betaalstatus.
+    Zie ClickUp doc 2kyr1d3m-6675 voor de actieve discussie.
     """
     if not await has_session_registration_object(sf):
-        raise RuntimeError(
-            "Session_Registration__c is required to resolve unpaid registrations"
+        logger.warning(
+            "C17b query against legacy Session_Registration__c junction; "
+            "object not present — returning empty list. PM redesign pending.",
         )
+        return []
 
     active_field = await _resolve_contact_active_field_optional(sf)
     select_fields = [
@@ -121,33 +129,20 @@ async def update_payment_status(
     registration_id: str | None,
     paid_at: str,
 ) -> dict[str, Any] | None:
-    """Update payment state on the canonical session registration for Contract 16."""
-    if not await has_session_registration_object(sf):
-        raise RuntimeError(
-            "Session_Registration__c is required to update payment state"
-        )
+    """Stamp ``Paid_At__c`` on the Contact for Contract 16.
 
-    session_registration: dict[str, Any] | None = None
+    Resolution order: ``user_id`` (CRM_ID__c lookup) → ``email`` (unique-email
+    lookup). ``registration_id`` wordt geaccepteerd in het bericht maar niet
+    gebruikt voor opzoek, want CRM houdt geen sessie-registraties meer bij —
+    dat is Planning's domein. Als beide lookups falen retourneren we ``None``;
+    de handler ackt zonder retry.
 
-    if registration_id:
-        session_registration = await get_session_registration_by_registration_id(sf, registration_id)
-        if session_registration is None:
-            logger.warning(
-                "PaymentConfirmed ignored — no Session_Registration__c found for registrationId %s",
-                registration_id,
-            )
-            return None
-        if session_registration.get("Is_Active__c") is False:
-            logger.warning(
-                "PaymentConfirmed ignored — Session_Registration__c %s is inactive",
-                session_registration["Id"],
-            )
-            return None
-
+    Tijdstempel-strategie: Contact bewaart de laatste betaling. We schrijven
+    alleen wanneer de inkomende ``paid_at`` nieuwer is dan de huidige waarde,
+    zodat out-of-order C16-berichten niet terug-in-de-tijd schrijven.
+    """
     contact: dict[str, Any] | None
-    if session_registration is not None:
-        contact = await asyncio.to_thread(sf.Contact.get, session_registration["Contact__c"])
-    elif user_id:
+    if user_id:
         contact = await get_contact_by_crm_id(sf, user_id)
         if contact is None:
             logger.warning("PaymentConfirmed ignored — no Contact found for userId %s", user_id)
@@ -157,50 +152,19 @@ async def update_payment_status(
         if contact is None:
             return None
 
-    if user_id and contact.get("CRM_ID__c") != user_id:
-        logger.warning(
-            "PaymentConfirmed ignored — userId mismatch for registrationId %s: incoming=%s resolved=%s",
-            registration_id,
-            user_id,
-            contact.get("CRM_ID__c"),
-        )
-        return None
-
     if email and contact.get("Email") and contact.get("Email") != email:
         logger.warning(
-            "PaymentConfirmed email mismatch — resolved %s but payload contained %s; proceeding with canonical registration match",
+            "PaymentConfirmed email mismatch — resolved %s but payload contained %s; proceeding with userId match",
             contact.get("Email"),
             email,
         )
 
-    if session_registration is None:
-        session_registration = await get_unique_active_session_registration_for_contact(
-            sf,
-            contact["Id"],
-        )
-        if session_registration is None:
-            return None
-
-    if session_registration.get("Contact__c") and session_registration["Contact__c"] != contact["Id"]:
-        logger.warning(
-            "PaymentConfirmed ignored — Session_Registration__c %s belongs to Contact %s, not %s",
-            session_registration["Id"],
-            session_registration["Contact__c"],
-            contact["Id"],
-        )
-        return None
-
-    await asyncio.to_thread(
-        sf.Session_Registration__c.update,
-        session_registration["Id"],
-        {"Paid_At__c": paid_at},
-    )
     incoming_paid_at = _parse_iso_datetime_utc(paid_at)
     if incoming_paid_at is None:
         raise ValueError(f"Invalid paid_at timestamp: {paid_at}")
 
-    existing_contact_paid_at = _parse_iso_datetime_utc(contact.get(_PAYMENT_TIMESTAMP_FIELD))
-    if contact.get(_PAYMENT_TIMESTAMP_FIELD) and existing_contact_paid_at is None:
+    existing_paid_at = _parse_iso_datetime_utc(contact.get(_PAYMENT_TIMESTAMP_FIELD))
+    if contact.get(_PAYMENT_TIMESTAMP_FIELD) and existing_paid_at is None:
         logger.warning(
             "Contact %s has invalid %s value %r; overwriting with %s",
             contact["Id"],
@@ -209,25 +173,25 @@ async def update_payment_status(
             paid_at,
         )
 
-    should_sync_contact_paid_at = (
-        existing_contact_paid_at is None or incoming_paid_at > existing_contact_paid_at
+    if existing_paid_at is not None and incoming_paid_at <= existing_paid_at:
+        logger.info(
+            "Skipped Contact %s payment update — incoming %s not newer than existing %s",
+            contact["Id"],
+            paid_at,
+            contact.get(_PAYMENT_TIMESTAMP_FIELD),
+        )
+        return await asyncio.to_thread(sf.Contact.get, contact["Id"])
+
+    await asyncio.to_thread(
+        sf.Contact.update,
+        contact["Id"],
+        {_PAYMENT_TIMESTAMP_FIELD: paid_at},
     )
-    if should_sync_contact_paid_at:
-        await asyncio.to_thread(
-            sf.Contact.update,
-            contact["Id"],
-            {_PAYMENT_TIMESTAMP_FIELD: paid_at},
-        )
-        logger.info(
-            "Updated Session_Registration__c %s payment and advanced Contact %s compatibility timestamp",
-            session_registration["Id"],
-            contact["Id"],
-        )
-    else:
-        logger.info(
-            "Updated Session_Registration__c %s payment without moving Contact %s compatibility timestamp backwards",
-            session_registration["Id"],
-            contact["Id"],
-        )
+    logger.info(
+        "Updated Contact %s payment timestamp to %s (registrationId=%s, observed)",
+        contact["Id"],
+        paid_at,
+        registration_id,
+    )
 
     return await asyncio.to_thread(sf.Contact.get, contact["Id"])

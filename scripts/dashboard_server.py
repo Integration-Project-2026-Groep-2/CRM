@@ -336,7 +336,6 @@ async def handle_crud_update(request: web.Request) -> web.Response:
 <RegistrationChange>
     <registrationId>{reg_id}</registrationId>
     <email>{email}</email>
-    <sessionId>SESS-SHIFT-001</sessionId>
     <changeType>updated</changeType>
     <updatedFields>
         <firstName>Updated{r}</firstName>
@@ -375,7 +374,6 @@ async def handle_crud_delete(request: web.Request) -> web.Response:
 <RegistrationChange>
     <registrationId>{reg_id}</registrationId>
     <email>{email}</email>
-    <sessionId>SESS-SHIFT-001</sessionId>
     <changeType>cancelled</changeType>
 </RegistrationChange>""".encode("utf-8")
 

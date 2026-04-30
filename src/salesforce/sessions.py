@@ -144,7 +144,18 @@ async def upsert_session_registration(
     contact_id: str,
     paid_at: str | None = None,
 ) -> dict[str, Any]:
-    """Create or reactivate a session registration link for one participant."""
+    """Create or reactivate a session registration link for one participant.
+
+    DEPRECATED — sinds 2026-04-29 wordt sessie-deelname beheerd door Planning;
+    CRM schrijft niet meer naar deze junction. Functie blijft bestaan voor
+    bestaande scripts en eventuele migratie-tooling. Bij elke aanroep loggen
+    we een warning zodat oneigenlijk gebruik zichtbaar wordt.
+    """
+    logger.warning(
+        "DEPRECATED upsert_session_registration called for registrationId=%s — "
+        "session ownership moved to Planning. Caller should be migrated.",
+        registration_id,
+    )
     payload: dict[str, Any] = {
         "Registration_ID__c": registration_id,
         "Session_ID__c": session_id,
@@ -188,7 +199,16 @@ async def ensure_session_registration_active(
     session_id: str,
     registration_id: str | None = None,
 ) -> dict[str, Any] | None:
-    """Ensure the session registration exists and is active."""
+    """Ensure the session registration exists and is active.
+
+    DEPRECATED — zie ``upsert_session_registration``.
+    """
+    logger.warning(
+        "DEPRECATED ensure_session_registration_active called for "
+        "Contact__c=%s session=%s — session ownership moved to Planning.",
+        contact_id,
+        session_id,
+    )
     if registration_id:
         return await upsert_session_registration(
             sf,
@@ -294,7 +314,17 @@ async def deactivate_session_registration(
     contact_id: str | None = None,
     session_id: str | None = None,
 ) -> dict[str, Any] | None:
-    """Deactivate one session registration row."""
+    """Deactivate one session registration row.
+
+    DEPRECATED — zie ``upsert_session_registration``.
+    """
+    logger.warning(
+        "DEPRECATED deactivate_session_registration called "
+        "(registrationId=%s contact=%s session=%s) — session ownership moved to Planning.",
+        registration_id,
+        contact_id,
+        session_id,
+    )
     session_registration: dict[str, Any] | None = None
 
     if registration_id:
