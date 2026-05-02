@@ -73,7 +73,6 @@ INBOUND_TESTS: list[TestCase] = [
         xml="""<?xml version='1.0' encoding='utf-8'?>
 <RegistrationChange>
     <email>exchange.test@example.com</email>
-    <sessionId>SESS-001</sessionId>
     <changeType>updated</changeType>
     <updatedFields>
         <firstName>Updated</firstName>

@@ -4004,7 +4004,6 @@ VALID_UPDATE_XML = b"""<?xml version='1.0' encoding='utf-8'?>
 <RegistrationChange>
     <registrationId>REG-12345</registrationId>
     <email>john.doe@example.com</email>
-    <sessionId>SESS-001</sessionId>
     <changeType>updated</changeType>
     <updatedFields>
         <firstName>Jane</firstName>
@@ -4016,7 +4015,6 @@ VALID_UPDATE_XML = b"""<?xml version='1.0' encoding='utf-8'?>
 VALID_CANCEL_XML = b"""<?xml version='1.0' encoding='utf-8'?>
 <RegistrationChange>
     <email>cancel@example.com</email>
-    <sessionId>SESS-002</sessionId>
     <changeType>cancelled</changeType>
 </RegistrationChange>"""
 
@@ -4167,6 +4165,12 @@ class TestBuildUpdatedUserData:
 
 
 class TestHandleRegistrationUpdated:
+    """Contract 2 — Frontend RegistrationChange (updated|cancelled).
+
+    Handler is Contact-only sinds 2026-04-29: geen ``Session_Registration__c``
+    junction-writes meer. Sessie-deelname is Planning's verantwoordelijkheid.
+    """
+
     @pytest.fixture
     def sf_mock(self):
         return AsyncMock()
@@ -4180,9 +4184,7 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
             patch("src.handlers.frontend_registration_updated.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN) as mock_upsert,
-            patch("src.handlers.frontend_registration_updated.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated"),
         ):
             from src.receiver import handle_registration_updated
@@ -4203,9 +4205,7 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
             patch("src.handlers.frontend_registration_updated.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN),
-            patch("src.handlers.frontend_registration_updated.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
             from src.receiver import handle_registration_updated
@@ -4235,9 +4235,7 @@ class TestHandleRegistrationUpdated:
 
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
             patch("src.handlers.frontend_registration_updated.upsert_contact_by_email", return_value=contact_with_optional_fields),
-            patch("src.handlers.frontend_registration_updated.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
             from src.receiver import handle_registration_updated
@@ -4265,9 +4263,7 @@ class TestHandleRegistrationUpdated:
 
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
             patch("src.handlers.frontend_registration_updated.upsert_contact_by_email", return_value=contact_with_fallback_active_field),
-            patch("src.handlers.frontend_registration_updated.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
             from src.receiver import handle_registration_updated
@@ -4282,9 +4278,7 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
             patch("src.handlers.frontend_registration_updated.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN),
-            patch("src.handlers.frontend_registration_updated.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated"),
         ):
             from src.receiver import handle_registration_updated
@@ -4298,15 +4292,12 @@ class TestHandleRegistrationUpdated:
         xml_no_fields = b"""<?xml version='1.0' encoding='utf-8'?>
 <RegistrationChange>
     <email>john.doe@example.com</email>
-    <sessionId>SESS-001</sessionId>
     <changeType>updated</changeType>
 </RegistrationChange>"""
         parsed_xml = etree.fromstring(xml_no_fields)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
             patch("src.handlers.frontend_registration_updated.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN) as mock_upsert,
-            patch("src.handlers.frontend_registration_updated.ensure_session_registration_active") as mock_ensure_session,
             patch("src.sender.publish_user_updated"),
         ):
             from src.receiver import handle_registration_updated
@@ -4317,7 +4308,32 @@ class TestHandleRegistrationUpdated:
             mock_upsert.assert_called_once()
             update_data = mock_upsert.call_args[0][2]
             assert update_data == {}
-            mock_ensure_session.assert_called_once()
+            msg.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_updated_without_registration_id_still_processes(self, sf_mock):
+        """registrationId is optional in canonical C2 spec — handler must not require it."""
+        xml_no_reg_id = b"""<?xml version='1.0' encoding='utf-8'?>
+<RegistrationChange>
+    <email>john.doe@example.com</email>
+    <changeType>updated</changeType>
+    <updatedFields>
+        <firstName>Jane</firstName>
+    </updatedFields>
+</RegistrationChange>"""
+        parsed_xml = etree.fromstring(xml_no_reg_id)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.handlers.frontend_registration_updated.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN) as mock_upsert,
+            patch("src.sender.publish_user_updated") as mock_publish,
+        ):
+            from src.receiver import handle_registration_updated
+
+            msg = _make_message(xml_no_reg_id)
+            await handle_registration_updated(msg, sf_mock)
+
+            mock_upsert.assert_called_once()
+            mock_publish.assert_called_once()
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
@@ -4325,7 +4341,6 @@ class TestHandleRegistrationUpdated:
         xml_with_role = b"""<?xml version='1.0' encoding='utf-8'?>
 <RegistrationChange>
     <email>john.doe@example.com</email>
-    <sessionId>SESS-001</sessionId>
     <changeType>updated</changeType>
     <updatedFields>
         <role>COMPANY_CONTACT</role>
@@ -4334,9 +4349,7 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(xml_with_role)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
             patch("src.handlers.frontend_registration_updated.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN) as mock_upsert,
-            patch("src.handlers.frontend_registration_updated.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated"),
         ):
             from src.receiver import handle_registration_updated
@@ -4345,26 +4358,14 @@ class TestHandleRegistrationUpdated:
             update_data = mock_upsert.call_args[0][2]
             assert update_data["Role__c"] == "COMPANY_CONTACT"
 
-    @pytest.mark.asyncio
-    async def test_updated_missing_session_registration_object_rejects_without_requeue(self, sf_mock):
-        parsed_xml = etree.fromstring(VALID_UPDATE_XML)
-        with (
-            patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=False),
-        ):
-            from src.receiver import handle_registration_updated
-
-            msg = _make_message(VALID_UPDATE_XML)
-            await handle_registration_updated(msg, sf_mock)
-
-            msg.reject.assert_called_once_with(requeue=False)
 
     # ------------------------------------------------------------------
     # Cancelled path
     # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_cancelled_deactivates_session_registration(self, sf_mock):
+    async def test_cancelled_deactivates_contact_directly(self, sf_mock):
+        """Sinds 2026-04-29 raakt cancel altijd de Contact zelf (geen junction)."""
         parsed_xml = etree.fromstring(VALID_CANCEL_XML)
         existing_contact = {
             **DEACTIVATED_CONTACT_RETURN,
@@ -4375,24 +4376,15 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
             patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
-            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}) as mock_deact_reg,
-            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=1),
-            patch("src.handlers.frontend_registration_updated.deactivate_contact_record") as mock_deact_contact,
+            patch("src.handlers.frontend_registration_updated.deactivate_contact_record", return_value=DEACTIVATED_CONTACT_RETURN) as mock_deact_contact,
             patch("src.sender.publish_user_deactivated") as mock_publish,
         ):
             from src.receiver import handle_registration_updated
 
             await handle_registration_updated(_make_message(VALID_CANCEL_XML), sf_mock)
-            mock_deact_reg.assert_called_once_with(
-                sf_mock,
-                registration_id=None,
-                contact_id="003000000000088",
-                session_id="SESS-002",
-            )
-            mock_deact_contact.assert_not_called()
-            mock_publish.assert_not_called()
+            mock_deact_contact.assert_called_once()
+            mock_publish.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_cancelled_publishes_user_deactivated_when_last_registration_is_removed(self, sf_mock):
@@ -4406,10 +4398,7 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
             patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
-            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
-            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
             patch("src.handlers.frontend_registration_updated.deactivate_contact_record", return_value=DEACTIVATED_CONTACT_RETURN),
             patch("src.sender.publish_user_deactivated") as mock_publish,
         ):
@@ -4445,10 +4434,7 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
             patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
-            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
-            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
             patch("src.handlers.frontend_registration_updated.deactivate_contact_record", return_value=deactivated_contact_with_company),
             patch("src.handlers.frontend_registration_updated.count_active_contacts_for_company", return_value=0),
             patch("src.handlers.frontend_registration_updated.get_account_by_crm_id", return_value=account_before_deactivation),
@@ -4484,10 +4470,7 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
             patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
-            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
-            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
             patch("src.handlers.frontend_registration_updated.deactivate_contact_record", return_value=DEACTIVATED_CONTACT_RETURN),
             patch("src.handlers.frontend_registration_updated.count_active_contacts_for_company") as mock_sibling_count,
             patch("src.handlers.frontend_registration_updated.deactivate_account_by_crm_id") as mock_deactivate_account,
@@ -4522,10 +4505,7 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
             patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
-            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
-            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
             patch("src.handlers.frontend_registration_updated.deactivate_contact_record", return_value=deactivated_contact_with_company),
             patch("src.handlers.frontend_registration_updated.count_active_contacts_for_company", return_value=2) as mock_sibling_count,
             patch("src.handlers.frontend_registration_updated.get_account_by_crm_id") as mock_get_account,
@@ -4569,10 +4549,7 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
             patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
-            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
-            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
             patch("src.handlers.frontend_registration_updated.deactivate_contact_record", return_value=deactivated_contact_with_company),
             patch("src.handlers.frontend_registration_updated.count_active_contacts_for_company", return_value=0),
             patch("src.handlers.frontend_registration_updated.get_account_by_crm_id", return_value=account_without_vat),
@@ -4609,10 +4586,7 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
             patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
-            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
-            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
             patch("src.handlers.frontend_registration_updated.deactivate_contact_record", return_value=deactivated_contact_with_company),
             patch("src.handlers.frontend_registration_updated.count_active_contacts_for_company", side_effect=Exception("SF API down")),
             patch("src.sender.publish_user_deactivated") as mock_publish_user,
@@ -4641,10 +4615,7 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
             patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
-            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
-            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
             patch("src.handlers.frontend_registration_updated.deactivate_contact_record") as mock_deact_contact,
             patch("src.sender.publish_user_deactivated") as mock_publish,
         ):
@@ -4661,7 +4632,6 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(VALID_CANCEL_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
             patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=None),
             patch("src.sender.publish_user_deactivated") as mock_publish,
             caplog.at_level(logging.WARNING),
@@ -4674,80 +4644,6 @@ class TestHandleRegistrationUpdated:
             mock_publish.assert_not_called()
             msg.ack.assert_called_once()
             assert "acking without action" in caplog.text
-
-    @pytest.mark.asyncio
-    async def test_cancelled_without_session_row_uses_legacy_contact_fallback(self, sf_mock, caplog):
-        parsed_xml = etree.fromstring(VALID_CANCEL_XML)
-        existing_contact = {
-            **DEACTIVATED_CONTACT_RETURN,
-            "Id": "003000000000088",
-            "Email": "cancel@example.com",
-            "Planning_ID__c": None,
-            "Mailing_ID__c": None,
-        }
-        with (
-            patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
-            patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
-            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value=None),
-            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
-            patch("src.handlers.frontend_registration_updated.deactivate_contact_record", return_value=DEACTIVATED_CONTACT_RETURN) as mock_deact_contact,
-            patch("src.sender.publish_user_deactivated") as mock_publish,
-            caplog.at_level(logging.WARNING),
-        ):
-            from src.receiver import handle_registration_updated
-
-            msg = _make_message(VALID_CANCEL_XML)
-            await handle_registration_updated(msg, sf_mock)
-
-            mock_deact_contact.assert_called_once()
-            mock_publish.assert_called_once()
-            msg.ack.assert_called_once()
-            assert "using legacy Contact fallback" in caplog.text
-
-    @pytest.mark.asyncio
-    async def test_cancelled_without_session_row_keeps_native_identity_contact_active(self, sf_mock, caplog):
-        parsed_xml = etree.fromstring(VALID_CANCEL_XML)
-        existing_contact = {
-            **DEACTIVATED_CONTACT_RETURN,
-            "Id": "003000000000088",
-            "Email": "cancel@example.com",
-            "Planning_ID__c": "plan-123",
-            "Mailing_ID__c": None,
-        }
-        with (
-            patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
-            patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
-            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value=None),
-            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
-            patch("src.handlers.frontend_registration_updated.deactivate_contact_record") as mock_deact_contact,
-            patch("src.sender.publish_user_deactivated") as mock_publish,
-            caplog.at_level(logging.WARNING),
-        ):
-            from src.receiver import handle_registration_updated
-
-            msg = _make_message(VALID_CANCEL_XML)
-            await handle_registration_updated(msg, sf_mock)
-
-            mock_deact_contact.assert_not_called()
-            mock_publish.assert_not_called()
-            msg.ack.assert_called_once()
-            assert "skipping legacy Contact fallback" in caplog.text
-
-    @pytest.mark.asyncio
-    async def test_cancelled_missing_session_registration_object_rejects_without_requeue(self, sf_mock):
-        parsed_xml = etree.fromstring(VALID_CANCEL_XML)
-        with (
-            patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=False),
-        ):
-            from src.receiver import handle_registration_updated
-
-            msg = _make_message(VALID_CANCEL_XML)
-            await handle_registration_updated(msg, sf_mock)
-
-            msg.reject.assert_called_once_with(requeue=False)
 
     # ------------------------------------------------------------------
     # Error handling
@@ -4768,7 +4664,6 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
             patch("src.handlers.frontend_registration_updated.upsert_contact_by_email", side_effect=Exception("SF Down")),
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
@@ -4787,9 +4682,7 @@ class TestHandleRegistrationUpdated:
         parsed_xml = etree.fromstring(VALID_UPDATE_XML)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
             patch("src.handlers.frontend_registration_updated.upsert_contact_by_email", return_value=UPDATED_CONTACT_RETURN),
-            patch("src.handlers.frontend_registration_updated.ensure_session_registration_active"),
             patch("src.sender.publish_user_updated", side_effect=Exception("RabbitMQ down")),
         ):
             from src.receiver import handle_registration_updated
@@ -4813,10 +4706,7 @@ class TestHandleRegistrationUpdated:
         }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            patch("src.handlers.frontend_registration_updated.has_session_registration_object", return_value=True),
             patch("src.handlers.frontend_registration_updated.get_contact_by_email", return_value=existing_contact),
-            patch("src.handlers.frontend_registration_updated.deactivate_session_registration", return_value={"Id": "a01", "Is_Active__c": False}),
-            patch("src.handlers.frontend_registration_updated.count_active_session_registrations", return_value=0),
             patch("src.handlers.frontend_registration_updated.deactivate_contact_record", return_value=DEACTIVATED_CONTACT_RETURN),
             patch("src.sender.publish_user_deactivated", side_effect=Exception("RabbitMQ down")),
         ):

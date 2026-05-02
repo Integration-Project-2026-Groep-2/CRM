@@ -1001,7 +1001,6 @@ class TestContract2Updated:
         update_xml = f"""<?xml version='1.0' encoding='utf-8'?>
 <RegistrationChange>
     <email>{email}</email>
-    <sessionId>SESS-E2E-004</sessionId>
     <changeType>updated</changeType>
     <updatedFields>
         <firstName>After</firstName>
@@ -1061,7 +1060,6 @@ class TestContract2Cancelled:
         cancel_xml = f"""<?xml version='1.0' encoding='utf-8'?>
 <RegistrationChange>
     <email>{email}</email>
-    <sessionId>SESS-E2E-005</sessionId>
     <changeType>cancelled</changeType>
 </RegistrationChange>"""
 
@@ -1086,7 +1084,6 @@ class TestContract2Cancelled:
         cancel_xml = f"""<?xml version='1.0' encoding='utf-8'?>
 <RegistrationChange>
     <email>nonexistent.e2e.{random.randint(100000,999999)}@example.com</email>
-    <sessionId>SESS-E2E-NONE</sessionId>
     <changeType>cancelled</changeType>
 </RegistrationChange>"""
 

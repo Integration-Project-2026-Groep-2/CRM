@@ -82,7 +82,6 @@ async def main():
 <RegistrationChange>
     <registrationId>REG-UPD-TEST-{r}</registrationId>
     <email>{email}</email>
-    <sessionId>SESS-001</sessionId>
     <changeType>updated</changeType>
     <updatedFields>
         <firstName>UpdatedDocker</firstName>
@@ -111,7 +110,6 @@ async def main():
         cancel_xml = f"""<?xml version='1.0' encoding='utf-8'?>
 <RegistrationChange>
     <email>{email}</email>
-    <sessionId>SESS-001</sessionId>
     <changeType>cancelled</changeType>
 </RegistrationChange>""".encode("utf-8")
 
