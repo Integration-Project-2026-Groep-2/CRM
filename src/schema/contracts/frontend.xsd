@@ -34,7 +34,6 @@
       <xs:sequence>
         <xs:element name="registrationId" type="xs:string" minOccurs="0"/>
         <xs:element name="email"          type="EmailType"/>
-        <xs:element name="sessionId"      type="xs:string"/>
         <xs:element name="changeType">
           <xs:simpleType>
             <xs:restriction base="xs:string">
@@ -43,18 +42,7 @@
             </xs:restriction>
           </xs:simpleType>
         </xs:element>
-        <xs:element name="updatedFields" minOccurs="0">
-          <xs:complexType>
-            <xs:sequence>
-              <xs:element name="firstName" type="xs:string"            minOccurs="0"/>
-              <xs:element name="lastName"  type="xs:string"            minOccurs="0"/>
-              <xs:element name="email"     type="EmailType"            minOccurs="0"/>
-              <xs:element name="phone"     type="xs:string"            minOccurs="0"/>
-              <xs:element name="role"      type="RegistrationRoleType" minOccurs="0"/>
-              <xs:element name="company"   type="xs:string"            minOccurs="0"/>
-            </xs:sequence>
-          </xs:complexType>
-        </xs:element>
+        <xs:element name="updatedFields" type="RegistrationUpdatedFieldsType" minOccurs="0"/>
       </xs:sequence>
     </xs:complexType>
   </xs:element>

@@ -154,23 +154,21 @@ class TestValidate:
     def test_accepts_registration_change_with_unordered_children(self) -> None:
         xml = b"""<?xml version='1.0' encoding='utf-8'?>
 <RegistrationChange>
-    <registrationId>drupal-98765</registrationId>
     <changeType>updated</changeType>
-    <sessionId>423e4567-e89b-42d3-a456-426614174030</sessionId>
     <email>jan.peeters@example.com</email>
+    <registrationId>drupal-98765</registrationId>
 </RegistrationChange>"""
 
         doc = validate(xml)
 
         assert doc.tag == "RegistrationChange"
         children = [c.tag for c in doc if isinstance(c.tag, str)]
-        assert children == ["registrationId", "email", "sessionId", "changeType"]
+        assert children == ["registrationId", "email", "changeType"]
 
     def test_accepts_updated_fields_with_unordered_children_and_lowercase_role(self) -> None:
         xml = b"""<?xml version='1.0' encoding='utf-8'?>
 <RegistrationChange>
     <email>jan.peeters@example.com</email>
-    <sessionId>423e4567-e89b-42d3-a456-426614174030</sessionId>
     <changeType>updated</changeType>
     <updatedFields>
         <role>company_contact</role>
@@ -186,6 +184,18 @@ class TestValidate:
         children = [c.tag for c in updated if isinstance(c.tag, str)]
         assert children == ["firstName", "lastName", "role"]
         assert updated.findtext("role") == "COMPANY_CONTACT"
+
+    def test_rejects_registration_change_with_session_id(self) -> None:
+        """sessionId is geen onderdeel van C2 sinds 2026-04-29 (sessie-deelname is Planning's domein)."""
+        invalid_xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<RegistrationChange>
+    <email>jan.peeters@example.com</email>
+    <sessionId>SESS-001</sessionId>
+    <changeType>updated</changeType>
+</RegistrationChange>"""
+
+        with pytest.raises(ValueError, match="XML validation failed"):
+            validate(invalid_xml)
 
     def test_does_not_normalize_role_in_non_frontend_payload(self) -> None:
         """C30 PlanningUserCreated has its own role enum — our frontend

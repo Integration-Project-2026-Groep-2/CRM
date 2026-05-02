@@ -2,6 +2,11 @@
 
 Queue: crm.frontend.registration.updated (routing key: frontend.registration.updated)
 Exchange: user.topic | durable: true | US-21 (R1), US-33 (R2)
+
+Scope: Contact-only mutations. Sessie-deelname (welke gebruiker zit in welke
+sessie) is **Planning's domein** — Frontend publiceert sessiekeuze rechtstreeks
+naar Planning. CRM ontvangt mailing-filtering via C11 ``participantIds``.
+``Session_Registration__c`` junction wordt door deze handler niet meer geschreven.
 """
 
 import logging
@@ -21,14 +26,10 @@ from src.handlers._helpers import (
 from src.salesforce.contacts import _build_updated_user_data, _build_user_deactivation_data
 from src.salesforce_client import (
     count_active_contacts_for_company,
-    count_active_session_registrations,
     deactivate_account_by_crm_id,
     deactivate_contact_record,
-    deactivate_session_registration,
-    ensure_session_registration_active,
     get_account_by_crm_id,
     get_contact_by_email,
-    has_session_registration_object,
     upsert_contact_by_email,
 )
 
@@ -44,11 +45,10 @@ async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
     Behaviour:
     - Validate XML against schema (<RegistrationChange>).
     - Branch on changeType:
-        updated   → Upsert Contact in Salesforce, keep the session registration active,
-                    publish crm.user.updated (C18).
-        cancelled → Soft-delete the session registration first; only soft-delete the
-                    Contact and publish crm.user.deactivated (C22) when no active
-                    registrations remain.
+        updated   → Upsert Contact in Salesforce, publish crm.user.updated (C18).
+        cancelled → Soft-delete the Contact (with native-identity guard),
+                    publish crm.user.deactivated (C22), cascade Account
+                    deactivation when applicable (C23).
     - Contact removal remains soft delete only — never physically remove (GDPR).
     - Invalid XML: rejected without requeue.
     - Other errors: bubble to _wrap_handler for retry/DLQ routing.
@@ -61,18 +61,17 @@ async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
         return
 
     email = xml.findtext("email")
-    session_id = xml.findtext("sessionId")
     change_type = xml.findtext("changeType")
 
     logger.info(
-        "Processing registration change: email=%s, sessionId=%s, changeType=%s",
-        email, session_id, change_type,
+        "Processing registration change: email=%s, changeType=%s",
+        email, change_type,
     )
 
     if change_type == "updated":
         await _handle_update(xml, email, sf, message)
     elif change_type == "cancelled":
-        await _handle_cancellation(xml, email, sf, message)
+        await _handle_cancellation(email, sf, message)
     else:
         # Defence-in-depth — XSD should already enforce the enum.
         logger.error("Unknown changeType '%s' for email %s — rejecting", change_type, email)
@@ -83,13 +82,6 @@ async def _handle_update(
     xml: etree._Element, email: str, sf: "Salesforce", message: aio_pika.IncomingMessage
 ) -> None:
     """Process changeType=updated: upsert Contact and publish crm.user.updated."""
-    if not await has_session_registration_object(sf):
-        logger.error(
-            "RegistrationChange updated rejected — Salesforce object Session_Registration__c is missing",
-        )
-        await message.reject(requeue=False)
-        return
-
     update_data: dict = {}
 
     updated_fields = xml.find("updatedFields")
@@ -110,14 +102,6 @@ async def _handle_update(
                 update_data[sf_field] = value
 
     contact = await upsert_contact_by_email(sf, email, update_data)
-    registration_id = _normalize_optional_text(xml.findtext("registrationId"))
-    session_id = xml.findtext("sessionId") or ""
-    await ensure_session_registration_active(
-        sf,
-        contact_id=contact["Id"],
-        session_id=session_id,
-        registration_id=registration_id,
-    )
 
     await sender.publish_user_updated(_build_updated_user_data(contact))
     logger.info("Published crm.user.updated for %s", email)
@@ -125,21 +109,11 @@ async def _handle_update(
 
 
 async def _handle_cancellation(
-    xml: etree._Element,
     email: str,
     sf: "Salesforce",
     message: aio_pika.IncomingMessage,
 ) -> None:
-    """Process changeType=cancelled: deactivate registration, maybe Contact."""
-    if not await has_session_registration_object(sf):
-        logger.error(
-            "RegistrationChange cancelled rejected — Salesforce object Session_Registration__c is missing",
-        )
-        await message.reject(requeue=False)
-        return
-
-    session_id = xml.findtext("sessionId") or ""
-    registration_id = _normalize_optional_text(xml.findtext("registrationId"))
+    """Process changeType=cancelled: deactivate Contact (with guards) and publish C22."""
     contact = await get_contact_by_email(sf, email)
 
     if contact is None:
@@ -148,44 +122,17 @@ async def _handle_cancellation(
         await message.ack()
         return
 
-    deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    session_registration = await deactivate_session_registration(
-        sf,
-        registration_id=registration_id,
-        contact_id=contact["Id"],
-        session_id=session_id,
-    )
-    if session_registration is None:
-        remaining_registrations = await count_active_session_registrations(sf, contact["Id"])
-        native_identity = _contact_has_native_identity(contact)
-        if remaining_registrations > 0 or native_identity:
-            logger.warning(
-                "Cancellation for %s session %s has no Session_Registration__c row — skipping legacy Contact fallback; remaining_active_registrations=%s native_identity=%s",
-                email,
-                session_id,
-                remaining_registrations,
-                native_identity,
-            )
-            await message.ack()
-            return
-
-        logger.warning(
-            "Cancellation for %s session %s has no Session_Registration__c row — using legacy Contact fallback",
+    if _contact_has_native_identity(contact):
+        # Split-brain bescherming: als een ander team (Planning/Mailing/Facturatie/Kassa)
+        # deze persoon ook kent (eigen native ID gestempeld), niet hard
+        # deactivaten via C2. Cancel signaleert "Frontend-registratie voorbij",
+        # niet "persoon bestaat niet meer voor andere teams".
+        logger.info(
+            "Skipping Contact deactivation for %s — native identity present (Planning/Mailing/Facturatie/Kassa link)",
             email,
-            session_id,
         )
-    else:
-        remaining_registrations = await count_active_session_registrations(sf, contact["Id"])
-        native_identity = _contact_has_native_identity(contact)
-        if remaining_registrations > 0 or native_identity:
-            logger.info(
-                "Cancelled registration for %s without deactivating Contact; remaining_active_registrations=%s native_identity=%s",
-                email,
-                remaining_registrations,
-                native_identity,
-            )
-            await message.ack()
-            return
+        await message.ack()
+        return
 
     contact = await deactivate_contact_record(sf, contact, log_value=email)
     deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -195,19 +142,11 @@ async def _handle_cancellation(
 
     company_id = _normalize_optional_text(contact.get("Company_ID__c"))
     if company_id is not None:
-        # C1 fix — sibling guard: only deactivate the Account when this is
-        # the last active Contact on the company. Multiple contacts can share
-        # the same Company_ID__c; one cancellation must not wipe the whole
-        # company link.
-        #
-        # C2 fix — pre-validate: look up the Account *before* mutating SF so
-        # we never soft-delete an Account that lacks VAT_Number__c (which
-        # would prevent Contract 23 from firing → split-brain).
-        #
-        # H2 fix — wrap in try/except: if this block raises after
-        # publish_user_deactivated already fired, we still ack the message
-        # to prevent Contract 22 re-fire on redelivery. The company
-        # reconciliation can happen separately.
+        # Sibling guard: alleen Account deactiveren als dit de laatste actieve
+        # Contact op de company is. Pre-validate: lookup Account vóór mutatie zodat
+        # we geen Account zonder VAT_Number__c soft-deleten (zou C23 blokkeren →
+        # split-brain). Wrap in try/except: als dit faalt nadat C22 al verzonden is,
+        # toch acken om herhaalde C22-publicatie bij redelivery te voorkomen.
         try:
             sibling_count = await count_active_contacts_for_company(sf, company_id)
             if sibling_count > 0:

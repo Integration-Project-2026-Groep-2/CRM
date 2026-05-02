@@ -89,7 +89,6 @@ async def main() -> None:
 <RegistrationChange>
     <registrationId>{reg_id}</registrationId>
     <email>{email}</email>
-    <sessionId>SESS-SHIFT-001</sessionId>
     <changeType>updated</changeType>
     <updatedFields>
         <firstName>Updated</firstName>
