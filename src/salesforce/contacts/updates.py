@@ -472,6 +472,37 @@ async def update_kassa_contact(
     return await asyncio.to_thread(sf.Contact.get, contact_id)
 
 
+async def update_contact_badge_code_by_email(
+    sf: Salesforce,
+    *,
+    email: str,
+    badge_code: str,
+) -> dict[str, Any] | None:
+    """Update Contact.Badge_Code__c for Contract 12 by unique email match."""
+    from src.salesforce.contacts.matching import get_contact_match_by_email
+
+    match_status, contact = await get_contact_match_by_email(sf, email)
+    if match_status == "none":
+        logger.warning("Badge link ignored - Contact not found for email %s", email)
+        return None
+    if match_status == "ambiguous":
+        logger.warning("Badge link ignored - ambiguous Contact email %s", email)
+        return None
+
+    assert contact is not None
+    contact_id = contact["Id"]
+    if _normalize_optional_field_value(contact.get("Badge_Code__c")) == _normalize_optional_field_value(badge_code):
+        return contact
+
+    await asyncio.to_thread(
+        sf.Contact.update,
+        contact_id,
+        {"Badge_Code__c": badge_code},
+    )
+    logger.info("Updated Contact %s Badge_Code__c from IoT badge link", contact_id)
+    return await asyncio.to_thread(sf.Contact.get, contact_id)
+
+
 async def deactivate_contact(
     sf: Salesforce, email: str
 ) -> dict[str, Any] | None:

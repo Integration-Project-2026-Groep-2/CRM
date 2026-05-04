@@ -25,6 +25,7 @@ from src.handlers import (
     frontend_company_created,
     frontend_registration_created,
     frontend_registration_updated,
+    iot_badge_linked,
     kassa_payment_confirmed,
     kassa_person_lookup_requested,
     kassa_unpaid_requested,
@@ -108,6 +109,7 @@ QUEUE_REGISTRY: list[tuple[str, HandlerFn, bool, str | None, bool, str | None]] 
 
     # Contract 11 — Planning → CRM: session update
     ("planning.session.updated", planning_session_updated.handle, True, None, True, "planning.topic"),
+    ("iot.badge.linked", iot_badge_linked.handle, True, None, True, "planning.topic"),
 ]
 
 
@@ -119,8 +121,6 @@ QUEUE_REGISTRY: list[tuple[str, HandlerFn, bool, str | None, bool, str | None]] 
 PENDING_EXCHANGES: dict[str, str] = {
     # Contract 5a — Facturatie → CRM: request company data (no handler yet)
     "facturatie.company.requested": "invoice.topic",
-    # Contract 12 — IoT → CRM: badge linked (R2, no handler yet)
-    "iot.badge.linked": "planning.topic",
     # Contract 20 — Mailing → CRM: bounce reported (R2, no handler yet)
     "mailing.bounce.reported": "mail.topic",
 }
