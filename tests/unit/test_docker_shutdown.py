@@ -56,6 +56,7 @@ async def test_main_stops_on_shutdown_signal(monkeypatch: pytest.MonkeyPatch) ->
         salesforce_security_token="test",
         salesforce_domain="login",
         heartbeat_interval_seconds=1,
+        status_check_interval_seconds=120,
         system_name="CRM",
         polling_interval_seconds=60,
         polling_state_path="/tmp/polling_checkpoint_test.json",

@@ -56,7 +56,7 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 | `crm.unpaid.responded` | CRM → Kassa | 17b | R1 |
 | `crm.mail.requested` | CRM → Mailing | 6 | R1 |
 | `crm.invoice.requested` | CRM → Facturatie | 21 | R3 |
-| `crm.status.checked` | CRM → Controlroom | 8 | R1 |
+| `statuscheck.direct` (rk `routing.statuscheck`) → `controlroom.statuscheck.queue` | CRM → Controlroom | 8 | R1 |
 
 ### CRM Inbound — per exchange van het producerende team
 
