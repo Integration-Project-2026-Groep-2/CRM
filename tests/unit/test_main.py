@@ -11,11 +11,12 @@ from src.main import main
 
 
 @pytest.mark.asyncio
-async def test_main_starts_three_tasks_concurrently(monkeypatch: pytest.MonkeyPatch) -> None:
-    """main() starts heartbeat, receiver, and polling tasks concurrently."""
+async def test_main_starts_four_tasks_concurrently(monkeypatch: pytest.MonkeyPatch) -> None:
+    """main() starts heartbeat, receiver, polling, and log_publisher tasks concurrently."""
     heartbeat_started = asyncio.Event()
     receiver_started = asyncio.Event()
     polling_started = asyncio.Event()
+    log_publisher_started = asyncio.Event()
     never = asyncio.Event()
 
     async def fake_run_heartbeat(*_args: object, **_kwargs: object) -> None:
@@ -28,6 +29,10 @@ async def test_main_starts_three_tasks_concurrently(monkeypatch: pytest.MonkeyPa
 
     async def fake_run_polling(*_args: object, **_kwargs: object) -> None:
         polling_started.set()
+        await never.wait()
+
+    async def fake_run_log_publisher(*_args: object, **_kwargs: object) -> None:
+        log_publisher_started.set()
         await never.wait()
 
     mock_connection = AsyncMock()
@@ -48,6 +53,8 @@ async def test_main_starts_three_tasks_concurrently(monkeypatch: pytest.MonkeyPa
         polling_state_path="/tmp/polling_checkpoint_test.json",
         polling_integration_user_id=None,
         log_level="INFO",
+        log_service_name="crm",
+        log_rabbitmq_level="INFO",
     )
 
     monkeypatch.setattr("src.main.load_dotenv", lambda: None)
@@ -62,16 +69,20 @@ async def test_main_starts_three_tasks_concurrently(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr("src.main.run_heartbeat", fake_run_heartbeat)
     monkeypatch.setattr("src.main.run_receiver", fake_run_receiver)
     monkeypatch.setattr("src.main.run_polling", fake_run_polling)
+    monkeypatch.setattr("src.main.attach_rabbitmq_log_handler", lambda *_a, **_kw: None)
+    monkeypatch.setattr("src.main.run_log_publisher", fake_run_log_publisher)
 
     main_task = asyncio.create_task(main())
     try:
         await asyncio.wait_for(heartbeat_started.wait(), timeout=1.0)
         await asyncio.wait_for(receiver_started.wait(), timeout=1.0)
         await asyncio.wait_for(polling_started.wait(), timeout=1.0)
+        await asyncio.wait_for(log_publisher_started.wait(), timeout=1.0)
 
         assert heartbeat_started.is_set()
         assert receiver_started.is_set()
         assert polling_started.is_set()
+        assert log_publisher_started.is_set()
         assert not main_task.done()
     finally:
         main_task.cancel()
