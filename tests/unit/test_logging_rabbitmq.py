@@ -165,6 +165,87 @@ class TestBuildLogEventXml:
 
 
 # ---------------------------------------------------------------------------
+# _build_log_event_xml — <data> hardening (CDATA + control-char strip)
+# ---------------------------------------------------------------------------
+
+class TestBuildLogEventXmlDataHardening:
+    """Structural fix: CDATA-wrapped <data> + XML-1.0-illegal char stripping.
+
+    Controlroom reported "unparseable log body" on traceback records. Root
+    cause: lxml entity-escapes `<` and `&` in element text but not `"` or
+    newlines, producing a mix that downstream parsers (Logstash xml codec,
+    Java SAX) handle inconsistently. Plus any control char in record text
+    would silently drop the record (lxml ValueError caught by emit()).
+    """
+
+    def test_multiline_traceback_roundtrips(self):
+        try:
+            raise RuntimeError('error with "quotes" and\nnewlines')
+        except RuntimeError:
+            import sys
+            record = _make_record(exc_info=sys.exc_info())
+
+        data = etree.fromstring(_build_log_event_xml(record, "crm")).findtext("data")
+        assert "RuntimeError" in data
+        assert '"quotes"' in data
+        assert "\n" in data
+
+    def test_literal_double_quotes_survive(self):
+        record = _make_record(msg='File "/app/src/polling.py", line 1')
+        data = etree.fromstring(_build_log_event_xml(record, "crm")).findtext("data")
+        assert data == 'File "/app/src/polling.py", line 1'
+
+    def test_lambda_and_angle_brackets_survive_verbatim_in_cdata(self):
+        """CDATA does not entity-escape `<` so `<lambda>` arrives intact."""
+        record = _make_record(msg='in <lambda> at <module>')
+        data = etree.fromstring(_build_log_event_xml(record, "crm")).findtext("data")
+        assert data == "in <lambda> at <module>"
+
+    @pytest.mark.parametrize(
+        "ctrl",
+        ["\x00", "\x01", "\x08", "\x0B", "\x0C", "\x1F"],
+    )
+    def test_control_chars_are_stripped_not_dropped(self, ctrl):
+        """Without the strip, the record would silently disappear via emit()."""
+        record = _make_record(msg=f"before{ctrl}after")
+        data = etree.fromstring(_build_log_event_xml(record, "crm")).findtext("data")
+        assert data == "beforeafter"
+
+    def test_tab_newline_carriage_return_preserved(self):
+        record = _make_record(msg="a\tb\nc d")
+        data = etree.fromstring(_build_log_event_xml(record, "crm")).findtext("data")
+        assert "a\tb\nc" in data
+        assert "d" in data
+
+    def test_data_is_serialized_as_cdata_section(self):
+        """Raw bytes contain <![CDATA[...]]> — not entity-escaped."""
+        record = _make_record(msg="payload with <tag> and &amp;")
+        xml = _build_log_event_xml(record, "crm")
+        assert b"<![CDATA[" in xml
+        assert b"]]>" in xml
+        # Verbatim content inside CDATA, no entity escaping
+        assert b"payload with <tag> and &amp;" in xml
+        # Sanity: not double-escaped
+        assert b"&lt;tag&gt;" not in xml
+
+    def test_xsd_validates_with_cdata_data(self):
+        try:
+            raise ValueError('boom "x" <y>')
+        except ValueError:
+            import sys
+            record = _make_record(exc_info=sys.exc_info())
+        # Must not raise — XSD treats CDATA as xs:string content
+        xml_validator.validate(_build_log_event_xml(record, "crm"))
+
+    def test_empty_data_after_strip_does_not_crash(self):
+        """All-control-chars input becomes empty <data><![CDATA[]]></data>."""
+        record = _make_record(msg="\x00\x01\x02\x1F")
+        data = etree.fromstring(_build_log_event_xml(record, "crm")).findtext("data")
+        # findtext returns None for empty text in some lxml versions
+        assert data in (None, "")
+
+
+# ---------------------------------------------------------------------------
 # RabbitMQLogHandler.emit
 # ---------------------------------------------------------------------------
 

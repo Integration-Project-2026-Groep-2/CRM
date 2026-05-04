@@ -25,6 +25,7 @@ de stdout StreamHandler die setup_logging() installeert.
 import asyncio
 import contextvars
 import logging
+import re
 from datetime import datetime, timezone
 
 from aio_pika.abc import AbstractRobustConnection
@@ -67,12 +68,39 @@ _PY_TO_XSD_LEVEL: dict[str, str] = {
     "CRITICAL": "FATAL",
 }
 
+# XML 1.0 forbids most C0 control chars in text content. lxml enforces this:
+# `etree.SubElement(...).text = "\x00"` raises ValueError, which our emit()
+# would silently catch and drop the record via handleError(). Tracebacks
+# from third-party libs occasionally contain such bytes (terminal escape
+# sequences, mangled UTF-8, raw bytes from binary SF fields). We strip
+# them defensively — \t \n \r are kept because they are legal XML chars
+# and preserve traceback readability for Controlroom / Logstash / Kibana.
+_ILLEGAL_XML_CHARS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+
 
 def _build_log_event_xml(record: logging.LogRecord, service_name: str) -> bytes:
     """Build a LogEvent XML message from a logging.LogRecord.
 
     Maps Python levelname → SeverityType enum (DEBUG/INFO/WARN/ERROR/FATAL/PANIC).
     Unknown levelnames pass through; XSD validation rejects invalid values.
+
+    Serialization notes
+    -------------------
+    The ``<data>`` element is CDATA-wrapped because the field carries
+    arbitrary text (log message + optional traceback) which can include
+    real ``\\n`` newlines, literal ``"`` characters and entity-needing
+    chars like ``<lambda>``. Without CDATA, lxml entity-escapes ``<`` and
+    ``&`` while leaving ``"`` and newlines literal — a combination that
+    Logstash's xml codec and some Java SAX parsers handle inconsistently
+    (Controlroom reported "unparseable log body" on traceback records).
+    CDATA forces a single verbatim text node which every conformant XML
+    parser materialises identically. XSD-wise CDATA is equivalent to
+    ``xs:string`` so the contract semantics post-parse are unchanged.
+
+    XML-1.0-illegal control chars in ``data`` are stripped before they
+    reach lxml — otherwise a single ``\\x00`` (e.g. from a mangled UTF-8
+    byte) raises ``ValueError`` deep inside ``etree.SubElement.text =``
+    and ``emit()`` silently drops the record.
     """
     level = _PY_TO_XSD_LEVEL.get(record.levelname, record.levelname)
     timestamp = datetime.fromtimestamp(record.created, tz=timezone.utc).strftime(
@@ -82,11 +110,16 @@ def _build_log_event_xml(record: logging.LogRecord, service_name: str) -> bytes:
     if record.exc_info:
         data = f"{data}\n{logging.Formatter().formatException(record.exc_info)}"
 
+    # Defence-in-depth — see Serialization notes above.
+    data = _ILLEGAL_XML_CHARS_RE.sub("", data)
+
     root = etree.Element("LogEvent")
     etree.SubElement(root, "level").text = level
     etree.SubElement(root, "timestamp").text = timestamp
     etree.SubElement(root, "service").text = service_name
-    etree.SubElement(root, "data").text = data
+
+    data_element = etree.SubElement(root, "data")
+    data_element.text = etree.CDATA(data)
 
     # lxml's xml_declaration=True emits single-quoted attributes
     # (`<?xml version='1.0' ...?>`) followed by a newline. Some Logstash /
