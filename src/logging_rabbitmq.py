@@ -14,7 +14,7 @@ Pipeline:
                        sender.publish_log_event_raw()
                               │
                               ▼
-                       logs.direct ─[rk: controlroom.logs.queue]─▶ Controlroom
+                       logs.direct ─[rk: routing.log]─▶ controlroom.logs.queue (Controlroom)
 
 Bootstrap-volgorde in main.py garandeert dat connectie-fouten niet via deze
 handler proberen te publiceren — attach_rabbitmq_log_handler wordt pas
