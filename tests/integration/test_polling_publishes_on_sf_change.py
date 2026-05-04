@@ -124,6 +124,7 @@ async def test_polling_publishes_crm_user_confirmed_to_contact_topic(
         salesforce_security_token="tok",
         salesforce_domain="login",
         heartbeat_interval_seconds=0,
+        status_check_interval_seconds=0,
         system_name="CRM",
         polling_interval_seconds=0,
         polling_state_path=str(tmp_path / "checkpoint.json"),

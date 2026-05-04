@@ -1,7 +1,7 @@
 asyncapi: 3.1.0
 info:
   title: Integratieproject 2026 — CRM (Salesforce) RabbitMQ Contracts
-  version: 1.10.0
+  version: 1.11.0
   description: >
     XML-contracten voor alle integraties waarbij het CRM-team (Salesforce)
     betrokken is.
@@ -398,18 +398,21 @@ channels:
           durable: true
 
   crmStatusChecked:
-    address: crm.status.checked
+    address: statuscheck.direct/routing.statuscheck
     description: >-
       Contract 8 — CRM → Controlroom: periodieke statuscheck met
-      systeemmetrieken (US-25 | R1)
+      systeemmetrieken (US-25 | R1). Frequentie elke 120 seconden
+      (ClickUp Controlroom spec, 2026-05-04).
     messages:
       statusCheck:
         $ref: "#/components/messages/StatusCheck"
     bindings:
       amqp:
-        is: queue
-        queue:
-          durable: false
+        is: routingKey
+        exchange:
+          name: statuscheck.direct
+          type: direct
+          durable: true
 
   crmLogEvent:
     address: logs.direct/routing.log
@@ -982,7 +985,7 @@ operations:
       $ref: "#/channels/crmStatusChecked"
     messages:
       - $ref: "#/channels/crmStatusChecked/messages/statusCheck"
-    summary: Stuur periodieke statuscheck met CPU-, geheugen- en schijfbelasting
+    summary: Stuur periodieke statuscheck met geheugen- en schijfbelasting (elke 120s)
     tags:
       - name: controlroom
       - name: release-1
@@ -1823,7 +1826,9 @@ components:
     StatusCheck:
       name: StatusCheck
       title: CRM statuscheck
-      summary: Uitgebreider dan heartbeat — bevat CPU, memory en disk
+      summary: >-
+        Periodieke statuscheck met memory- en disk-fracties (psutil).
+        Volgt ClickUp Controlroom spec 2kyr1d3m-5735.
       contentType: application/xml
       tags:
         - name: US-25
@@ -1836,27 +1841,19 @@ components:
             <StatusCheck>
               <serviceId>CRM</serviceId>
               <timestamp>2026-03-14T10:00:00Z</timestamp>
-              <status>healthy</status>
               <uptime>3600</uptime>
-              <systemLoad>
-                <cpu>0.23</cpu>
-                <memory>0.41</memory>
-                <disk>0.15</disk>
-              </systemLoad>
+              <memory>0.41</memory>
+              <disk>0.15</disk>
             </StatusCheck>
-        - name: degraded
+        - name: high-load
           payload: |
             <?xml version="1.0" encoding="UTF-8"?>
             <StatusCheck>
               <serviceId>CRM</serviceId>
               <timestamp>2026-03-14T10:00:00Z</timestamp>
-              <status>degraded</status>
               <uptime>3600</uptime>
-              <systemLoad>
-                <cpu>0.91</cpu>
-                <memory>0.85</memory>
-                <disk>0.60</disk>
-              </systemLoad>
+              <memory>0.85</memory>
+              <disk>0.60</disk>
             </StatusCheck>
 
     LogEvent:
@@ -3121,10 +3118,15 @@ components:
       required:
         - serviceId
         - timestamp
-        - status
         - uptime
-        - systemLoad
-      description: Frequentie nog te bepalen (voorstel elke 30 seconden).
+        - memory
+        - disk
+      description: >-
+        Frequentie elke 120 seconden (ClickUp Controlroom spec, 2026-05-04).
+        memory = psutil.virtual_memory().percent / 100 (available-aware,
+        niet raw used/total). disk = psutil.disk_usage(path).percent / 100.
+        Beide worden geclamped naar [0.0, 1.0] om de XSD-bound op bursty
+        hosts (zswap, disk overcommit) te respecteren.
       properties:
         serviceId:
           type: string
@@ -3133,35 +3135,17 @@ components:
         timestamp:
           type: string
           format: date-time
-        status:
-          type: string
-          enum:
-            - healthy
-            - degraded
-            - unhealthy
-            - unknown
         uptime:
           type: integer
-          description: Seconden
-        systemLoad:
-          type: object
-          required:
-            - cpu
-            - memory
-            - disk
-          properties:
-            cpu:
-              type: number
-              minimum: 0
-              maximum: 1
-            memory:
-              type: number
-              minimum: 0
-              maximum: 1
-            disk:
-              type: number
-              minimum: 0
-              maximum: 1
+          description: Seconden sinds container/process start (time.monotonic delta)
+        memory:
+          type: number
+          minimum: 0
+          maximum: 1
+        disk:
+          type: number
+          minimum: 0
+          maximum: 1
 
     Warning:
       type: object

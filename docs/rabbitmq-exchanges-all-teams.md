@@ -46,7 +46,7 @@ _Bron: ClickUp > Team CRM > Documentatie CRM > XML Contracts_
 | `crm.unpaid.responded` | `contact.topic` | CRM → Kassa |
 | `crm.mail.requested` | `contact.topic` | CRM → Mailing |
 | `crm.invoice.requested` | `contact.topic` | CRM → Facturatie |
-| `crm.status.checked` | `contact.topic` | CRM → Controlroom |
+| `controlroom.statuscheck.queue` (rk `routing.statuscheck`) | `statuscheck.direct` (DIRECT, durable=true) | CRM → Controlroom |
 | `crm.user.conflict` | `crm.user.conflict` (fanout) | CRM → Controlroom + Frontend |
 | heartbeat | `heartbeat.direct` | CRM → Controlroom |
 

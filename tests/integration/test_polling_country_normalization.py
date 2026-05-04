@@ -120,6 +120,7 @@ async def _run_polling_once_and_capture(
         salesforce_security_token="tok",
         salesforce_domain="login",
         heartbeat_interval_seconds=0,
+        status_check_interval_seconds=0,
         system_name="CRM",
         polling_interval_seconds=0,
         polling_state_path=str(tmp_path / f"checkpoint-{uuid.uuid4().hex[:6]}.json"),

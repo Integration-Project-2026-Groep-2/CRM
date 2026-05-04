@@ -40,6 +40,7 @@ class TestCase:
     xml: str
     durable: bool
     direction: str  # "inbound" or "outbound"
+    exchange_type: ExchangeType = ExchangeType.TOPIC
 
 
 # ---------------------------------------------------------------------------
@@ -288,21 +289,18 @@ OUTBOUND_TESTS: list[TestCase] = [
     ),
     TestCase(
         name="C8 — CRM: status check",
-        exchange="contact.topic",
-        routing_key="crm.status.checked",
-        durable=False,
+        exchange="statuscheck.direct",
+        routing_key="routing.statuscheck",
+        durable=True,
         direction="outbound",
+        exchange_type=ExchangeType.DIRECT,
         xml="""<?xml version='1.0' encoding='utf-8'?>
 <StatusCheck>
     <serviceId>CRM</serviceId>
     <timestamp>2026-04-01T10:00:00Z</timestamp>
-    <status>healthy</status>
     <uptime>3600</uptime>
-    <systemLoad>
-        <cpu>0.23</cpu>
-        <memory>0.41</memory>
-        <disk>0.15</disk>
-    </systemLoad>
+    <memory>0.41</memory>
+    <disk>0.15</disk>
 </StatusCheck>""",
     ),
     TestCase(
@@ -464,7 +462,7 @@ async def run_test(
 ) -> tuple[str, bool, str]:
     """Run a single positive test case. Returns (name, passed, detail)."""
     exchange = await channel.declare_exchange(
-        test.exchange, type=ExchangeType.TOPIC, durable=True,
+        test.exchange, type=test.exchange_type, durable=True,
     )
 
     test_queue_name = f"_test_.{test.routing_key}"
