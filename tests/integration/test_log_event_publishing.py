@@ -174,3 +174,65 @@ async def test_run_log_publisher_drains_queue_against_real_broker(
     assert doc.findtext("service") == "crm-runner-test"
     assert doc.findtext("level") == "WARN"  # Python WARNING → XSD WARN
     assert marker in doc.findtext("data")
+
+
+@pytest.mark.asyncio
+async def test_traceback_log_event_roundtrips_through_broker(
+    _skip_if_no_broker,
+    _reset_log_state,
+):
+    """End-to-end: a record with traceback (real \\n + literal \") arrives on
+    the broker as CDATA-wrapped XML and round-trips losslessly through XSD
+    validation. This is the structural fix for Controlroom's
+    'unparseable log body' on traceback records.
+    """
+    connection = await aio_pika.connect_robust(RABBITMQ_URL)
+    try:
+        channel = await connection.channel()
+        await sender.init(channel)
+
+        queue_name = f"test-log-traceback-{uuid.uuid4().hex[:8]}"
+        queue = await channel.declare_queue(queue_name, durable=False, auto_delete=True)
+        await queue.bind(sender._logs_exchange, routing_key="routing.log")
+
+        attach_rabbitmq_log_handler("crm-trace-test", min_level="DEBUG")
+
+        marker = f"trace-marker-{uuid.uuid4().hex[:6]}"
+        logger = logging.getLogger("src.handlers.integration_trace")
+        try:
+            raise RuntimeError(f'broken {marker} with "quotes" and <lambda>')
+        except RuntimeError:
+            logger.exception(f"polling cycle failed for {marker}")
+
+        # Drive one drain manually — the run_log_publisher is not started here.
+        xml_bytes = await asyncio.wait_for(
+            logging_rabbitmq._log_queue.get(),
+            timeout=2.0,
+        )
+        await sender.publish_log_event_raw(xml_bytes)
+
+        incoming = await asyncio.wait_for(queue.get(timeout=5), timeout=5.0)
+        try:
+            received = incoming.body
+        finally:
+            await incoming.ack()
+    finally:
+        await connection.close()
+
+    # Raw bytes proof: CDATA wrapping is intact across the broker round-trip
+    assert b"<![CDATA[" in received
+    assert b"]]>" in received
+
+    doc = validate(received)
+    assert doc.tag == "LogEvent"
+    assert doc.findtext("service") == "crm-trace-test"
+    assert doc.findtext("level") == "ERROR"
+
+    data = doc.findtext("data")
+    assert f"polling cycle failed for {marker}" in data
+    assert "Traceback" in data
+    assert "RuntimeError" in data
+    assert f'broken {marker}' in data
+    # Verbatim survival of literal `"` and `<lambda>` (key reason for CDATA)
+    assert '"quotes"' in data
+    assert "<lambda>" in data
