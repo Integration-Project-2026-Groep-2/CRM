@@ -82,6 +82,23 @@ class TestBuildLogEventXml:
         xml = etree.fromstring(_build_log_event_xml(record, "crm"))
         assert xml.tag == "LogEvent"
 
+    def test_xml_declaration_uses_double_quotes(self):
+        """Some downstream parsers (Logstash xml codec) reject single-quoted
+        declarations. Emit double quotes for maximum interoperability.
+        """
+        record = _make_record()
+        xml = _build_log_event_xml(record, "crm")
+        assert xml.startswith(b'<?xml version="1.0" encoding="UTF-8"?>')
+
+    def test_declaration_and_root_are_on_one_line(self):
+        """No inter-element newline between `?>` and `<LogEvent>` — keeps the
+        body a single XML chunk for line-based or streaming parsers.
+        """
+        record = _make_record()
+        xml = _build_log_event_xml(record, "crm")
+        assert b'?><LogEvent' in xml
+        assert b'?>\n<LogEvent' not in xml
+
     def test_field_order_matches_xsd_sequence(self):
         record = _make_record()
         xml = etree.fromstring(_build_log_event_xml(record, "crm"))
