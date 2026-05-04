@@ -970,7 +970,7 @@ class TestPublishCompanyDeactivated:
 
 # ---------------------------------------------------------------------------
 # LogEvent — publish_log_event_raw
-# Exchange: logs.direct (direct, durable) | rk: controlroom.logs.queue
+# Exchange: logs.direct (direct, durable) | rk: routing.log → controlroom.logs.queue
 # ---------------------------------------------------------------------------
 
 def _get_logs_published_xml(mock_exchange) -> etree._Element:
@@ -1007,9 +1007,14 @@ class TestPublishLogEventRaw:
         setup_sender.logs_exchange.publish.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_routing_key_is_controlroom_logs_queue(self, setup_sender):
+    async def test_routing_key_is_routing_log(self, setup_sender):
+        """Live broker bindt logs.direct -> controlroom.logs.queue met rk 'routing.log'.
+
+        ClickUp-spec table heeft labels omgedraaid (rk en queue-naam zijn gewisseld).
+        Geverifieerd 2026-05-04: rk 'controlroom.logs.queue' dropt 25/26 berichten.
+        """
         await sender.publish_log_event_raw(self.SAMPLE_XML)
-        assert _get_logs_routing_key(setup_sender) == "controlroom.logs.queue"
+        assert _get_logs_routing_key(setup_sender) == "routing.log"
 
     @pytest.mark.asyncio
     async def test_message_is_persistent(self, setup_sender):

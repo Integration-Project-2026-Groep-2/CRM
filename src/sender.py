@@ -16,7 +16,7 @@ Implemented contracts:
   Contract 10b — crm.person.lookup.responded (durable: false)
   Contract 17b — crm.unpaid.responded        (durable: false)
   Contract 6   — crm.mail.requested          (durable: true)
-  LogEvent     — logs.direct                 (direct exchange, rk controlroom.logs.queue)
+  LogEvent     — logs.direct                 (direct exchange, rk routing.log)
 """
 
 import logging
@@ -97,8 +97,14 @@ async def _publish_conflict(xml_bytes: bytes, persistent: bool = False) -> None:
 
 # ---------------------------------------------------------------------------
 # LogEvent — CRM → Controlroom: service log forwarding
-# Exchange: logs.direct (direct, durable) | routing key: controlroom.logs.queue
-# Queue (Controlroom-side): routing.log (durable, DLQ controlroom.logs.queue.dlq)
+# Exchange: logs.direct (direct, durable) | routing key: routing.log
+# Queue (Controlroom-side): controlroom.logs.queue (durable, DLQ controlroom.logs.queue.dlq)
+#
+# NOTE: ClickUp-spec heeft routing-key en queue-naam labels omgewisseld in de
+# property-table. De feitelijke broker-binding bevestigd via de live broker:
+#   logs.direct --[routing.log]--> controlroom.logs.queue
+# Onze publish gebruikt dus rk="routing.log" — anders dropt RabbitMQ alle
+# berichten omdat geen binding matcht (geverifieerd 2026-05-04: 25/26 gedropt).
 # ---------------------------------------------------------------------------
 
 async def publish_log_event_raw(xml_bytes: bytes) -> None:
@@ -113,7 +119,7 @@ async def publish_log_event_raw(xml_bytes: bytes) -> None:
         return
     await _logs_exchange.publish(
         aio_pika.Message(body=xml_bytes, delivery_mode=DeliveryMode.PERSISTENT),
-        routing_key="controlroom.logs.queue",
+        routing_key="routing.log",
     )
 
 
