@@ -3,7 +3,6 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from lxml import etree
 
-
 VALID_BADGE_LINK_XML = b"""<?xml version='1.0' encoding='utf-8'?>
 <BadgeLink>
     <badgeId>BADGE-C12-001</badgeId>
@@ -90,8 +89,8 @@ class TestIotBadgeLinkedHandler:
 
 
 def test_contract_12_is_active_in_receiver_registry():
-    from src.handlers.iot_badge_linked import handle
     from src.handlers._registry import PENDING_EXCHANGES, QUEUE_REGISTRY
+    from src.handlers.iot_badge_linked import handle
 
     c12 = [
         entry for entry in QUEUE_REGISTRY
