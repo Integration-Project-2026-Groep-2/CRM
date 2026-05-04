@@ -244,6 +244,36 @@ class TestBuildLogEventXmlDataHardening:
         # findtext returns None for empty text in some lxml versions
         assert data in (None, "")
 
+    def test_cdata_terminator_in_data_does_not_drop_record(self):
+        """`]]>` would raise ValueError in etree.CDATA — must be neutralised.
+
+        Without the `]]>` → `]] >` replacement, a log message like
+        `logger.error("got payload: %s", xml_string)` containing `]]>`
+        anywhere would silently drop the record via emit()'s ValueError
+        catch-all — the very failure mode CDATA was supposed to fix.
+        """
+        record = _make_record(msg="payload contains ]]> sequence")
+        xml_bytes = _build_log_event_xml(record, "crm")
+        # Bytes are well-formed (no premature CDATA termination)
+        assert b"<![CDATA[payload contains ]] > sequence]]></data>" in xml_bytes
+        # Round-trips cleanly through XSD validation
+        xml_validator.validate(xml_bytes)
+        # Content survives with single-space mutation
+        data = etree.fromstring(xml_bytes).findtext("data")
+        assert data == "payload contains ]] > sequence"
+
+    def test_multiple_cdata_terminators_in_data(self):
+        """Repeated `]]>` sequences are all neutralised."""
+        record = _make_record(msg="]]> first ]]> second ]]> third")
+        xml_bytes = _build_log_event_xml(record, "crm")
+        xml_validator.validate(xml_bytes)
+        data = etree.fromstring(xml_bytes).findtext("data")
+        assert data == "]] > first ]] > second ]] > third"
+        # No raw `]]>` survives inside the CDATA section
+        cdata_start = xml_bytes.index(b"<![CDATA[")
+        cdata_end = xml_bytes.index(b"]]></data>")
+        assert b"]]>" not in xml_bytes[cdata_start + len(b"<![CDATA["):cdata_end]
+
 
 # ---------------------------------------------------------------------------
 # RabbitMQLogHandler.emit

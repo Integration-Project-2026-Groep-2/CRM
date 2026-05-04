@@ -101,6 +101,14 @@ def _build_log_event_xml(record: logging.LogRecord, service_name: str) -> bytes:
     reach lxml — otherwise a single ``\\x00`` (e.g. from a mangled UTF-8
     byte) raises ``ValueError`` deep inside ``etree.SubElement.text =``
     and ``emit()`` silently drops the record.
+
+    The literal sequence ``]]>`` cannot appear inside a CDATA section —
+    ``etree.CDATA(text)`` raises ``ValueError`` if it does, which would
+    then be caught by emit() and silently drop the record (the very
+    failure mode we set out to fix). Triggers in real logs: XML payloads,
+    regex patterns containing ``]]>``, or stack traces from XML/HTML
+    parser libs. We neutralise the sequence by inserting a single space:
+    ``]]>`` → ``]] >``. Minimal visual mutation, no content loss, no drop.
     """
     level = _PY_TO_XSD_LEVEL.get(record.levelname, record.levelname)
     timestamp = datetime.fromtimestamp(record.created, tz=timezone.utc).strftime(
@@ -112,6 +120,10 @@ def _build_log_event_xml(record: logging.LogRecord, service_name: str) -> bytes:
 
     # Defence-in-depth — see Serialization notes above.
     data = _ILLEGAL_XML_CHARS_RE.sub("", data)
+
+    # CDATA cannot contain the terminator sequence `]]>`. Insert a space
+    # to neutralise it while preserving readability.
+    data = data.replace("]]>", "]] >")
 
     root = etree.Element("LogEvent")
     etree.SubElement(root, "level").text = level
