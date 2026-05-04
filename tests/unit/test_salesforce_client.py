@@ -42,6 +42,7 @@ from src.salesforce_client import (
     has_contact_planning_id_field,
     has_session_registration_object,
     update_facturatie_account,
+    update_contact_badge_code_by_email,
     update_kassa_contact,
     update_mailing_contact,
     update_payment_status,
@@ -1292,6 +1293,75 @@ async def test_update_kassa_contact_preserves_specialized_role_and_skips_empty_b
     assert result["Role__c"] == "ADMIN"
     assert result["Company_ID__c"] == "company-old"
     assert result["Badge_Code__c"] == "BADGE-OLD"
+
+
+@pytest.mark.asyncio
+async def test_update_contact_badge_code_by_email_updates_unique_contact(sf):
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{"Id": "003000000000091"}],
+    }
+    sf.Contact.get.side_effect = [
+        {
+            "Id": "003000000000091",
+            "Email": "visitor@example.com",
+            "Badge_Code__c": None,
+        },
+        {
+            "Id": "003000000000091",
+            "Email": "visitor@example.com",
+            "Badge_Code__c": "BADGE-C12-001",
+        },
+    ]
+
+    result = await update_contact_badge_code_by_email(
+        sf,
+        email="visitor@example.com",
+        badge_code="BADGE-C12-001",
+    )
+
+    sf.Contact.update.assert_called_once_with(
+        "003000000000091",
+        {"Badge_Code__c": "BADGE-C12-001"},
+    )
+    assert result["Badge_Code__c"] == "BADGE-C12-001"
+
+
+@pytest.mark.asyncio
+async def test_update_contact_badge_code_by_email_returns_none_when_no_contact(sf):
+    sf.query.return_value = {"totalSize": 0, "records": []}
+
+    result = await update_contact_badge_code_by_email(
+        sf,
+        email="missing@example.com",
+        badge_code="BADGE-C12-404",
+    )
+
+    assert result is None
+    sf.Contact.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_contact_badge_code_by_email_returns_existing_when_unchanged(sf):
+    existing_contact = {
+        "Id": "003000000000092",
+        "Email": "visitor@example.com",
+        "Badge_Code__c": "BADGE-C12-001",
+    }
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{"Id": "003000000000092"}],
+    }
+    sf.Contact.get.return_value = existing_contact
+
+    result = await update_contact_badge_code_by_email(
+        sf,
+        email="visitor@example.com",
+        badge_code="BADGE-C12-001",
+    )
+
+    assert result == existing_contact
+    sf.Contact.update.assert_not_called()
 
 
 @pytest.mark.asyncio
