@@ -88,7 +88,13 @@ def _build_log_event_xml(record: logging.LogRecord, service_name: str) -> bytes:
     etree.SubElement(root, "service").text = service_name
     etree.SubElement(root, "data").text = data
 
-    return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
+    # lxml's xml_declaration=True emits single-quoted attributes
+    # (`<?xml version='1.0' ...?>`) followed by a newline. Some Logstash /
+    # Java XML codecs choke on either the single quotes or the inter-element
+    # newline. Emit our own double-quoted declaration without trailing newline
+    # so the body is a single line: <?xml...?><LogEvent>...</LogEvent>.
+    body = etree.tostring(root, xml_declaration=False, encoding="UTF-8")
+    return b'<?xml version="1.0" encoding="UTF-8"?>' + body
 
 
 class RabbitMQLogHandler(logging.Handler):
