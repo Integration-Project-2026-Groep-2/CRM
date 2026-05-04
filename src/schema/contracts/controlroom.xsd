@@ -27,7 +27,13 @@
 
   <!-- ============================================================
        CONTRACT 8 — CRM → Controlroom: periodieke statuscheck
-       Queue: crm.status.checked | durable: false
+       Exchange: statuscheck.direct (DIRECT, durable=true) | routing key: routing.statuscheck
+       Consumer queue: controlroom.statuscheck.queue (durable=true,
+         DLQ controlroom.statuscheck.queue.dlq)
+       Frequency: every 120 seconds
+       Source of truth: ClickUp doc 2kyr1d3m-5735 (Controlroom team)
+       memory/disk are fractions in [0.0, 1.0] — psutil.*.percent / 100,
+         clipped at the source to satisfy the bound on bursty hosts.
   ============================================================ -->
   <xs:element name="StatusCheck">
     <xs:complexType>
@@ -40,46 +46,22 @@
           </xs:simpleType>
         </xs:element>
         <xs:element name="timestamp" type="ISO8601DateTimeType"/>
-        <xs:element name="status">
+        <xs:element name="uptime" type="xs:nonNegativeInteger"/>
+        <xs:element name="memory">
           <xs:simpleType>
-            <xs:restriction base="xs:string">
-              <xs:enumeration value="healthy"/>
-              <xs:enumeration value="degraded"/>
-              <xs:enumeration value="unhealthy"/>
-              <xs:enumeration value="unknown"/>
+            <xs:restriction base="xs:decimal">
+              <xs:minInclusive value="0.0"/>
+              <xs:maxInclusive value="1.0"/>
             </xs:restriction>
           </xs:simpleType>
         </xs:element>
-        <xs:element name="uptime" type="xs:nonNegativeInteger"/>
-        <xs:element name="systemLoad">
-          <xs:complexType>
-            <xs:sequence>
-              <xs:element name="cpu">
-                <xs:simpleType>
-                  <xs:restriction base="xs:decimal">
-                    <xs:minInclusive value="0.0"/>
-                    <xs:maxInclusive value="1.0"/>
-                  </xs:restriction>
-                </xs:simpleType>
-              </xs:element>
-              <xs:element name="memory">
-                <xs:simpleType>
-                  <xs:restriction base="xs:decimal">
-                    <xs:minInclusive value="0.0"/>
-                    <xs:maxInclusive value="1.0"/>
-                  </xs:restriction>
-                </xs:simpleType>
-              </xs:element>
-              <xs:element name="disk">
-                <xs:simpleType>
-                  <xs:restriction base="xs:decimal">
-                    <xs:minInclusive value="0.0"/>
-                    <xs:maxInclusive value="1.0"/>
-                  </xs:restriction>
-                </xs:simpleType>
-              </xs:element>
-            </xs:sequence>
-          </xs:complexType>
+        <xs:element name="disk">
+          <xs:simpleType>
+            <xs:restriction base="xs:decimal">
+              <xs:minInclusive value="0.0"/>
+              <xs:maxInclusive value="1.0"/>
+            </xs:restriction>
+          </xs:simpleType>
         </xs:element>
       </xs:sequence>
     </xs:complexType>

@@ -23,6 +23,7 @@ def config() -> Config:
         salesforce_security_token="test",
         salesforce_domain="login",
         heartbeat_interval_seconds=0,  # 0 for fast tests
+        status_check_interval_seconds=0,  # 0 for fast tests
         system_name="CRM",
         polling_interval_seconds=0,  # 0 for fast tests
         polling_state_path="/tmp/polling_checkpoint_test.json",
