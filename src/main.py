@@ -1,10 +1,12 @@
 """CRM integration service entrypoint.
 
-Runs 3 asyncio tasks concurrently:
+Runs 4 asyncio tasks concurrently:
 - heartbeat: XML heartbeat every second (Contract 7)
 - receiver: listens on the configured inbound RabbitMQ queues
 - polling: detects out-of-band Salesforce UI edits, publishes
   crm.user.* / crm.company.* contracts so other teams stay in sync
+- log_publisher: drains the in-process log queue and publishes LogEvent XML
+  to logs.direct so Controlroom can aggregate service logs (Contract LogEvent)
 
 The sender module is a utility library (not a task) — receiver and polling
 handlers call sender.publish_*() functions to publish outbound messages.
@@ -21,6 +23,7 @@ from src import sender
 from src.config import load_config, setup_logging
 from src.connection import get_rabbitmq_connection
 from src.heartbeat import run_heartbeat
+from src.logging_rabbitmq import attach_rabbitmq_log_handler, run_log_publisher
 from src.polling import run_polling
 from src.receiver import run_receiver
 
@@ -66,6 +69,11 @@ async def main() -> None:
     channel = await connection.channel()
     await sender.init(channel)
 
+    # Attach the RabbitMQ log handler AFTER the connection + sender are up so
+    # connect-time logs flow only through stdout and can never be re-routed to
+    # an exchange that may not yet be reachable.
+    attach_rabbitmq_log_handler(config.log_service_name, config.log_rabbitmq_level)
+
     # Polling creates its OWN Salesforce client inside run_polling (same pattern
     # as run_receiver). Doing the SF login here would block heartbeat/status
     # startup while we wait for SF, which defeats the point of having those
@@ -74,6 +82,7 @@ async def main() -> None:
         asyncio.create_task(_supervised_task("heartbeat", lambda: run_heartbeat(connection, config))),
         asyncio.create_task(_supervised_task("receiver", lambda: run_receiver(connection, config, shutdown_event))),
         asyncio.create_task(_supervised_task("polling", lambda: run_polling(config, shutdown_event))),
+        asyncio.create_task(_supervised_task("log_publisher", lambda: run_log_publisher(connection, config.log_service_name))),
     ]
     try:
         await shutdown_event.wait()  # Wait until shutdown signal is received

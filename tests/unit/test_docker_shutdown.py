@@ -61,6 +61,8 @@ async def test_main_stops_on_shutdown_signal(monkeypatch: pytest.MonkeyPatch) ->
         polling_state_path="/tmp/polling_checkpoint_test.json",
         polling_integration_user_id=None,
         log_level="INFO",
+        log_service_name="crm",
+        log_rabbitmq_level="INFO",
     )
     never = asyncio.Event()
 
@@ -91,10 +93,15 @@ async def test_main_stops_on_shutdown_signal(monkeypatch: pytest.MonkeyPatch) ->
         "src.main.get_rabbitmq_connection",
         AsyncMock(return_value=mock_connection),
     )
+    async def fake_run_log_publisher(*_args: object, **_kwargs: object) -> None:
+        await never.wait()
+
     monkeypatch.setattr("src.main.sender.init", AsyncMock())
     monkeypatch.setattr("src.main.run_heartbeat", fake_run_heartbeat)
     monkeypatch.setattr("src.main.run_receiver", fake_run_receiver)
     monkeypatch.setattr("src.main.run_polling", fake_run_polling)
+    monkeypatch.setattr("src.main.attach_rabbitmq_log_handler", lambda *_a, **_kw: None)
+    monkeypatch.setattr("src.main.run_log_publisher", fake_run_log_publisher)
 
     await main()
 

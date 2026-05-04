@@ -35,6 +35,8 @@ def make_config(tmp_path: Path, polling_integration_user_id: str | None = None) 
         polling_state_path=str(tmp_path / "checkpoint.json"),
         polling_integration_user_id=polling_integration_user_id,
         log_level="INFO",
+        log_service_name="crm",
+        log_rabbitmq_level="INFO",
     )
 
 

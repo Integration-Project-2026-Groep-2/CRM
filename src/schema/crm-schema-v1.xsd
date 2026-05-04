@@ -31,6 +31,8 @@
   <xs:include schemaLocation="contracts/facturatie.xsd"/>
   <xs:include schemaLocation="contracts/mailing.xsd"/>
   <xs:include schemaLocation="contracts/controlroom.xsd"/>
+  <xs:include schemaLocation="contracts/controlroom-severity-type.xsd"/>
+  <xs:include schemaLocation="contracts/controlroom-logs.xsd"/>
   <xs:include schemaLocation="contracts/kassa.xsd"/>
   <xs:include schemaLocation="contracts/planning.xsd"/>
   <xs:include schemaLocation="contracts/iot.xsd"/>

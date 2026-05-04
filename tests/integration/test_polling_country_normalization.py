@@ -125,6 +125,8 @@ async def _run_polling_once_and_capture(
         polling_state_path=str(tmp_path / f"checkpoint-{uuid.uuid4().hex[:6]}.json"),
         polling_integration_user_id=None,
         log_level="INFO",
+        log_service_name="crm",
+        log_rabbitmq_level="INFO",
     )
 
     queue_name = f"test-crm-company-{uuid.uuid4().hex[:8]}"
