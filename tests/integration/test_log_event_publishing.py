@@ -3,7 +3,7 @@
 End-to-end:
 1. Connect to local broker.
 2. sender.init(channel) declares logs.direct exchange.
-3. Bind a throwaway queue with rk controlroom.logs.queue to logs.direct.
+3. Bind a throwaway queue with rk routing.log to logs.direct.
 4. attach_rabbitmq_log_handler installs the handler on the root logger.
 5. Emit a logger.error("integration-test-marker") and let run_log_publisher
    drain one item.
@@ -97,7 +97,7 @@ async def test_log_event_publishes_to_logs_direct_exchange(
         # Bind a throwaway queue to logs.direct so we can read what was published.
         queue_name = f"test-log-event-{uuid.uuid4().hex[:8]}"
         queue = await channel.declare_queue(queue_name, durable=False, auto_delete=True)
-        await queue.bind(sender._logs_exchange, routing_key="controlroom.logs.queue")
+        await queue.bind(sender._logs_exchange, routing_key="routing.log")
 
         # Install handler. Force min_level=DEBUG so any record reaches the queue.
         attach_rabbitmq_log_handler("crm-test", min_level="DEBUG")
@@ -143,7 +143,7 @@ async def test_run_log_publisher_drains_queue_against_real_broker(
 
         queue_name = f"test-log-publisher-{uuid.uuid4().hex[:8]}"
         queue = await channel.declare_queue(queue_name, durable=False, auto_delete=True)
-        await queue.bind(sender._logs_exchange, routing_key="controlroom.logs.queue")
+        await queue.bind(sender._logs_exchange, routing_key="routing.log")
 
         attach_rabbitmq_log_handler("crm-runner-test", min_level="DEBUG")
 

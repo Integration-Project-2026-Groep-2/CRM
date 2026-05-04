@@ -412,13 +412,16 @@ channels:
           durable: false
 
   crmLogEvent:
-    address: logs.direct/controlroom.logs.queue
+    address: logs.direct/routing.log
     description: >-
       Contract 39 — CRM → Controlroom: forward elke service log record als
       <LogEvent> XML naar de gedeelde Controlroom log-aggregator (Logstash →
       Elasticsearch → Kibana). Publiceert naar exchange logs.direct met routing
-      key controlroom.logs.queue. Controlroom declareert zelf de durable queue
-      routing.log met DLQ controlroom.logs.queue.dlq. Sinds 2026-05-04.
+      key routing.log. Controlroom declareert zelf de durable queue
+      controlroom.logs.queue (DLQ controlroom.logs.queue.dlq). Sinds 2026-05-04.
+      Let op: ClickUp Log Exchange property-table heeft routing-key en queue-naam
+      labels omgewisseld. Live broker (geverifieerd 2026-05-04) bindt
+      logs.direct -[rk routing.log]-> controlroom.logs.queue.
     messages:
       logEvent:
         $ref: "#/components/messages/LogEvent"
@@ -992,8 +995,8 @@ operations:
       - $ref: "#/channels/crmLogEvent/messages/logEvent"
     summary: >-
       Forward elke `src/` log record als <LogEvent> XML naar Controlroom's
-      logs.direct exchange (rk controlroom.logs.queue) zodat Logstash de
-      records oppikt voor Elasticsearch + Kibana. Sinds 2026-05-04.
+      logs.direct exchange (rk routing.log) zodat Logstash de records oppikt
+      voor Elasticsearch + Kibana. Sinds 2026-05-04.
     tags:
       - name: controlroom
       - name: release-2
@@ -1861,7 +1864,7 @@ components:
       title: CRM service log forwarded to Controlroom
       summary: >-
         Elk src/ logger record wordt asynchroon gepubliceerd als <LogEvent> XML
-        op logs.direct (rk controlroom.logs.queue). Controlroom aggregeert via
+        op logs.direct (rk routing.log). Controlroom aggregeert via
         durable queue routing.log → Logstash → Elasticsearch → Kibana.
       contentType: application/xml
       tags:
