@@ -1,7 +1,7 @@
 asyncapi: 3.1.0
 info:
   title: Integratieproject 2026 — CRM (Salesforce) RabbitMQ Contracts
-  version: 1.9.0
+  version: 1.10.0
   description: >
     XML-contracten voor alle integraties waarbij het CRM-team (Salesforce)
     betrokken is.
@@ -410,6 +410,25 @@ channels:
         is: queue
         queue:
           durable: false
+
+  crmLogEvent:
+    address: logs.direct/controlroom.logs.queue
+    description: >-
+      Contract 39 — CRM → Controlroom: forward elke service log record als
+      <LogEvent> XML naar de gedeelde Controlroom log-aggregator (Logstash →
+      Elasticsearch → Kibana). Publiceert naar exchange logs.direct met routing
+      key controlroom.logs.queue. Controlroom declareert zelf de durable queue
+      routing.log met DLQ controlroom.logs.queue.dlq. Sinds 2026-05-04.
+    messages:
+      logEvent:
+        $ref: "#/components/messages/LogEvent"
+    bindings:
+      amqp:
+        is: routingKey
+        exchange:
+          name: logs.direct
+          type: direct
+          durable: true
 
   # ============================================================
   # CONTROLROOM → CRM
@@ -964,6 +983,20 @@ operations:
     tags:
       - name: controlroom
       - name: release-1
+
+  sendLogEvent:
+    action: send
+    channel:
+      $ref: "#/channels/crmLogEvent"
+    messages:
+      - $ref: "#/channels/crmLogEvent/messages/logEvent"
+    summary: >-
+      Forward elke `src/` log record als <LogEvent> XML naar Controlroom's
+      logs.direct exchange (rk controlroom.logs.queue) zodat Logstash de
+      records oppikt voor Elasticsearch + Kibana. Sinds 2026-05-04.
+    tags:
+      - name: controlroom
+      - name: release-2
 
   receiveWarning:
     action: receive
@@ -1822,6 +1855,43 @@ components:
                 <disk>0.60</disk>
               </systemLoad>
             </StatusCheck>
+
+    LogEvent:
+      name: LogEvent
+      title: CRM service log forwarded to Controlroom
+      summary: >-
+        Elk src/ logger record wordt asynchroon gepubliceerd als <LogEvent> XML
+        op logs.direct (rk controlroom.logs.queue). Controlroom aggregeert via
+        durable queue routing.log → Logstash → Elasticsearch → Kibana.
+      contentType: application/xml
+      tags:
+        - name: controlroom
+        - name: release-2
+      payload:
+        $ref: "#/components/schemas/LogEvent"
+      examples:
+        - name: info
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <LogEvent>
+              <level>INFO</level>
+              <timestamp>2026-05-04T10:31:42Z</timestamp>
+              <service>crm</service>
+              <data>Sender initialized (exchanges: contact.topic, crm.user.conflict, logs.direct).</data>
+            </LogEvent>
+        - name: error_with_traceback
+          payload: |
+            <?xml version="1.0" encoding="UTF-8"?>
+            <LogEvent>
+              <level>ERROR</level>
+              <timestamp>2026-05-04T10:32:01Z</timestamp>
+              <service>crm</service>
+              <data>Heartbeat iteration failed
+            Traceback (most recent call last):
+              File "src/heartbeat.py", line 70, in run_heartbeat
+                await exchange.publish(...)
+            ConnectionError: Channel closed</data>
+            </LogEvent>
 
     Warning:
       name: Warning
@@ -3109,6 +3179,42 @@ components:
             - heartbeat
             - statusCheck
             - user
+
+    LogEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - level
+        - timestamp
+        - service
+        - data
+      description: >-
+        Service log record forwarded to Controlroom via logs.direct.
+        Levels: Python WARNING maps to WARN, CRITICAL maps to FATAL.
+        PANIC heeft geen native Python equivalent (custom level).
+      properties:
+        level:
+          type: string
+          description: SeverityType enum (canonical, vastgesteld door Controlroom)
+          enum:
+            - DEBUG
+            - INFO
+            - WARN
+            - ERROR
+            - FATAL
+            - PANIC
+        timestamp:
+          type: string
+          format: date-time
+          description: ISO 8601 UTC met Z-suffix
+        service:
+          type: string
+          description: Bron-service identifier (env LOG_SERVICE_NAME, default "crm")
+        data:
+          type: string
+          description: >-
+            Geformatteerd log message (record.getMessage()), gevolgd door
+            traceback indien record.exc_info aanwezig is.
 
     PersonLookupRequest:
       type: object
