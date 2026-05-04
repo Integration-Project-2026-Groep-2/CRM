@@ -21,10 +21,14 @@ def setup_sender():
     mock_exchange.publish = AsyncMock()
     mock_conflict_exchange = MagicMock()
     mock_conflict_exchange.publish = AsyncMock()
+    mock_logs_exchange = MagicMock()
+    mock_logs_exchange.publish = AsyncMock()
     sender._channel = mock_channel
     sender._exchange = mock_exchange
     sender._conflict_exchange = mock_conflict_exchange
+    sender._logs_exchange = mock_logs_exchange
     mock_exchange.conflict_exchange = mock_conflict_exchange
+    mock_exchange.logs_exchange = mock_logs_exchange
     yield mock_exchange
 
 
@@ -962,3 +966,80 @@ class TestPublishCompanyDeactivated:
         assert _get_routing_key(setup_sender) == "crm.company.deactivated"
         from aio_pika import DeliveryMode
         assert _get_delivery_mode(setup_sender) == DeliveryMode.PERSISTENT
+
+
+# ---------------------------------------------------------------------------
+# LogEvent — publish_log_event_raw
+# Exchange: logs.direct (direct, durable) | rk: controlroom.logs.queue
+# ---------------------------------------------------------------------------
+
+def _get_logs_published_xml(mock_exchange) -> etree._Element:
+    call_args = mock_exchange.logs_exchange.publish.call_args
+    message = call_args[0][0]
+    return etree.fromstring(message.body)
+
+
+def _get_logs_routing_key(mock_exchange) -> str:
+    return mock_exchange.logs_exchange.publish.call_args[1]["routing_key"]
+
+
+def _get_logs_delivery_mode(mock_exchange):
+    message = mock_exchange.logs_exchange.publish.call_args[0][0]
+    return message.delivery_mode
+
+
+class TestPublishLogEventRaw:
+    """Tests for sender.publish_log_event_raw — LogEvent → logs.direct."""
+
+    SAMPLE_XML = (
+        b"<?xml version='1.0' encoding='UTF-8'?>"
+        b"<LogEvent>"
+        b"<level>INFO</level>"
+        b"<timestamp>2026-05-04T10:31:42Z</timestamp>"
+        b"<service>crm</service>"
+        b"<data>integration test marker</data>"
+        b"</LogEvent>"
+    )
+
+    @pytest.mark.asyncio
+    async def test_publishes_to_logs_direct_exchange(self, setup_sender):
+        await sender.publish_log_event_raw(self.SAMPLE_XML)
+        setup_sender.logs_exchange.publish.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_routing_key_is_controlroom_logs_queue(self, setup_sender):
+        await sender.publish_log_event_raw(self.SAMPLE_XML)
+        assert _get_logs_routing_key(setup_sender) == "controlroom.logs.queue"
+
+    @pytest.mark.asyncio
+    async def test_message_is_persistent(self, setup_sender):
+        from aio_pika import DeliveryMode
+        await sender.publish_log_event_raw(self.SAMPLE_XML)
+        assert _get_logs_delivery_mode(setup_sender) == DeliveryMode.PERSISTENT
+
+    @pytest.mark.asyncio
+    async def test_payload_is_passed_through_unchanged(self, setup_sender):
+        await sender.publish_log_event_raw(self.SAMPLE_XML)
+        message = setup_sender.logs_exchange.publish.call_args[0][0]
+        assert message.body == self.SAMPLE_XML
+
+    @pytest.mark.asyncio
+    async def test_root_element_is_log_event(self, setup_sender):
+        await sender.publish_log_event_raw(self.SAMPLE_XML)
+        assert _get_logs_published_xml(setup_sender).tag == "LogEvent"
+
+    @pytest.mark.asyncio
+    async def test_no_op_when_exchange_not_initialised(self):
+        """Defensive: publishing before init() must not raise."""
+        sender._logs_exchange = None
+        # Must not raise
+        await sender.publish_log_event_raw(self.SAMPLE_XML)
+
+    @pytest.mark.asyncio
+    async def test_xml_is_xsd_valid(self, setup_sender):
+        """End-to-end: payload must validate against the real XSD manifest."""
+        from src import xml_validator
+
+        await sender.publish_log_event_raw(self.SAMPLE_XML)
+        xml = _get_logs_published_xml(setup_sender)
+        xml_validator.validate(etree.tostring(xml))

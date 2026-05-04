@@ -28,6 +28,8 @@ def config() -> Config:
         polling_state_path="/tmp/polling_checkpoint_test.json",
         polling_integration_user_id=None,
         log_level="INFO",
+        log_service_name="crm",
+        log_rabbitmq_level="INFO",
     )
 
 

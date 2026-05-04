@@ -20,6 +20,8 @@ class Config:
     polling_state_path: str
     polling_integration_user_id: str | None
     log_level: str
+    log_service_name: str
+    log_rabbitmq_level: str
 
 
 def load_config() -> Config:
@@ -51,6 +53,8 @@ def load_config() -> Config:
         polling_state_path=os.getenv("POLLING_STATE_PATH", "/tmp/polling_checkpoint.json"),
         polling_integration_user_id=os.getenv("POLLING_INTEGRATION_USER_ID") or None,
         log_level=os.getenv("LOG_LEVEL", "INFO"),
+        log_service_name=os.getenv("LOG_SERVICE_NAME", "crm"),
+        log_rabbitmq_level=os.getenv("LOG_RABBITMQ_LEVEL", "INFO"),
     )
 
 

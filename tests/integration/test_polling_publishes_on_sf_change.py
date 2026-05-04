@@ -129,6 +129,8 @@ async def test_polling_publishes_crm_user_confirmed_to_contact_topic(
         polling_state_path=str(tmp_path / "checkpoint.json"),
         polling_integration_user_id=None,
         log_level="INFO",
+        log_service_name="crm",
+        log_rabbitmq_level="INFO",
     )
 
     queue_name = f"test-crm-user-confirmed-{uuid.uuid4().hex[:8]}"

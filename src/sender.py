@@ -16,6 +16,7 @@ Implemented contracts:
   Contract 10b — crm.person.lookup.responded (durable: false)
   Contract 17b — crm.unpaid.responded        (durable: false)
   Contract 6   — crm.mail.requested          (durable: true)
+  LogEvent     — logs.direct                 (direct exchange, rk controlroom.logs.queue)
 """
 
 import logging
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 _channel: AbstractChannel | None = None
 _exchange: AbstractExchange | None = None
 _conflict_exchange: AbstractExchange | None = None
+_logs_exchange: AbstractExchange | None = None
 
 
 async def init(channel: AbstractChannel) -> None:
@@ -41,9 +43,10 @@ async def init(channel: AbstractChannel) -> None:
 
     Must be called once at startup before any publish function is used.
     Most CRM outbound messages are published via the contact.topic exchange.
-    Contract 15 is the exception and uses a dedicated fanout exchange.
+    Contract 15 uses a dedicated fanout exchange. The LogEvent contract uses
+    a dedicated direct exchange (logs.direct).
     """
-    global _channel, _exchange, _conflict_exchange  # noqa: PLW0603
+    global _channel, _exchange, _conflict_exchange, _logs_exchange  # noqa: PLW0603
     _channel = channel
     _exchange = await channel.declare_exchange(
         "contact.topic", type=ExchangeType.TOPIC, durable=True,
@@ -51,7 +54,12 @@ async def init(channel: AbstractChannel) -> None:
     _conflict_exchange = await channel.declare_exchange(
         "crm.user.conflict", type=ExchangeType.FANOUT, durable=True,
     )
-    logger.info("Sender initialized (exchanges: contact.topic, crm.user.conflict).")
+    _logs_exchange = await channel.declare_exchange(
+        "logs.direct", type=ExchangeType.DIRECT, durable=True,
+    )
+    logger.info(
+        "Sender initialized (exchanges: contact.topic, crm.user.conflict, logs.direct)."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +93,28 @@ async def _publish_conflict(xml_bytes: bytes, persistent: bool = False) -> None:
         routing_key="",
     )
     logger.debug("Message published to fanout exchange 'crm.user.conflict' (persistent=%s).", persistent)
+
+
+# ---------------------------------------------------------------------------
+# LogEvent — CRM → Controlroom: service log forwarding
+# Exchange: logs.direct (direct, durable) | routing key: controlroom.logs.queue
+# Queue (Controlroom-side): routing.log (durable, DLQ controlroom.logs.queue.dlq)
+# ---------------------------------------------------------------------------
+
+async def publish_log_event_raw(xml_bytes: bytes) -> None:
+    """Publish pre-validated LogEvent XML to logs.direct.
+
+    This bypasses the typical build/validate-then-publish helper because the
+    RabbitMQLogHandler validates inside emit() (sync) and queues bytes for
+    the async worker. This function intentionally does NOT log on success
+    to avoid feeding records back into the handler that produced this call.
+    """
+    if _logs_exchange is None:
+        return
+    await _logs_exchange.publish(
+        aio_pika.Message(body=xml_bytes, delivery_mode=DeliveryMode.PERSISTENT),
+        routing_key="controlroom.logs.queue",
+    )
 
 
 # ---------------------------------------------------------------------------
