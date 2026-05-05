@@ -1,0 +1,41 @@
+[project]
+name = "crm-mcp"
+version = "0.1.0"
+description = "CRM MCP server — read-only Salesforce access for the AI master agent"
+readme = "README.md"
+requires-python = ">=3.13"
+authors = [{ name = "Lars Cowé" }]
+dependencies = [
+    "mcp>=1.2,<2",
+    "simple-salesforce>=1.12,<2",
+    "python-dotenv>=1.0,<2",
+    "pydantic>=2.7,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0,<10",
+    "pytest-asyncio>=1.0,<2",
+    "ruff>=0.11,<1",
+]
+
+[project.scripts]
+crm-mcp = "crm_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["crm_mcp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
