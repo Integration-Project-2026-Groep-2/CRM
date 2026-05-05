@@ -2905,14 +2905,12 @@ class TestIsExpiredSessionError:
         )
         assert is_expired_session_error(exc) is True
 
-    def test_query_404_with_empty_body_is_not_session_expired(self):
-        """Regression: empty-body 404 on /query is NOT session-expired.
+    def test_detects_query_404_with_empty_body_as_session_expired(self):
+        """Observed polling failure: SF may return a bare 404 on /query.
 
-        The previous heuristic (removed) classified these as expired, which
-        caused a false-positive reauth loop in production when SF returned
-        transient empty-body 404s on the /query endpoint. Real session expiry
-        is covered by SalesforceExpiredSession or INVALID_SESSION_ID in the
-        content list.
+        In long-lived polling sessions this behaves like an expired session:
+        retrying with the same client keeps failing, while a fresh login
+        restores the query endpoint.
         """
         from simple_salesforce.exceptions import SalesforceResourceNotFound
 
@@ -2924,7 +2922,7 @@ class TestIsExpiredSessionError:
             "query",
             b"",
         )
-        assert is_expired_session_error(exc) is False
+        assert is_expired_session_error(exc) is True
 
     def test_ignores_404_on_unrelated_resource(self):
         """A genuine 404 (e.g. deleted custom endpoint) must NOT reauth-loop."""
@@ -3001,6 +2999,39 @@ class TestSfCall:
         assert session.sf is new_sf  # reauth mutated the container
         old_sf.query.assert_called_once()
         new_sf.query.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_reauths_and_retries_query_all_on_empty_query_404(self, monkeypatch):
+        from simple_salesforce.exceptions import SalesforceResourceNotFound
+
+        from src.salesforce_client import SalesforceSession, sf_call
+
+        old_sf = MagicMock()
+        old_sf.query_all.side_effect = SalesforceResourceNotFound(
+            "https://example.salesforce.com/services/data/v59.0/query/",
+            404,
+            "query",
+            b"",
+        )
+
+        new_sf = MagicMock()
+        new_sf.query_all.return_value = {"records": [{"Id": "003CONTACTXYZ"}]}
+
+        async def fake_get_client(config, shutdown_event=None):
+            return new_sf
+
+        monkeypatch.setattr(
+            "src.salesforce_client.get_salesforce_client", fake_get_client,
+        )
+
+        session = SalesforceSession(old_sf, config=MagicMock(), shutdown_event=None)
+
+        result = await sf_call(session, lambda sf: sf.query_all("SELECT Id FROM Contact"))
+
+        assert result == {"records": [{"Id": "003CONTACTXYZ"}]}
+        assert session.sf is new_sf
+        old_sf.query_all.assert_called_once()
+        new_sf.query_all.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_propagates_rate_limit_without_reauth(self, monkeypatch):

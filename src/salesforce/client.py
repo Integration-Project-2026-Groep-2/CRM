@@ -39,6 +39,7 @@ from simple_salesforce import Salesforce
 from simple_salesforce.exceptions import (
     SalesforceAuthenticationFailed,
     SalesforceExpiredSession,
+    SalesforceResourceNotFound,
 )
 
 from src.config import Config
@@ -127,6 +128,8 @@ def is_expired_session_error(exc: Exception) -> bool:
     1. Native 401 → `SalesforceExpiredSession`.
     2. 404 on /query with `INVALID_SESSION_ID` in the content list — the
        documented API response when the session is invalid.
+    3. Observed long-lived session failure where Salesforce returns a bare
+       404 for the REST query endpoint with an empty body.
     """
     if isinstance(exc, SalesforceExpiredSession):
         return True
@@ -135,7 +138,31 @@ def is_expired_session_error(exc: Exception) -> bool:
         for item in content:
             if isinstance(item, dict) and item.get("errorCode") == "INVALID_SESSION_ID":
                 return True
+    if _is_empty_query_resource_404(exc):
+        return True
     return "INVALID_SESSION_ID" in str(exc)
+
+
+def _is_empty_query_resource_404(exc: Exception) -> bool:
+    """Return True for the ambiguous empty-body 404 Salesforce emits on query."""
+    if not isinstance(exc, SalesforceResourceNotFound):
+        return False
+
+    status = getattr(exc, "status", None) or getattr(exc, "status_code", None)
+    if status != 404:
+        return False
+
+    resource_name = str(
+        getattr(exc, "resource_name", None)
+        or getattr(exc, "name", None)
+        or "",
+    ).strip("/")
+    url = str(getattr(exc, "url", ""))
+    if resource_name != "query" and "/query" not in url:
+        return False
+
+    content = getattr(exc, "content", None)
+    return content in (None, "", b"", [])
 
 
 class SalesforceSession:
