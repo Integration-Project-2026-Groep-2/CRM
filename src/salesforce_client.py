@@ -46,6 +46,7 @@ from src.salesforce.client import (  # noqa: F401
     has_session_registration_object,
     is_expired_session_error,
     is_rate_limit_error,
+    is_transient_query_404,
     sf_call,
 )
 from src.salesforce.contacts import (  # noqa: F401

@@ -59,6 +59,7 @@ from src.salesforce_client import (
     coerce_is_active,
     escape_soql,
     is_rate_limit_error,
+    is_transient_query_404,
     sf_call,
 )
 
@@ -894,6 +895,15 @@ async def run_polling(
         except Exception as exc:  # noqa: BLE001
             if is_rate_limit_error(exc):
                 logger.error("Polling: Salesforce rate limit hit; skipping cycle.")
+            elif is_transient_query_404(exc):
+                # Known SF edge response: empty-body 404 on /query. The next
+                # cycle recovers naturally. Reauth-on-this-signal caused a
+                # ~40min false-positive loop in production (commit 5686f19),
+                # so we explicitly DO NOT reauth — just skip and downgrade.
+                logger.warning(
+                    "Polling: transient SF empty-body 404 on /query; "
+                    "skipping cycle, next cycle should recover.",
+                )
             elif state is None or integration_user_id is None:
                 logger.exception(
                     "Polling bootstrap failed; will retry after interval. Error: %s", exc,
