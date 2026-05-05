@@ -354,7 +354,7 @@ class TestContract9Warning:
     async def test_valid_warning_is_consumed(self, channel, inbound_exchanges):
         """A valid warning XML should be consumed from the queue (not stuck)."""
         queue_name = "controlroom.warning.issued"
-        queue = await channel.declare_queue(queue_name, durable=False)
+        queue = await channel.declare_queue(queue_name, durable=True)
         await queue.bind(inbound_exchanges["planning.topic"], routing_key=queue_name)
         await _drain_queue(queue)
 
@@ -378,7 +378,7 @@ class TestContract9Warning:
     async def test_invalid_xml_is_rejected(self, channel, inbound_exchanges):
         """Invalid XML should be rejected (not requeued), queue stays empty."""
         queue_name = "controlroom.warning.issued"
-        queue = await channel.declare_queue(queue_name, durable=False)
+        queue = await channel.declare_queue(queue_name, durable=True)
         await queue.bind(inbound_exchanges["planning.topic"], routing_key=queue_name)
         await _drain_queue(queue)
 

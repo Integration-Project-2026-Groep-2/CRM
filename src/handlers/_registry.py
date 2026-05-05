@@ -49,7 +49,7 @@ HandlerFn = Callable[..., Awaitable[None]]
 # Tuple: (queue_name, handler, requires_sf, routing_key_override, durable, exchange_name)
 QUEUE_REGISTRY: list[tuple[str, HandlerFn, bool, str | None, bool, str | None]] = [
     # Contract 9 — Controlroom → CRM: system warning (no SF needed)
-    ("controlroom.warning.issued", controlroom_warning_issued.handle, False, None, False, "planning.topic"),
+    ("controlroom.warning.issued", controlroom_warning_issued.handle, False, None, True, "planning.topic"),
 
     # Contract 1/2 — Frontend → CRM: registration created/updated (consumer-prefixed queues)
     ("crm.frontend.registration.created", frontend_registration_created.handle, True,
