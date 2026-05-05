@@ -1320,6 +1320,69 @@ class TestRunPollingLoop:
         assert any("polling cycle failed" in rec.message.lower() for rec in caplog.records)
 
     @pytest.mark.asyncio
+    async def test_transient_query_404_logs_warning_no_traceback(
+        self, tmp_path, sender_init, monkeypatch, caplog,
+    ):
+        """Empty-body 404 on /query downgrades to WARNING without reauth.
+
+        Regression: a previous attempt routed this signal through
+        is_expired_session_error to trigger reauth, which produced a
+        ~40min false-positive loop in production (commit 5686f19). The
+        outer except in run_polling must log a single WARNING line, leave
+        no ERROR record, and not invoke reauth (`get_salesforce_client`
+        called exactly once — for the initial login only).
+        """
+        from simple_salesforce.exceptions import SalesforceResourceNotFound
+
+        sf = make_sf_mock(user_query_records=[{"Id": "UID"}])
+        sf.query_all.side_effect = SalesforceResourceNotFound(
+            "https://example.salesforce.com/services/data/v59.0/query/",
+            404,
+            "query",
+            b"",
+        )
+
+        login_calls: list[int] = []
+
+        async def counting_login(*_args, **_kwargs):
+            login_calls.append(1)
+            return sf
+
+        monkeypatch.setattr(
+            "src.salesforce_client.get_salesforce_client", counting_login,
+        )
+
+        config = make_config(tmp_path)
+
+        sleep_mock = AsyncMock(side_effect=asyncio.CancelledError())
+        monkeypatch.setattr(polling.asyncio, "sleep", sleep_mock)
+
+        with caplog.at_level("WARNING"):
+            with pytest.raises(asyncio.CancelledError):
+                await polling.run_polling(config)
+
+        # WARNING line about transient 404 must be present...
+        assert any(
+            rec.levelname == "WARNING"
+            and "transient sf empty-body 404" in rec.message.lower()
+            for rec in caplog.records
+        ), [(rec.levelname, rec.message) for rec in caplog.records]
+
+        # ...and the generic ERROR/exception path must NOT have fired
+        # (no "Polling cycle failed" log, no traceback attached).
+        assert not any(
+            "polling cycle failed" in rec.message.lower()
+            for rec in caplog.records
+        )
+        assert not any(
+            rec.levelname == "ERROR" and rec.exc_info is not None
+            for rec in caplog.records
+        )
+
+        # Reauth must NOT have been triggered: exactly one login (initial).
+        assert len(login_calls) == 1
+
+    @pytest.mark.asyncio
     async def test_reresolves_integration_user_after_refresh_window(self, tmp_path, sender_init, monkeypatch, patch_sf_login):
         """After >3600s monotonic, the user-id query runs again."""
         user_records = [{"Id": "UID1"}, {"Id": "UID2"}]

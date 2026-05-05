@@ -2908,11 +2908,13 @@ class TestIsExpiredSessionError:
     def test_query_404_with_empty_body_is_not_session_expired(self):
         """Regression: empty-body 404 on /query is NOT session-expired.
 
-        The previous heuristic (removed) classified these as expired, which
-        caused a false-positive reauth loop in production when SF returned
-        transient empty-body 404s on the /query endpoint. Real session expiry
-        is covered by SalesforceExpiredSession or INVALID_SESSION_ID in the
-        content list.
+        A previous heuristic classified these as expired, which caused a
+        false-positive reauth loop in production (~40min cadence) when SF
+        returned transient empty-body 404s on the /query endpoint. Real
+        session expiry is covered by SalesforceExpiredSession or
+        INVALID_SESSION_ID in the content list. Empty-body 404s are
+        handled separately by `is_transient_query_404` + a polling-side
+        WARNING log (no reauth). See commit 5686f19.
         """
         from simple_salesforce.exceptions import SalesforceResourceNotFound
 
@@ -2944,6 +2946,78 @@ class TestIsExpiredSessionError:
         from src.salesforce_client import is_expired_session_error
 
         assert is_expired_session_error(ValueError("bad value")) is False
+
+
+# ---------------------------------------------------------------------------
+# is_transient_query_404 — log-only signal for polling, separate from reauth
+# ---------------------------------------------------------------------------
+
+class TestIsTransientQuery404:
+    """Detector for the empty-body 404 SF emits on /query during polling.
+
+    This signal MUST stay decoupled from `is_expired_session_error` —
+    reauth on it caused a documented production loop (commit 5686f19).
+    The polling cycle handles it via WARNING + skip.
+    """
+
+    def _make_404(
+        self,
+        *,
+        url: str = "https://example.salesforce.com/services/data/v59.0/query/",
+        status: int = 404,
+        name: str = "query",
+        content: object = b"",
+    ):
+        from simple_salesforce.exceptions import SalesforceResourceNotFound
+
+        return SalesforceResourceNotFound(url, status, name, content)
+
+    def test_detects_empty_body_404_on_query(self):
+        from src.salesforce_client import is_transient_query_404
+
+        assert is_transient_query_404(self._make_404()) is True
+
+    def test_detects_when_only_url_indicates_query(self):
+        from src.salesforce_client import is_transient_query_404
+
+        # resource_name absent / generic, but URL ends with /query
+        exc = self._make_404(name="")
+        assert is_transient_query_404(exc) is True
+
+    def test_does_not_match_query_all_endpoint(self):
+        """`/queryAll` is a different endpoint and must not match.
+
+        The substring check ``/query`` would have matched ``/queryAll``;
+        the strict ``endswith("/query")`` rule prevents that.
+        """
+        from src.salesforce_client import is_transient_query_404
+
+        exc = self._make_404(
+            url="https://example.salesforce.com/services/data/v59.0/queryAll/",
+            name="queryAll",
+        )
+        assert is_transient_query_404(exc) is False
+
+    def test_does_not_match_when_content_is_non_empty(self):
+        """Non-empty content means SF returned a real REST error body."""
+        from src.salesforce_client import is_transient_query_404
+
+        exc = self._make_404(content=[{"errorCode": "MALFORMED_QUERY"}])
+        assert is_transient_query_404(exc) is False
+
+    def test_does_not_match_unrelated_resource(self):
+        from src.salesforce_client import is_transient_query_404
+
+        exc = self._make_404(
+            url="https://example.salesforce.com/services/data/v59.0/sobjects/Contact/",
+            name="sobjects/Contact",
+        )
+        assert is_transient_query_404(exc) is False
+
+    def test_does_not_match_non_404_exception(self):
+        from src.salesforce_client import is_transient_query_404
+
+        assert is_transient_query_404(ValueError("oops")) is False
 
 
 # ---------------------------------------------------------------------------
@@ -3001,6 +3075,45 @@ class TestSfCall:
         assert session.sf is new_sf  # reauth mutated the container
         old_sf.query.assert_called_once()
         new_sf.query.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_does_not_reauth_on_empty_body_query_404(self, monkeypatch):
+        """Regression: empty-body 404 on /query must NOT trigger reauth.
+
+        Polling handles this transient via WARNING log + skip-cycle. Reauth
+        on this signal caused a documented ~40min false-positive loop
+        (commit 5686f19); sf_call must propagate the error so the polling
+        outer handler can downgrade it.
+        """
+        from simple_salesforce.exceptions import SalesforceResourceNotFound
+
+        from src.salesforce_client import SalesforceSession, sf_call
+
+        reauth_calls: list[int] = []
+
+        async def fake_get_client(config, shutdown_event=None):
+            reauth_calls.append(1)
+            return MagicMock()
+
+        monkeypatch.setattr(
+            "src.salesforce_client.get_salesforce_client", fake_get_client,
+        )
+
+        old_sf = MagicMock()
+        old_sf.query_all.side_effect = SalesforceResourceNotFound(
+            "https://example.salesforce.com/services/data/v59.0/query/",
+            404,
+            "query",
+            b"",
+        )
+
+        session = SalesforceSession(old_sf, config=MagicMock(), shutdown_event=None)
+
+        with pytest.raises(SalesforceResourceNotFound):
+            await sf_call(session, lambda sf: sf.query_all("SELECT Id FROM Contact"))
+
+        assert reauth_calls == []
+        old_sf.query_all.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_propagates_rate_limit_without_reauth(self, monkeypatch):

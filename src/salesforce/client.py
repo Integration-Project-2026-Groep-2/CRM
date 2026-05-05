@@ -39,6 +39,7 @@ from simple_salesforce import Salesforce
 from simple_salesforce.exceptions import (
     SalesforceAuthenticationFailed,
     SalesforceExpiredSession,
+    SalesforceResourceNotFound,
 )
 
 from src.config import Config
@@ -127,6 +128,11 @@ def is_expired_session_error(exc: Exception) -> bool:
     1. Native 401 → `SalesforceExpiredSession`.
     2. 404 on /query with `INVALID_SESSION_ID` in the content list — the
        documented API response when the session is invalid.
+
+    Empty-body 404s on /query are NOT classified as expired here — they are
+    a transient SF edge response handled by `is_transient_query_404` and
+    the polling caller (see commit 5686f19 for the false-positive reauth
+    loop incident that this split protects against).
     """
     if isinstance(exc, SalesforceExpiredSession):
         return True
@@ -136,6 +142,38 @@ def is_expired_session_error(exc: Exception) -> bool:
             if isinstance(item, dict) and item.get("errorCode") == "INVALID_SESSION_ID":
                 return True
     return "INVALID_SESSION_ID" in str(exc)
+
+
+def is_transient_query_404(exc: Exception) -> bool:
+    """Detect the transient empty-body 404 SF emits on /query during polling.
+
+    Salesforce occasionally returns a bare 404 with an empty body on the
+    REST `/query` endpoint. The next polling cycle recovers naturally;
+    callers should skip-and-log, NOT reauthenticate. Reauth on this signal
+    caused a documented ~40min false-positive reauth loop in production —
+    see commit 5686f19.
+
+    Distinct from `is_expired_session_error`: a real expired session is
+    surfaced as `SalesforceExpiredSession` or as `INVALID_SESSION_ID` in
+    the response content list.
+    """
+    if not isinstance(exc, SalesforceResourceNotFound):
+        return False
+
+    if getattr(exc, "status", None) != 404:
+        return False
+
+    resource_name = str(
+        getattr(exc, "resource_name", None)
+        or getattr(exc, "name", None)
+        or "",
+    ).strip("/")
+    url = str(getattr(exc, "url", "")).rstrip("/")
+    if resource_name != "query" and not url.endswith("/query"):
+        return False
+
+    content = getattr(exc, "content", None)
+    return content in (None, "", b"", [])
 
 
 class SalesforceSession:
