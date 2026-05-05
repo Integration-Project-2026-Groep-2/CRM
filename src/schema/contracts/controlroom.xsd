@@ -69,7 +69,7 @@
 
   <!-- ============================================================
        CONTRACT 9 — Controlroom → CRM: systeemwaarschuwing
-       Queue: controlroom.warning.issued | durable: false
+       Queue: controlroom.warning.issued | durable: true
   ============================================================ -->
   <xs:element name="Warning">
     <xs:complexType>

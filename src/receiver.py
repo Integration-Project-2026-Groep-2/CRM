@@ -88,6 +88,9 @@ async def _declare_and_bind(
         effective_routing_key = routing_key or queue_name
         await queue.bind(exchange, routing_key=effective_routing_key)
 
+        if queue_name in _NO_RETRY_QUEUES:
+            return queue
+
         retry_queue = await channel.declare_queue(
             f"{queue_name}.retry",
             durable=durable,
