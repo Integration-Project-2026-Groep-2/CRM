@@ -128,8 +128,11 @@ def is_expired_session_error(exc: Exception) -> bool:
     1. Native 401 → `SalesforceExpiredSession`.
     2. 404 on /query with `INVALID_SESSION_ID` in the content list — the
        documented API response when the session is invalid.
-    3. Observed long-lived session failure where Salesforce returns a bare
-       404 for the REST query endpoint with an empty body.
+
+    Empty-body 404s on /query are NOT classified as expired here — they are
+    a transient SF edge response handled by `is_transient_query_404` and
+    the polling caller (see commit 5686f19 for the false-positive reauth
+    loop incident that this split protects against).
     """
     if isinstance(exc, SalesforceExpiredSession):
         return True
@@ -138,18 +141,26 @@ def is_expired_session_error(exc: Exception) -> bool:
         for item in content:
             if isinstance(item, dict) and item.get("errorCode") == "INVALID_SESSION_ID":
                 return True
-    if _is_empty_query_resource_404(exc):
-        return True
     return "INVALID_SESSION_ID" in str(exc)
 
 
-def _is_empty_query_resource_404(exc: Exception) -> bool:
-    """Return True for the ambiguous empty-body 404 Salesforce emits on query."""
+def is_transient_query_404(exc: Exception) -> bool:
+    """Detect the transient empty-body 404 SF emits on /query during polling.
+
+    Salesforce occasionally returns a bare 404 with an empty body on the
+    REST `/query` endpoint. The next polling cycle recovers naturally;
+    callers should skip-and-log, NOT reauthenticate. Reauth on this signal
+    caused a documented ~40min false-positive reauth loop in production —
+    see commit 5686f19.
+
+    Distinct from `is_expired_session_error`: a real expired session is
+    surfaced as `SalesforceExpiredSession` or as `INVALID_SESSION_ID` in
+    the response content list.
+    """
     if not isinstance(exc, SalesforceResourceNotFound):
         return False
 
-    status = getattr(exc, "status", None) or getattr(exc, "status_code", None)
-    if status != 404:
+    if getattr(exc, "status", None) != 404:
         return False
 
     resource_name = str(
@@ -157,8 +168,8 @@ def _is_empty_query_resource_404(exc: Exception) -> bool:
         or getattr(exc, "name", None)
         or "",
     ).strip("/")
-    url = str(getattr(exc, "url", ""))
-    if resource_name != "query" and "/query" not in url:
+    url = str(getattr(exc, "url", "")).rstrip("/")
+    if resource_name != "query" and not url.endswith("/query"):
         return False
 
     content = getattr(exc, "content", None)
