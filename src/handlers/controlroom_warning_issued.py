@@ -1,6 +1,6 @@
 """Handler for Contract 9 — Controlroom → CRM: system warning.
 
-Queue: controlroom.warning.issued | Exchange: planning.topic | durable: false | US-26
+Queue: controlroom.warning.issued | Exchange: planning.topic | durable: true | US-26
 """
 
 import logging

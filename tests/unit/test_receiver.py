@@ -5208,7 +5208,7 @@ class TestRunReceiver:
 
         queues, mock_declare, _sf_client = await self._run_receiver()
 
-        self._assert_declared_queue(mock_declare, "controlroom.warning.issued", durable=False)
+        self._assert_declared_queue(mock_declare, "controlroom.warning.issued", durable=True)
         self._assert_direct_callback(queues["controlroom.warning.issued"], handle_warning)
 
     @pytest.mark.asyncio
@@ -5605,3 +5605,51 @@ class TestRepublishWithRetryCount:
 
         call = message.channel.basic_publish.await_args
         assert call.kwargs["exchange"] == ""
+
+
+class TestDeclareAndBind:
+    """Direct tests for `_declare_and_bind` topology behaviour."""
+
+    @staticmethod
+    def _make_channel():
+        channel = AsyncMock()
+        channel.declare_queue = AsyncMock(side_effect=lambda *a, **kw: AsyncMock())
+        channel.declare_exchange = AsyncMock(return_value=AsyncMock())
+        return channel
+
+    @pytest.mark.asyncio
+    async def test_no_retry_queue_skips_retry_sibling(self):
+        """C9 is in _NO_RETRY_QUEUES — declare work-queue only, no `.retry`."""
+        from src.receiver import _declare_and_bind
+
+        channel = self._make_channel()
+        await _declare_and_bind(
+            channel,
+            "controlroom.warning.issued",
+            durable=True,
+            exchange_name="planning.topic",
+        )
+
+        declared = [call.args[0] for call in channel.declare_queue.await_args_list]
+        assert declared == ["controlroom.warning.issued"], (
+            f"expected only the work-queue, got {declared}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_normal_queue_declares_retry_sibling(self):
+        """Sanity: queues NOT in _NO_RETRY_QUEUES still declare `<queue>.retry`."""
+        from src.receiver import _declare_and_bind
+
+        channel = self._make_channel()
+        await _declare_and_bind(
+            channel,
+            "crm.facturatie.user.updated",
+            durable=True,
+            exchange_name="user.topic",
+        )
+
+        declared = [call.args[0] for call in channel.declare_queue.await_args_list]
+        assert declared == [
+            "crm.facturatie.user.updated",
+            "crm.facturatie.user.updated.retry",
+        ]

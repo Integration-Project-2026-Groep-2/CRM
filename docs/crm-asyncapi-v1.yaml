@@ -1,7 +1,7 @@
 asyncapi: 3.1.0
 info:
   title: Integratieproject 2026 — CRM (Salesforce) RabbitMQ Contracts
-  version: 1.11.0
+  version: 1.11.1
   description: >
     XML-contracten voor alle integraties waarbij het CRM-team (Salesforce)
     betrokken is.
@@ -452,7 +452,7 @@ channels:
       amqp:
         is: queue
         queue:
-          durable: false
+          durable: true
 
   # ============================================================
   # KASSA → CRM (request/response)
