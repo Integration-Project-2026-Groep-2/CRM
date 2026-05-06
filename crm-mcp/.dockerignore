@@ -1,0 +1,13 @@
+tests/
+.env
+.env.*
+.venv/
+__pycache__/
+*.egg-info/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+ARCHITECTURE.md
+MCP-SPEC-ALIGNMENT.md
+Dockerfile
+.dockerignore
