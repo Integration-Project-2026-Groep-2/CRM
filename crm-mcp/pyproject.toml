@@ -2,7 +2,6 @@
 name = "crm-mcp"
 version = "0.1.0"
 description = "CRM MCP server — read-only Salesforce access for the AI master agent"
-readme = "README.md"
 requires-python = ">=3.13"
 authors = [{ name = "Lars Cowé" }]
 dependencies = [
