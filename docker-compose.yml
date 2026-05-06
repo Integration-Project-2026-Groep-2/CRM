@@ -5,22 +5,17 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    depends_on:
-      rabbitmq:
-        condition: service_healthy
-
-  crm-mcp:
-    build: ./crm-mcp
-    container_name: crm-mcp
-    restart: unless-stopped
-    env_file:
-      - .env
     environment:
+      # MCP server draait als daemon-thread in dit proces (src/mcp_thread.py).
+      # streamable-http luistert op 0.0.0.0:7001 binnen het docker-network.
       - CRM_MCP_TRANSPORT=streamable-http
       - CRM_MCP_HOST=0.0.0.0
       - CRM_MCP_PORT=7001
     expose:
       - "7001"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
 
   rabbitmq:
     image: rabbitmq:3.13-management
