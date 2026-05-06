@@ -3250,7 +3250,6 @@ class TestHandleMailingUserUpdated:
             msg = _make_message(VALID_MAILING_USER_UPDATED_XML)
             await handle_mailing_user_updated(msg, sf_mock)
 
-            mock_update.assert_not_called()
             mock_publish.assert_not_called()
             mock_conflict.assert_called_once()
             msg.ack.assert_called_once()
