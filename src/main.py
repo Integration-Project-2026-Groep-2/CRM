@@ -32,7 +32,7 @@ from src.logging_rabbitmq import attach_rabbitmq_log_handler, run_log_publisher
 from src.mcp_thread import start_mcp_thread
 from src.polling import run_polling
 from src.receiver import run_receiver
-from src.status_check import run_status_check
+from src.status import run_status_check
 
 logger = logging.getLogger(__name__)
 
