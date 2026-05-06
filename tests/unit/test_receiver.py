@@ -3088,7 +3088,6 @@ class TestHandleMailingUserUpdated:
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.handlers.mailing_user_updated.update_mailing_contact", return_value=MAILING_UPDATED_CONTACT_RETURN) as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
         ):
@@ -3097,7 +3096,6 @@ class TestHandleMailingUserUpdated:
             msg = _make_message(VALID_MAILING_USER_UPDATED_XML)
             await handle_mailing_user_updated(msg, sf_mock)
 
-            mock_update.assert_not_called()
             mock_conflict.assert_not_called()
             mock_publish.assert_called_once()
             published_user = mock_publish.call_args.args[0]
@@ -3117,10 +3115,6 @@ class TestHandleMailingUserUpdated:
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("none", None)),
-            patch(
-                "src.handlers.mailing_user_updated.update_mailing_contact",
-                return_value=MAILING_UPDATED_MINIMAL_CONTACT_RETURN,
-            ) as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
             from src.receiver import handle_mailing_user_updated
@@ -3128,7 +3122,6 @@ class TestHandleMailingUserUpdated:
             msg = _make_message(VALID_MAILING_USER_UPDATED_MINIMAL_XML)
             await handle_mailing_user_updated(msg, sf_mock)
 
-            mock_update.assert_not_called()
             mock_publish.assert_called_once()
             published_user = mock_publish.call_args.args[0]
             assert published_user["lastName"] == "Mail"
@@ -3144,17 +3137,10 @@ class TestHandleMailingUserUpdated:
             "Role__c": "ADMIN",
             "Company_ID__c": "old-company-id",
         }
-        updated_contact = {
-            **existing_contact,
-            "FirstName": "Mia",
-            "LastName": "mia.updated@example.com",
-            "Email": "mia.updated@example.com",
-        }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.handlers.mailing_user_updated.update_mailing_contact", return_value=updated_contact) as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
             from src.receiver import handle_mailing_user_updated
@@ -3162,7 +3148,6 @@ class TestHandleMailingUserUpdated:
             msg = _make_message(VALID_MAILING_USER_UPDATED_MINIMAL_XML)
             await handle_mailing_user_updated(msg, sf_mock)
 
-            mock_update.assert_not_called()
             mock_publish.assert_called_once()
             published_user = mock_publish.call_args.args[0]
             assert published_user["role"] == "ADMIN"
@@ -5560,7 +5545,7 @@ class TestRepublishWithRetryCount:
 
         await _republish_with_retry_count(message, 1)
 
-        messageited_once()
+        message.ack.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_preserves_existing_headers(self, message):
