@@ -3315,7 +3315,6 @@ class TestHandleMailingUserUpdated:
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.handlers.mailing_user_updated.update_mailing_contact", return_value=MAILING_UPDATED_CONTACT_RETURN),
             patch("src.sender.publish_user_updated", side_effect=Exception("publish failed")),
         ):
             from src.receiver import handle_mailing_user_updated
@@ -5561,7 +5560,7 @@ class TestRepublishWithRetryCount:
 
         await _republish_with_retry_count(message, 1)
 
-        message.ack.assert_awaited_once()
+        messageited_once()
 
     @pytest.mark.asyncio
     async def test_preserves_existing_headers(self, message):
@@ -5632,4 +5631,6 @@ class TestDeclareAndBind:
         assert declared == [
             "crm.facturatie.user.updated",
             "crm.facturatie.user.updated.retry",
+        ]
+",
         ]
