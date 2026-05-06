@@ -4,7 +4,6 @@ Queue: crm.mailing.user.updated (routing key: mailing.user.updated)
 Exchange: user.topic | durable: true
 """
 
-import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
@@ -21,14 +20,11 @@ from src.handlers._mailing_helpers import (
 from src.salesforce.contacts import (
     _build_updated_user_data,
     _build_user_deactivation_data,
-    _get_contact_is_active,
 )
 from src.salesforce_client import (
-    apply_is_active,
     deactivate_contact_record,
     get_contact_match_by_crm_id,
     get_contact_match_by_email,
-    update_mailing_contact,
 )
 
 if TYPE_CHECKING:
