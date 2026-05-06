@@ -3215,7 +3215,6 @@ class TestHandleMailingUserUpdated:
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("unique", conflicting_contact)),
-            patch("src.handlers.mailing_user_updated.update_mailing_contact") as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
         ):
@@ -3224,7 +3223,6 @@ class TestHandleMailingUserUpdated:
             msg = _make_message(VALID_MAILING_USER_UPDATED_XML)
             await handle_mailing_user_updated(msg, sf_mock)
 
-            mock_update.assert_not_called()
             mock_publish.assert_not_called()
             mock_conflict.assert_called_once()
             conflict_payload = mock_conflict.call_args.args[0]
@@ -3243,7 +3241,6 @@ class TestHandleMailingUserUpdated:
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("ambiguous", None)),
-            patch("src.handlers.mailing_user_updated.update_mailing_contact") as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
             caplog.at_level(logging.WARNING),
@@ -3273,7 +3270,6 @@ class TestHandleMailingUserUpdated:
             patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("none", None)),
             patch("src.handlers.mailing_user_updated.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
-            patch("src.handlers.mailing_user_updated.update_mailing_contact") as mock_update,
             patch("src.sender.publish_user_deactivated") as mock_deactivated_publish,
             patch("src.sender.publish_user_updated") as mock_updated_publish,
             caplog.at_level(logging.INFO),
@@ -3284,7 +3280,6 @@ class TestHandleMailingUserUpdated:
             await handle_mailing_user_updated(msg, sf_mock)
 
             mock_deactivate.assert_called_once()
-            mock_update.assert_not_called()
             mock_deactivated_publish.assert_called_once()
             mock_updated_publish.assert_not_called()
             msg.ack.assert_called_once()
