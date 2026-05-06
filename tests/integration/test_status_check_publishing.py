@@ -24,7 +24,7 @@ import pytest
 from aio_pika import ExchangeType
 
 from src.config import Config
-from src.status_check import run_status_check
+from src.status import run_status_check
 from src.xml_validator import validate
 
 RABBITMQ_URL = os.getenv("CRM_TEST_RABBITMQ_URL", "amqp://guest:guest@localhost:5675/")
@@ -99,7 +99,7 @@ async def test_status_check_publishes_to_statuscheck_direct(
 
         from unittest.mock import patch
 
-        with patch("src.status_check.asyncio.sleep", side_effect=_stop_after_first_publish):
+        with patch("src.status.asyncio.sleep", side_effect=_stop_after_first_publish):
             try:
                 await run_status_check(connection, config)
             except asyncio.CancelledError:
