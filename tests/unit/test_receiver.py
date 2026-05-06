@@ -5632,5 +5632,3 @@ class TestDeclareAndBind:
             "crm.facturatie.user.updated",
             "crm.facturatie.user.updated.retry",
         ]
-",
-        ]
