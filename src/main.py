@@ -11,6 +11,10 @@ Runs 5 asyncio tasks concurrently:
 
 The sender module is a utility library (not a task) — receiver and polling
 handlers call sender.publish_*() functions to publish outbound messages.
+
+Alongside these asyncio tasks, the bundled CRM MCP server runs in its own
+daemon thread (see src/mcp_thread.py). It cannot be a 6th asyncio task
+because FastMCP starts uvicorn with its own event loop.
 """
 
 import asyncio
@@ -25,6 +29,7 @@ from src.config import load_config, setup_logging
 from src.connection import get_rabbitmq_connection
 from src.heartbeat import run_heartbeat
 from src.logging_rabbitmq import attach_rabbitmq_log_handler, run_log_publisher
+from src.mcp_thread import start_mcp_thread
 from src.polling import run_polling
 from src.receiver import run_receiver
 from src.status_check import run_status_check
@@ -66,6 +71,12 @@ async def main() -> None:
     loop = asyncio.get_running_loop()
     shutdown_event = asyncio.Event()
     _install_signal_handlers(loop, shutdown_event)
+
+    # Start the bundled MCP server on its own daemon thread BEFORE the RabbitMQ
+    # connect-with-retry so that MCP is reachable even if RabbitMQ is briefly
+    # unavailable. MCP only needs Salesforce REST (independent of RMQ).
+    # Failures inside the MCP thread are logged but never crash main.
+    start_mcp_thread()
 
     connection = await get_rabbitmq_connection(config.rabbitmq_url, shutdown_event)
     channel = await connection.channel()
