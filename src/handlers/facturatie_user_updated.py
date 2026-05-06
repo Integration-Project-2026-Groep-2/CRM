@@ -14,7 +14,7 @@ import aio_pika
 from src import sender, xml_validator
 from src.handlers._exceptions import MissingDependencyError
 from src.handlers._facturatie_helpers import _build_facturatie_user_conflict_data
-from src.handlers._helpers import _normalize_optional_text
+from src.handlers._helpers import _normalize_email_for_compare, _normalize_optional_text
 from src.salesforce.contacts import (
     _build_updated_user_data,
     _build_user_deactivation_data,
@@ -119,12 +119,35 @@ async def handle(
         await message.ack()
         return
 
+    # MDM: Identiteitsbescherming
+    # Facturatie is autoritair voor adres en telefoon, maar NIET voor naam/e-mail.
+    sf_email = existing_contact.get("Email")
+    sf_first_name = existing_contact.get("FirstName")
+    sf_last_name = existing_contact.get("LastName")
+
+    identity_drift = any([
+        _normalize_email_for_compare(email) != _normalize_email_for_compare(sf_email),
+        _normalize_optional_text(xml.findtext("firstName")) != _normalize_optional_text(sf_first_name),
+        _normalize_optional_text(xml.findtext("lastName")) != _normalize_optional_text(sf_last_name),
+    ])
+
+    if identity_drift:
+        logger.warning("Facturatie identity drift gedetecteerd voor %s. Master data wordt beschermd.", crm_id)
+        # Gebruik de waarden uit Salesforce voor de update van identiteitsvelden
+        final_email = sf_email or email
+        final_first_name = sf_first_name or ""
+        final_last_name = sf_last_name or ""
+    else:
+        final_email = email
+        final_first_name = xml.findtext("firstName") or ""
+        final_last_name = xml.findtext("lastName") or ""
+
     contact = await update_facturatie_contact(
         sf,
-        contact,
-        email=email,
-        first_name=xml.findtext("firstName") or "",
-        last_name=xml.findtext("lastName") or "",
+        existing_contact,
+        email=final_email,
+        first_name=final_first_name,
+        last_name=final_last_name,
         phone=_normalize_optional_text(xml.findtext("phone")),
         street=_normalize_optional_text(xml.findtext("street")),
         house_number=_normalize_optional_text(xml.findtext("houseNumber")),
@@ -134,7 +157,10 @@ async def handle(
         role=xml.findtext("role") or "",
         company_id=_normalize_optional_text(xml.findtext("companyId")),
     )
-    if not _get_contact_is_active(contact):
+    
+    if identity_drift:
+        logger.info("Correctiebericht (C18) wordt verzonden voor Facturatie drift op %s", email)
+    elif not _get_contact_is_active(contact):
         reactivation_update = await apply_is_active(sf, {}, True)
         if reactivation_update:
             contact_id = contact["Id"]
@@ -145,6 +171,7 @@ async def handle(
                 contact_id,
                 email,
             )
+
     await sender.publish_user_updated(_build_updated_user_data(contact))
     logger.info("Published crm.user.updated for Facturatie user %s", email)
     await message.ack()

@@ -11,7 +11,7 @@ import aio_pika
 
 from src import sender, xml_validator
 from src.handlers._exceptions import MissingDependencyError
-from src.handlers._helpers import _normalize_optional_text
+from src.handlers._helpers import _normalize_email_for_compare, _normalize_optional_text
 from src.handlers._planning_helpers import _build_planning_user_conflict_data
 from src.salesforce.contacts import _build_updated_user_data
 from src.salesforce_client import (
@@ -111,15 +111,48 @@ async def handle(
         existing_contact,
         planning_id=planning_id,
     )
+    # MDM: Identiteitsbescherming
+    # Planning is autoritair voor telefoonnummer, maar NIET voor naam/e-mail/rol.
+    sf_email = existing_contact.get("Email")
+    sf_first_name = existing_contact.get("FirstName")
+    sf_last_name = existing_contact.get("LastName")
+    sf_role = existing_contact.get("Role__c")
+
+    identity_drift = any([
+        _normalize_email_for_compare(email) != _normalize_email_for_compare(sf_email),
+        _normalize_optional_text(xml.findtext("firstName")) != _normalize_optional_text(sf_first_name),
+        _normalize_optional_text(xml.findtext("lastName")) != _normalize_optional_text(sf_last_name),
+        _normalize_optional_text(xml.findtext("role")) != _normalize_optional_text(sf_role),
+    ])
+
+    if identity_drift:
+        logger.warning("Planning identity drift gedetecteerd voor %s. Master data wordt beschermd.", planning_id)
+        # Gebruik Salesforce waarden voor de update
+        final_email = sf_email or email
+        final_first_name = sf_first_name or ""
+        final_last_name = sf_last_name or ""
+        final_role = sf_role or "VISITOR"
+    else:
+        final_email = email
+        final_first_name = xml.findtext("firstName") or ""
+        final_last_name = xml.findtext("lastName") or ""
+        final_role = xml.findtext("role") or "VISITOR"
+
     contact = await update_planning_contact(
         sf,
         contact,
-        email=email,
-        first_name=xml.findtext("firstName") or "",
-        last_name=xml.findtext("lastName") or "",
-        role=xml.findtext("role") or "VISITOR",
+        email=final_email,
+        first_name=final_first_name,
+        last_name=final_last_name,
+        role=final_role,
         phone_number=_normalize_optional_text(xml.findtext("phoneNumber")),
     )
-    await sender.publish_user_updated(_build_updated_user_data(contact))
+    
+    if identity_drift:
+        await sender.publish_user_updated(_build_updated_user_data(contact))
+        logger.info("Correctiebericht (C18) verzonden voor Planning drift op %s", email)
+    else:
+        await sender.publish_user_updated(_build_updated_user_data(contact))
+    
     logger.info("Published crm.user.updated for Planning user %s", email)
     await message.ack()

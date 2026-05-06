@@ -13,7 +13,7 @@ import aio_pika
 
 from src import sender, xml_validator
 from src.handlers._exceptions import MissingDependencyError
-from src.handlers._helpers import _normalize_optional_text
+from src.handlers._helpers import _normalize_email_for_compare, _normalize_optional_text
 from src.handlers._mailing_helpers import (
     _build_mailing_user_conflict_data,
     _get_mailing_last_name_for_contact,
@@ -121,25 +121,24 @@ async def handle(
         await message.ack()
         return
 
-    contact = await update_mailing_contact(
-        sf,
-        contact,
-        email=email,
-        first_name=_normalize_optional_text(xml.findtext("firstName")),
-        last_name=_get_mailing_last_name_for_contact(xml),
-        company_id=_normalize_optional_text(xml.findtext("companyId")),
-    )
-    if not _get_contact_is_active(contact):
-        reactivation_update = await apply_is_active(sf, {}, True)
-        if reactivation_update:
-            contact_id = contact["Id"]
-            await asyncio.to_thread(sf.Contact.update, contact_id, reactivation_update)
-            contact = await asyncio.to_thread(sf.Contact.get, contact_id)
-            logger.info(
-                "Reactivated Contact %s for Mailing user %s (isActive=true on update)",
-                contact_id,
-                email,
-            )
-    await sender.publish_user_updated(_build_updated_user_data(contact))
-    logger.info("Published crm.user.updated for Mailing user %s", email)
+    # MDM: Mailing is geen autoriteit voor master data.
+    # We updaten Salesforce NOOIT vanuit Mailing (behalve voor deactivatie).
+    sf_email = existing_contact.get("Email")
+    sf_first_name = existing_contact.get("FirstName")
+    sf_last_name = existing_contact.get("LastName")
+
+    identity_drift = any([
+        _normalize_email_for_compare(email) != _normalize_email_for_compare(sf_email),
+        _normalize_optional_text(xml.findtext("firstName")) != _normalize_optional_text(sf_first_name),
+        _normalize_optional_text(_get_mailing_last_name_for_contact(xml)) != _normalize_optional_text(sf_last_name),
+    ])
+
+    if identity_drift:
+        logger.warning("Mailing identity drift gedetecteerd voor %s. Master data wordt beschermd.", crm_id)
+        # Stuur de correcte data terug naar Mailing (Contract 18)
+        await sender.publish_user_updated(_build_updated_user_data(existing_contact))
+    else:
+        logger.info("Mailing data voor %s is in sync met Master.", crm_id)
+
     await message.ack()
+    return

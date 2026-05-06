@@ -81,31 +81,51 @@ async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
 async def _handle_update(
     xml: etree._Element, email: str, sf: "Salesforce", message: aio_pika.IncomingMessage
 ) -> None:
-    """Process changeType=updated: upsert Contact and publish crm.user.updated."""
+    """Process changeType=updated: upsert Contact and publish crm.user.updated.
+
+    MDM Rule: Frontend is authoritative for user profile data.
+    """
+    update_data = _build_frontend_contact_update_data(xml)
+
+    try:
+        # 1. Update de Source of Truth in Salesforce
+        contact = await upsert_contact_by_email(sf, email, update_data)
+        
+        # 2. Synchroniseer alle andere systemen (Kassa, Planning, etc.)
+        await sender.publish_user_updated(_build_updated_user_data(contact))
+        
+        logger.info("Master data updated via Frontend for %s; sync published.", email)
+    except Exception:  # noqa: BLE001
+        logger.exception("RegistrationChange update failed for %s", email)
+        raise
+
+    await message.ack()
+
+
+def _build_frontend_contact_update_data(xml: etree._Element) -> dict:
+    """Map Frontend-owned updatedFields to Salesforce Contact fields."""
     update_data: dict = {}
 
     updated_fields = xml.find("updatedFields")
-    if updated_fields is not None:
-        field_mapping = {
-            "firstName": "FirstName",
-            "lastName": "LastName",
-            "email": "Email",
-            "phone": "Phone",
-            "role": "Role__c",
-            # company mapping deferred to Contract 3
-        }
-        for xml_field, sf_field in field_mapping.items():
-            value = updated_fields.findtext(xml_field)
-            if value is not None:
-                if xml_field == "role":
-                    value = _normalize_registration_role(value)
-                update_data[sf_field] = value
+    if updated_fields is None:
+        return update_data
 
-    contact = await upsert_contact_by_email(sf, email, update_data)
+    field_mapping = {
+        "firstName": "FirstName",
+        "lastName": "LastName",
+        "email": "Email",
+        "phone": "Phone",
+        "role": "Role__c",
+        # company mapping deferred to Contract 3
+    }
+    for xml_field, sf_field in field_mapping.items():
+        value = updated_fields.findtext(xml_field)
+        if value is not None:
+            if xml_field == "role":
+                value = _normalize_registration_role(value)
+            update_data[sf_field] = value
 
-    await sender.publish_user_updated(_build_updated_user_data(contact))
-    logger.info("Published crm.user.updated for %s", email)
-    await message.ack()
+    return update_data
 
 
 async def _handle_cancellation(
