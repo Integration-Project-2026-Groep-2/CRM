@@ -9,6 +9,19 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  crm-mcp:
+    build: ./crm-mcp
+    container_name: crm-mcp
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - CRM_MCP_TRANSPORT=streamable-http
+      - CRM_MCP_HOST=0.0.0.0
+      - CRM_MCP_PORT=7001
+    expose:
+      - "7001"
+
   rabbitmq:
     image: rabbitmq:3.13-management
     ports:
