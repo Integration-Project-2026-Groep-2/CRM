@@ -33,11 +33,39 @@
   <xs:element name="StatusCheck">
     <xs:complexType>
       <xs:sequence>
-        <xs:element name="serviceId" type="xs:string"/>
-        <xs:element name="timestamp" type="xs:dateTime"/>
+        <xs:element name="serviceId">
+          <xs:simpleType>
+            <xs:restriction base="xs:string">
+              <xs:enumeration value="CRM"/>
+            </xs:restriction>
+          </xs:simpleType>
+        </xs:element>
+        <xs:element name="timestamp" type="ISO8601DateTimeType"/>
         <xs:element name="uptime"    type="xs:nonNegativeInteger"/>
-        <xs:element name="memory"    type="xs:decimal"/>
-        <xs:element name="disk"      type="xs:decimal"/>
+        <xs:element name="cpu">
+          <xs:simpleType>
+            <xs:restriction base="xs:decimal">
+              <xs:minInclusive value="0.0"/>
+              <xs:maxInclusive value="1.0"/>
+            </xs:restriction>
+          </xs:simpleType>
+        </xs:element>
+        <xs:element name="memory">
+          <xs:simpleType>
+            <xs:restriction base="xs:decimal">
+              <xs:minInclusive value="0.0"/>
+              <xs:maxInclusive value="1.0"/>
+            </xs:restriction>
+          </xs:simpleType>
+        </xs:element>
+        <xs:element name="disk">
+          <xs:simpleType>
+            <xs:restriction base="xs:decimal">
+              <xs:minInclusive value="0.0"/>
+              <xs:maxInclusive value="1.0"/>
+            </xs:restriction>
+          </xs:simpleType>
+        </xs:element>
       </xs:sequence>
     </xs:complexType>
   </xs:element>

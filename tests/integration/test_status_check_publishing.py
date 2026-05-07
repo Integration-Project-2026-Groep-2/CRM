@@ -126,9 +126,11 @@ async def test_status_check_publishes_to_statuscheck_direct(
 
     memory = float(doc.findtext("memory"))
     disk = float(doc.findtext("disk"))
+    cpu = float(doc.findtext("cpu"))
     assert 0.0 <= memory <= 1.0
     assert 0.0 <= disk <= 1.0
+    assert 0.0 <= cpu <= 1.0
 
     # Validate field order matches XSD xs:sequence
     children = [child.tag for child in doc]
-    assert children == ["serviceId", "timestamp", "uptime", "memory", "disk"]
+    assert children == ["serviceId", "timestamp", "uptime", "cpu", "memory", "disk"]

@@ -1842,8 +1842,9 @@ components:
               <serviceId>CRM</serviceId>
               <timestamp>2026-03-14T10:00:00Z</timestamp>
               <uptime>3600</uptime>
-              <memory>0.41</memory>
-              <disk>0.15</disk>
+              <cpu>0.1200</cpu>
+              <memory>0.4100</memory>
+              <disk>0.1500</disk>
             </StatusCheck>
         - name: high-load
           payload: |
@@ -1852,10 +1853,10 @@ components:
               <serviceId>CRM</serviceId>
               <timestamp>2026-03-14T10:00:00Z</timestamp>
               <uptime>3600</uptime>
-              <memory>0.85</memory>
-              <disk>0.60</disk>
+              <cpu>0.9500</cpu>
+              <memory>0.8500</memory>
+              <disk>0.6000</disk>
             </StatusCheck>
-
     LogEvent:
       name: LogEvent
       title: CRM service log forwarded to Controlroom
@@ -3119,13 +3120,15 @@ components:
         - serviceId
         - timestamp
         - uptime
+        - cpu
         - memory
         - disk
       description: >-
         Frequentie elke 120 seconden (ClickUp Controlroom spec, 2026-05-04).
+        cpu = psutil.cpu_percent(interval=0.1) / 100.
         memory = psutil.virtual_memory().percent / 100 (available-aware,
         niet raw used/total). disk = psutil.disk_usage(path).percent / 100.
-        Beide worden geclamped naar [0.0, 1.0] om de XSD-bound op bursty
+        Alle drie worden geclamped naar [0.0, 1.0] om de XSD-bound op bursty
         hosts (zswap, disk overcommit) te respecteren.
       properties:
         serviceId:
@@ -3138,6 +3141,10 @@ components:
         uptime:
           type: integer
           description: Seconden sinds container/process start (time.monotonic delta)
+        cpu:
+          type: number
+          minimum: 0
+          maximum: 1
         memory:
           type: number
           minimum: 0

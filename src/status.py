@@ -38,10 +38,12 @@ def _build_status_xml(service_id: str) -> bytes:
         int(time.monotonic() - _PROCESS_START_MONOTONIC)
     )
 
-    # Memory and Disk as decimals (fractions 0.0-1.0)
+    # CPU, Memory and Disk as decimals (fractions 0.0-1.0)
+    cpu = _clip_fraction(psutil.cpu_percent(interval=0.1))
     memory = _clip_fraction(psutil.virtual_memory().percent)
     disk = _clip_fraction(psutil.disk_usage("/").percent)
 
+    etree.SubElement(root, "cpu").text = f"{cpu:.4f}"
     etree.SubElement(root, "memory").text = f"{memory:.4f}"
     etree.SubElement(root, "disk").text = f"{disk:.4f}"
 

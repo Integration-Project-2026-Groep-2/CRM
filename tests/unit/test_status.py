@@ -15,6 +15,7 @@ from src.status import _build_status_xml, _clip_fraction, run_status_check
 @pytest.fixture(autouse=True)
 def mock_psutil(monkeypatch: pytest.MonkeyPatch) -> None:
     """Provide deterministic psutil values."""
+    monkeypatch.setattr("src.status.psutil.cpu_percent", lambda interval=None: 25.0)
     monkeypatch.setattr("src.status.psutil.virtual_memory", lambda: MagicMock(percent=50.0))
     monkeypatch.setattr("src.status.psutil.disk_usage", lambda path: MagicMock(percent=60.0))
 
@@ -38,6 +39,7 @@ class TestBuildStatusXml:
         assert root.tag == "StatusCheck"
         assert root.findtext("serviceId") == "CRM"
         assert int(root.findtext("uptime")) >= 0
+        assert root.findtext("cpu") == "0.2500"
         assert root.findtext("memory") == "0.5000"
         assert root.findtext("disk") == "0.6000"
 
