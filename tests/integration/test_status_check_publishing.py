@@ -133,4 +133,4 @@ async def test_status_check_publishes_to_statuscheck_direct(
 
     # Validate field order matches XSD xs:sequence
     children = [child.tag for child in doc]
-    assert children == ["serviceId", "timestamp", "uptime", "cpu", "memory", "disk"]
+    assert children == ["serviceId", "timestamp", "uptime", "memory", "disk", "cpu"]

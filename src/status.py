@@ -56,9 +56,10 @@ def _build_status_xml(service_id: str) -> bytes:
     memory = _clip_fraction(psutil.virtual_memory().percent)
     disk = _clip_fraction(psutil.disk_usage(_DISK_PATH).percent)
 
-    etree.SubElement(root, "cpu").text = f"{cpu:.4f}"
+    # XSD xs:sequence order: serviceId, timestamp, uptime, memory, disk, cpu(opt).
     etree.SubElement(root, "memory").text = f"{memory:.4f}"
     etree.SubElement(root, "disk").text = f"{disk:.4f}"
+    etree.SubElement(root, "cpu").text = f"{cpu:.4f}"
 
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
 

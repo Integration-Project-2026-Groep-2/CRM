@@ -42,14 +42,6 @@
         </xs:element>
         <xs:element name="timestamp" type="ISO8601DateTimeType"/>
         <xs:element name="uptime"    type="xs:nonNegativeInteger"/>
-        <xs:element name="cpu">
-          <xs:simpleType>
-            <xs:restriction base="xs:decimal">
-              <xs:minInclusive value="0.0"/>
-              <xs:maxInclusive value="1.0"/>
-            </xs:restriction>
-          </xs:simpleType>
-        </xs:element>
         <xs:element name="memory">
           <xs:simpleType>
             <xs:restriction base="xs:decimal">
@@ -59,6 +51,18 @@
           </xs:simpleType>
         </xs:element>
         <xs:element name="disk">
+          <xs:simpleType>
+            <xs:restriction base="xs:decimal">
+              <xs:minInclusive value="0.0"/>
+              <xs:maxInclusive value="1.0"/>
+            </xs:restriction>
+          </xs:simpleType>
+        </xs:element>
+        <!-- cpu is optional + last so consumers that pre-date the 2026-05-08
+             addition (deliberate removal on 2026-05-04 per ClickUp spec) keep
+             parsing cleanly. Promote to required only after Controlroom
+             confirms their official spec includes cpu. -->
+        <xs:element name="cpu" minOccurs="0">
           <xs:simpleType>
             <xs:restriction base="xs:decimal">
               <xs:minInclusive value="0.0"/>
