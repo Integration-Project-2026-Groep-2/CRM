@@ -24,7 +24,7 @@ import pytest
 from aio_pika import ExchangeType
 
 from src.config import Config
-from src.status_check import run_status_check
+from src.status import run_status_check
 from src.xml_validator import validate
 
 RABBITMQ_URL = os.getenv("CRM_TEST_RABBITMQ_URL", "amqp://guest:guest@localhost:5675/")
@@ -99,7 +99,7 @@ async def test_status_check_publishes_to_statuscheck_direct(
 
         from unittest.mock import patch
 
-        with patch("src.status_check.asyncio.sleep", side_effect=_stop_after_first_publish):
+        with patch("src.status.asyncio.sleep", side_effect=_stop_after_first_publish):
             try:
                 await run_status_check(connection, config)
             except asyncio.CancelledError:
@@ -126,9 +126,11 @@ async def test_status_check_publishes_to_statuscheck_direct(
 
     memory = float(doc.findtext("memory"))
     disk = float(doc.findtext("disk"))
+    cpu = float(doc.findtext("cpu"))
     assert 0.0 <= memory <= 1.0
     assert 0.0 <= disk <= 1.0
+    assert 0.0 <= cpu <= 1.0
 
     # Validate field order matches XSD xs:sequence
     children = [child.tag for child in doc]
-    assert children == ["serviceId", "timestamp", "uptime", "memory", "disk"]
+    assert children == ["serviceId", "timestamp", "uptime", "memory", "disk", "cpu"]

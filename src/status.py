@@ -1,0 +1,154 @@
+"""Contract 8 — CRM → Controlroom: periodieke statuscheck.
+
+Publiceert elke STATUS_CHECK_INTERVAL_SECONDS (default 120s) een `<StatusCheck>`
+XML op de `statuscheck.direct` exchange (DIRECT, durable=True) met routing key
+`routing.statuscheck`. Controlroom binds `controlroom.statuscheck.queue` (durable,
+DLQ `controlroom.statuscheck.queue.dlq`) — see ClickUp doc 2kyr1d3m-5735.
+
+Design notes:
+- `mandatory=True` on publish + an on-return callback so unrouted messages
+  surface as WARN logs instead of vanishing silently. Guards against the
+  LogEvent rollout failure mode (2026-05-04: 25/26 messages lost via routing-key
+  mix-up).
+- `publisher_confirms=True` on the channel so publish() awaits broker ack and
+  surfaces transport errors instead of returning success on a half-flushed send.
+- `_PROCESS_START_MONOTONIC` captured at module import — uptime resets on
+  container restart (correct) but not on hot-reload during tests.
+- `_DISK_PATH` defaults to `/` on Linux (production target) and `C:\\` on Windows
+  so `python -m src.main` does not crash on dev machines.
+- `psutil.cpu_percent(interval=None)` is non-blocking; the very first call always
+  returns 0.0, so we prime once at module import and discard the result.
+"""
+
+import asyncio
+import logging
+import os
+import time
+from datetime import datetime, timezone
+
+import aio_pika
+import psutil
+from aio_pika import ExchangeType
+from aio_pika.abc import (
+    AbstractChannel,
+    AbstractExchange,
+    AbstractIncomingMessage,
+    AbstractRobustConnection,
+)
+from lxml import etree
+
+from src import xml_validator
+from src.config import Config
+
+logger = logging.getLogger(__name__)
+
+_PROCESS_START_MONOTONIC = time.monotonic()
+# Linux is the production target; Windows fallback so local dev runs do not crash.
+_DISK_PATH = "C:\\" if os.name == "nt" else "/"
+
+# Prime psutil's CPU counter so subsequent cpu_percent(interval=None) calls
+# return the average since the previous call without blocking the event loop.
+# The very first call is always 0.0 — we discard it here at import time.
+psutil.cpu_percent(interval=None)
+
+
+def _clip_fraction(percent: float) -> float:
+    """Clip a 0-100 percentage into a 0.0-1.0 fraction."""
+    return max(0.0, min(1.0, percent / 100.0))
+
+
+def _build_status_xml(service_id: str) -> bytes:
+    """Build a StatusCheck XML message."""
+    root = etree.Element("StatusCheck")
+    etree.SubElement(root, "serviceId").text = service_id
+    etree.SubElement(root, "timestamp").text = datetime.now(timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    etree.SubElement(root, "uptime").text = str(
+        int(time.monotonic() - _PROCESS_START_MONOTONIC)
+    )
+
+    # interval=None: non-blocking, returns avg since last call (primed at import).
+    cpu = _clip_fraction(psutil.cpu_percent(interval=None))
+    memory = _clip_fraction(psutil.virtual_memory().percent)
+    disk = _clip_fraction(psutil.disk_usage(_DISK_PATH).percent)
+
+    # XSD xs:sequence order: serviceId, timestamp, uptime, memory, disk, cpu(opt).
+    etree.SubElement(root, "memory").text = f"{memory:.4f}"
+    etree.SubElement(root, "disk").text = f"{disk:.4f}"
+    etree.SubElement(root, "cpu").text = f"{cpu:.4f}"
+
+    return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
+
+
+def _on_unrouted(message: AbstractIncomingMessage) -> None:
+    """Log unrouted status checks so silent drops are visible.
+
+    Guards against the LogEvent rollout 2026-05-04 failure mode where 25/26
+    messages were silently lost because of a routing-key mix-up. Without this
+    callback + mandatory=True, a renamed/unbound consumer queue produces zero
+    log signal on the publisher side.
+    """
+    logger.warning(
+        "Status check unrouted by broker: rk=%s reply=%s",
+        message.routing_key,
+        getattr(message, "reply_text", None),
+    )
+
+
+async def _get_channel(
+    connection: AbstractRobustConnection,
+) -> tuple[AbstractChannel, AbstractExchange]:
+    """Open a new channel and declare the statuscheck exchange.
+
+    publisher_confirms=True: publish() awaits broker ack instead of returning
+    as soon as the bytes leave the socket. Without it, broker crashes between
+    accept and persist drop messages with no log signal on our side.
+    """
+    channel = await connection.channel(publisher_confirms=True)
+    channel.return_callbacks.add(_on_unrouted)
+    exchange = await channel.declare_exchange(
+        "statuscheck.direct", type=ExchangeType.DIRECT, durable=True
+    )
+    return channel, exchange
+
+
+async def run_status_check(
+    connection: AbstractRobustConnection, config: Config
+) -> None:
+    """Publish XML status check via statuscheck.direct every interval.
+
+    - Exchange: statuscheck.direct (DIRECT, durable=True)
+    - Routing key: routing.statuscheck
+    - Interval: config.status_check_interval_seconds (standaard 120)
+    """
+    channel: AbstractChannel | None = None
+    exchange: AbstractExchange | None = None
+
+    logger.info(
+        "Status check task started (interval=%ds)", config.status_check_interval_seconds
+    )
+
+    while True:
+        try:
+            if channel is None or channel.is_closed:
+                logger.info("Opening status check channel...")
+                channel, exchange = await _get_channel(connection)
+
+            xml_bytes = _build_status_xml(config.system_name)
+            xml_validator.validate(xml_bytes)
+
+            await exchange.publish(
+                aio_pika.Message(body=xml_bytes),
+                routing_key="routing.statuscheck",
+                mandatory=True,
+            )
+            logger.debug("Status check published")
+        except (ValueError, etree.XMLSyntaxError):
+            logger.exception("Status check XML validation failed")
+        except Exception:
+            logger.exception("Status check iteration failed")
+            channel = None
+            exchange = None
+
+        await asyncio.sleep(config.status_check_interval_seconds)
