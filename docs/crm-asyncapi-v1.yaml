@@ -1842,8 +1842,9 @@ components:
               <serviceId>CRM</serviceId>
               <timestamp>2026-03-14T10:00:00Z</timestamp>
               <uptime>3600</uptime>
-              <memory>0.41</memory>
-              <disk>0.15</disk>
+              <memory>0.4100</memory>
+              <disk>0.1500</disk>
+              <cpu>0.1200</cpu>
             </StatusCheck>
         - name: high-load
           payload: |
@@ -1852,10 +1853,10 @@ components:
               <serviceId>CRM</serviceId>
               <timestamp>2026-03-14T10:00:00Z</timestamp>
               <uptime>3600</uptime>
-              <memory>0.85</memory>
-              <disk>0.60</disk>
+              <memory>0.8500</memory>
+              <disk>0.6000</disk>
+              <cpu>0.9500</cpu>
             </StatusCheck>
-
     LogEvent:
       name: LogEvent
       title: CRM service log forwarded to Controlroom
@@ -3125,8 +3126,11 @@ components:
         Frequentie elke 120 seconden (ClickUp Controlroom spec, 2026-05-04).
         memory = psutil.virtual_memory().percent / 100 (available-aware,
         niet raw used/total). disk = psutil.disk_usage(path).percent / 100.
-        Beide worden geclamped naar [0.0, 1.0] om de XSD-bound op bursty
-        hosts (zswap, disk overcommit) te respecteren.
+        cpu (optioneel sinds 2026-05-08) = psutil.cpu_percent(interval=None) / 100,
+        non-blocking sample na module-import warmup. Alle drie worden geclamped
+        naar [0.0, 1.0] om de XSD-bound op bursty hosts (zswap, disk overcommit)
+        te respecteren. cpu staat als laatste in xs:sequence en is minOccurs=0
+        zodat consumers van vóór 2026-05-08 backward-compatible blijven.
       properties:
         serviceId:
           type: string
@@ -3146,6 +3150,13 @@ components:
           type: number
           minimum: 0
           maximum: 1
+        cpu:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: >-
+            Optional, added 2026-05-08 (Controlroom request via Thomas; pending
+            official ClickUp spec update).
 
     Warning:
       type: object

@@ -32,8 +32,11 @@
          DLQ controlroom.statuscheck.queue.dlq)
        Frequency: every 120 seconds
        Source of truth: ClickUp doc 2kyr1d3m-5735 (Controlroom team)
-       memory/disk are fractions in [0.0, 1.0] — psutil.*.percent / 100,
+       memory/disk/cpu are fractions in [0.0, 1.0] — psutil.*.percent / 100,
          clipped at the source to satisfy the bound on bursty hosts.
+       cpu was removed from the spec on 2026-05-04 and provisionally added
+         back (optional, last) on 2026-05-08 — Controlroom request via Thomas;
+         pending an updated ClickUp spec before promoting to required.
   ============================================================ -->
   <xs:element name="StatusCheck">
     <xs:complexType>
@@ -46,7 +49,7 @@
           </xs:simpleType>
         </xs:element>
         <xs:element name="timestamp" type="ISO8601DateTimeType"/>
-        <xs:element name="uptime" type="xs:nonNegativeInteger"/>
+        <xs:element name="uptime"    type="xs:nonNegativeInteger"/>
         <xs:element name="memory">
           <xs:simpleType>
             <xs:restriction base="xs:decimal">
@@ -56,6 +59,18 @@
           </xs:simpleType>
         </xs:element>
         <xs:element name="disk">
+          <xs:simpleType>
+            <xs:restriction base="xs:decimal">
+              <xs:minInclusive value="0.0"/>
+              <xs:maxInclusive value="1.0"/>
+            </xs:restriction>
+          </xs:simpleType>
+        </xs:element>
+        <!-- cpu is optional + last so consumers that pre-date the 2026-05-08
+             addition (deliberate removal on 2026-05-04 per ClickUp spec) keep
+             parsing cleanly. Promote to required only after Controlroom
+             confirms their official spec includes cpu. -->
+        <xs:element name="cpu" minOccurs="0">
           <xs:simpleType>
             <xs:restriction base="xs:decimal">
               <xs:minInclusive value="0.0"/>
