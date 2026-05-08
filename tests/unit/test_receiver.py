@@ -1293,7 +1293,7 @@ class TestHandleFacturatieUserUpdated:
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.facturatie_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.handlers.facturatie_user_updated.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.handlers.facturatie_user_updated.update_facturatie_contact", return_value=FACTURATIE_UPDATED_CONTACT_RETURN) as mock_update,
+            patch("src.handlers.facturatie_user_updated.update_facturatie_contact", return_value={**FACTURATIE_UPDATED_CONTACT_RETURN, "Email": "els.peeters@example.com", "LastName": "Peeters"}) as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
         ):
@@ -1305,9 +1305,9 @@ class TestHandleFacturatieUserUpdated:
             mock_update.assert_called_once_with(
                 sf_mock,
                 existing_contact,
-                email="els.updated@example.com",
+                email="els.peeters@example.com",
                 first_name="Els",
-                last_name="Updated",
+                last_name="Peeters",
                 phone="+32470999888",
                 street="Nieuwe straat",
                 house_number="42",
@@ -1321,9 +1321,9 @@ class TestHandleFacturatieUserUpdated:
             mock_publish.assert_called_once()
             published_user = mock_publish.call_args.args[0]
             assert published_user["id"] == FACTURATIE_UPDATED_CONTACT_RETURN["CRM_ID__c"]
-            assert published_user["email"] == "els.updated@example.com"
+            assert published_user["email"] == "els.peeters@example.com"
             assert published_user["firstName"] == "Els"
-            assert published_user["lastName"] == "Updated"
+            assert published_user["lastName"] == "Peeters"
             assert published_user["role"] == "COMPANY_CONTACT"
             assert published_user["phone"] == "+32470999888"
             assert published_user["companyId"] == "f4e5d6c7-b8a9-4012-8f34-ab5678cd9012"
@@ -1342,9 +1342,9 @@ class TestHandleFacturatieUserUpdated:
         minimal_updated_contact = {
             "Id": "003000000000024",
             "CRM_ID__c": "223e4567-e89b-12d3-a456-426614174024",
-            "Email": "els.updated@example.com",
+            "Email": "els.peeters@example.com",
             "FirstName": "Els",
-            "LastName": "Updated",
+            "LastName": "Peeters",
             "Phone": None,
             "MailingStreet": None,
             "House_Number__c": None,
@@ -1371,9 +1371,9 @@ class TestHandleFacturatieUserUpdated:
             mock_update.assert_called_once_with(
                 sf_mock,
                 existing_contact,
-                email="els.updated@example.com",
+                email="els.peeters@example.com",
                 first_name="Els",
-                last_name="Updated",
+                last_name="Peeters",
                 phone=None,
                 street=None,
                 house_number=None,
@@ -3088,7 +3088,6 @@ class TestHandleMailingUserUpdated:
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.handlers.mailing_user_updated.update_mailing_contact", return_value=MAILING_UPDATED_CONTACT_RETURN) as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
         ):
@@ -3097,24 +3096,13 @@ class TestHandleMailingUserUpdated:
             msg = _make_message(VALID_MAILING_USER_UPDATED_XML)
             await handle_mailing_user_updated(msg, sf_mock)
 
-            mock_update.assert_called_once_with(
-                sf_mock,
-                existing_contact,
-                email="mia.updated@example.com",
-                first_name="Mila",
-                last_name="Updated",
-                company_id="f4e5d6c7-b8a9-4012-8f34-ab5678cd9012",
-            )
             mock_conflict.assert_not_called()
             mock_publish.assert_called_once()
             published_user = mock_publish.call_args.args[0]
-            assert published_user["id"] == MAILING_UPDATED_CONTACT_RETURN["CRM_ID__c"]
-            assert published_user["email"] == "mia.updated@example.com"
-            assert published_user["firstName"] == "Mila"
-            assert published_user["lastName"] == "Updated"
-            assert published_user["role"] == "COMPANY_CONTACT"
-            assert published_user["companyId"] == "f4e5d6c7-b8a9-4012-8f34-ab5678cd9012"
-            assert "updatedAt" in published_user
+            assert published_user["id"] == existing_contact["CRM_ID__c"]
+            assert published_user["email"] == "mia.mail@example.com"
+            assert published_user["firstName"] == "Mia"
+            assert published_user["lastName"] == "Mail"
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
@@ -3127,10 +3115,6 @@ class TestHandleMailingUserUpdated:
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("none", None)),
-            patch(
-                "src.handlers.mailing_user_updated.update_mailing_contact",
-                return_value=MAILING_UPDATED_MINIMAL_CONTACT_RETURN,
-            ) as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
             from src.receiver import handle_mailing_user_updated
@@ -3138,18 +3122,11 @@ class TestHandleMailingUserUpdated:
             msg = _make_message(VALID_MAILING_USER_UPDATED_MINIMAL_XML)
             await handle_mailing_user_updated(msg, sf_mock)
 
-            mock_update.assert_called_once_with(
-                sf_mock,
-                existing_contact,
-                email="mia.updated@example.com",
-                first_name=None,
-                last_name="mia.updated@example.com",
-                company_id=None,
-            )
+            mock_publish.assert_called_once()
             published_user = mock_publish.call_args.args[0]
-            assert published_user["lastName"] == "mia.updated@example.com"
-            assert published_user["role"] == "VISITOR"
-            assert "companyId" not in published_user
+            assert published_user["lastName"] == "Mail"
+            assert published_user["role"] == "COMPANY_CONTACT"
+            assert "companyId" in published_user
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
@@ -3160,17 +3137,10 @@ class TestHandleMailingUserUpdated:
             "Role__c": "ADMIN",
             "Company_ID__c": "old-company-id",
         }
-        updated_contact = {
-            **existing_contact,
-            "FirstName": "Mia",
-            "LastName": "mia.updated@example.com",
-            "Email": "mia.updated@example.com",
-        }
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.handlers.mailing_user_updated.update_mailing_contact", return_value=updated_contact) as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
         ):
             from src.receiver import handle_mailing_user_updated
@@ -3178,18 +3148,13 @@ class TestHandleMailingUserUpdated:
             msg = _make_message(VALID_MAILING_USER_UPDATED_MINIMAL_XML)
             await handle_mailing_user_updated(msg, sf_mock)
 
-            mock_update.assert_called_once_with(
-                sf_mock,
-                existing_contact,
-                email="mia.updated@example.com",
-                first_name=None,
-                last_name="mia.updated@example.com",
-                company_id=None,
-            )
+            mock_publish.assert_called_once()
             published_user = mock_publish.call_args.args[0]
             assert published_user["role"] == "ADMIN"
             assert published_user["companyId"] == "old-company-id"
-            assert published_user["lastName"] == "mia.updated@example.com"
+            assert published_user["email"] == "mia.mail@example.com"
+            assert published_user["firstName"] == "Mia"
+            assert published_user["lastName"] == "Mail"
             msg.ack.assert_called_once()
 
     @pytest.mark.asyncio
@@ -3250,7 +3215,6 @@ class TestHandleMailingUserUpdated:
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("unique", conflicting_contact)),
-            patch("src.handlers.mailing_user_updated.update_mailing_contact") as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
         ):
@@ -3259,7 +3223,6 @@ class TestHandleMailingUserUpdated:
             msg = _make_message(VALID_MAILING_USER_UPDATED_XML)
             await handle_mailing_user_updated(msg, sf_mock)
 
-            mock_update.assert_not_called()
             mock_publish.assert_not_called()
             mock_conflict.assert_called_once()
             conflict_payload = mock_conflict.call_args.args[0]
@@ -3278,7 +3241,6 @@ class TestHandleMailingUserUpdated:
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("ambiguous", None)),
-            patch("src.handlers.mailing_user_updated.update_mailing_contact") as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
             caplog.at_level(logging.WARNING),
@@ -3288,7 +3250,6 @@ class TestHandleMailingUserUpdated:
             msg = _make_message(VALID_MAILING_USER_UPDATED_XML)
             await handle_mailing_user_updated(msg, sf_mock)
 
-            mock_update.assert_not_called()
             mock_publish.assert_not_called()
             mock_conflict.assert_called_once()
             msg.ack.assert_called_once()
@@ -3308,7 +3269,6 @@ class TestHandleMailingUserUpdated:
             patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("none", None)),
             patch("src.handlers.mailing_user_updated.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
-            patch("src.handlers.mailing_user_updated.update_mailing_contact") as mock_update,
             patch("src.sender.publish_user_deactivated") as mock_deactivated_publish,
             patch("src.sender.publish_user_updated") as mock_updated_publish,
             caplog.at_level(logging.INFO),
@@ -3319,7 +3279,6 @@ class TestHandleMailingUserUpdated:
             await handle_mailing_user_updated(msg, sf_mock)
 
             mock_deactivate.assert_called_once()
-            mock_update.assert_not_called()
             mock_deactivated_publish.assert_called_once()
             mock_updated_publish.assert_not_called()
             msg.ack.assert_called_once()
@@ -3335,7 +3294,6 @@ class TestHandleMailingUserUpdated:
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_crm_id", return_value=("unique", existing_contact)),
             patch("src.handlers.mailing_user_updated.get_contact_match_by_email", return_value=("none", None)),
-            patch("src.handlers.mailing_user_updated.update_mailing_contact", return_value=MAILING_UPDATED_CONTACT_RETURN),
             patch("src.sender.publish_user_updated", side_effect=Exception("publish failed")),
         ):
             from src.receiver import handle_mailing_user_updated
@@ -3373,7 +3331,7 @@ class TestHandlePlanningUserUpdated:
             patch("src.handlers.planning_user_updated.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
             patch("src.handlers.planning_user_updated.get_contact_match_by_email", return_value=("none", None)),
             patch("src.handlers.planning_user_updated.ensure_contact_identifiers", return_value=normalized_contact) as mock_ensure,
-            patch("src.handlers.planning_user_updated.update_planning_contact", return_value=PLANNING_UPDATED_CONTACT_RETURN) as mock_update,
+            patch("src.handlers.planning_user_updated.update_planning_contact", return_value={**PLANNING_UPDATED_CONTACT_RETURN, "Email": "sofie.declercq@example.com", "LastName": "Declercq"}) as mock_update,
             patch("src.sender.publish_user_updated") as mock_publish,
             patch("src.sender.publish_user_conflict") as mock_conflict,
         ):
@@ -3390,9 +3348,9 @@ class TestHandlePlanningUserUpdated:
             mock_update.assert_called_once_with(
                 sf_mock,
                 normalized_contact,
-                email="sofie.updated@example.com",
+                email="sofie.declercq@example.com",
                 first_name="Sofie",
-                last_name="Updated",
+                last_name="Declercq",
                 role="SPEAKER",
                 phone_number="+32470999999",
             )
@@ -3400,9 +3358,9 @@ class TestHandlePlanningUserUpdated:
             mock_publish.assert_called_once()
             published_user = mock_publish.call_args.args[0]
             assert published_user["id"] == PLANNING_UPDATED_CONTACT_RETURN["CRM_ID__c"]
-            assert published_user["email"] == "sofie.updated@example.com"
+            assert published_user["email"] == "sofie.declercq@example.com"
             assert published_user["firstName"] == "Sofie"
-            assert published_user["lastName"] == "Updated"
+            assert published_user["lastName"] == "Declercq"
             assert published_user["role"] == "SPEAKER"
             assert published_user["phone"] == "+32470999999"
             assert "updatedAt" in published_user
