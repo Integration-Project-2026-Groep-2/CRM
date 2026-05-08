@@ -9,7 +9,7 @@ from lxml import etree
 
 from src import xml_validator
 from src.config import Config
-from src.status import _build_status_xml, _clip_fraction, run_status_check
+from src.status import _build_status_xml, _clip_fraction, _on_unrouted, run_status_check
 
 
 @pytest.fixture(autouse=True)
@@ -48,6 +48,24 @@ class TestBuildStatusXml:
         xml_validator.validate(xml_bytes)
 
 
+class TestOnUnrouted:
+    """Tests for _on_unrouted callback."""
+
+    def test_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        message = MagicMock()
+        message.routing_key = "routing.statuscheck"
+        message.reply_text = "NO_ROUTE"
+
+        with caplog.at_level("WARNING", logger="src.status"):
+            _on_unrouted(message)
+
+        assert any(
+            "Status check unrouted" in record.message
+            and record.levelname == "WARNING"
+            for record in caplog.records
+        )
+
+
 class TestRunStatusCheck:
     """Tests for run_status_check()."""
 
@@ -69,9 +87,11 @@ class TestRunStatusCheck:
         mock_channel.declare_exchange.assert_called_once_with(
             "statuscheck.direct", type=ExchangeType.DIRECT, durable=True
         )
+        mock_channel.return_callbacks.add.assert_called_once()
         mock_exchange.publish.assert_called_once()
         args, kwargs = mock_exchange.publish.call_args
         assert kwargs["routing_key"] == "routing.statuscheck"
+        assert kwargs["mandatory"] is True
 
         root = etree.fromstring(args[0].body)
         assert root.tag == "StatusCheck"

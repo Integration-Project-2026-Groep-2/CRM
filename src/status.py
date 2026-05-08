@@ -11,7 +11,12 @@ from datetime import datetime, timezone
 import aio_pika
 import psutil
 from aio_pika import ExchangeType
-from aio_pika.abc import AbstractChannel, AbstractExchange, AbstractRobustConnection
+from aio_pika.abc import (
+    AbstractChannel,
+    AbstractExchange,
+    AbstractIncomingMessage,
+    AbstractRobustConnection,
+)
 from lxml import etree
 
 from src import xml_validator
@@ -50,11 +55,27 @@ def _build_status_xml(service_id: str) -> bytes:
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
 
 
+def _on_unrouted(message: AbstractIncomingMessage) -> None:
+    """Log unrouted status checks so silent drops are visible.
+
+    Guards against the LogEvent rollout 2026-05-04 failure mode where 25/26
+    messages were silently lost because of a routing-key mix-up. Without this
+    callback + mandatory=True, a renamed/unbound consumer queue produces zero
+    log signal on the publisher side.
+    """
+    logger.warning(
+        "Status check unrouted by broker: rk=%s reply=%s",
+        message.routing_key,
+        getattr(message, "reply_text", None),
+    )
+
+
 async def _get_channel(
     connection: AbstractRobustConnection,
 ) -> tuple[AbstractChannel, AbstractExchange]:
     """Open a new channel and declare the statuscheck exchange."""
     channel = await connection.channel()
+    channel.return_callbacks.add(_on_unrouted)
     exchange = await channel.declare_exchange(
         "statuscheck.direct", type=ExchangeType.DIRECT, durable=True
     )
@@ -89,6 +110,7 @@ async def run_status_check(
             await exchange.publish(
                 aio_pika.Message(body=xml_bytes),
                 routing_key="routing.statuscheck",
+                mandatory=True,
             )
             logger.debug("Status check published")
         except (ValueError, etree.XMLSyntaxError):
