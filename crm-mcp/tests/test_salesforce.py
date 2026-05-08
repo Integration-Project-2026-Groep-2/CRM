@@ -119,3 +119,45 @@ async def test_safe_connect_strips_credential_chain() -> None:
     assert excinfo.value.__cause__ is None
     assert "password" not in str(excinfo.value)
     assert "secret123" not in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_create_account_maps_duplicate_to_value_error() -> None:
+    """C5 — SF DUPLICATE_VALUE error → ValueError; race-condition safety net."""
+    from simple_salesforce.exceptions import SalesforceMalformedRequest
+
+    client = CrmSalesforceClient(_make_config())
+    sf_mock = MagicMock()
+    sf_mock.Account.create.side_effect = SalesforceMalformedRequest(
+        "url",
+        400,
+        "Account",
+        [{"errorCode": "DUPLICATE_VALUE", "message": "duplicate value"}],
+    )
+
+    with (
+        patch.object(client, "_safe_connect", return_value=sf_mock),
+        pytest.raises(ValueError, match="duplicate"),
+    ):
+        await client.create_account({"Name": "X", "VAT_Number__c": "BE0123456789"})
+
+
+@pytest.mark.asyncio
+async def test_create_account_passes_through_non_duplicate_errors() -> None:
+    """SF errors that are not duplicates must NOT be silently downgraded."""
+    from simple_salesforce.exceptions import SalesforceMalformedRequest
+
+    client = CrmSalesforceClient(_make_config())
+    sf_mock = MagicMock()
+    sf_mock.Account.create.side_effect = SalesforceMalformedRequest(
+        "url",
+        400,
+        "Account",
+        [{"errorCode": "REQUIRED_FIELD_MISSING", "message": "Name required"}],
+    )
+
+    with (
+        patch.object(client, "_safe_connect", return_value=sf_mock),
+        pytest.raises(SalesforceMalformedRequest),
+    ):
+        await client.create_account({})
