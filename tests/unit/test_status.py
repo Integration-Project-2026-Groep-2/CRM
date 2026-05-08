@@ -96,3 +96,34 @@ class TestRunStatusCheck:
 
         root = etree.fromstring(args[0].body)
         assert root.tag == "StatusCheck"
+
+    @pytest.mark.asyncio
+    @patch("src.status._build_status_xml")
+    async def test_recovers_from_channel_failure(
+        self, mock_build: MagicMock, config: Config
+    ) -> None:
+        """After a publish exception, channel is recreated on next iteration."""
+        mock_connection = AsyncMock()
+        mock_channel = MagicMock()
+        mock_channel.is_closed = False
+        mock_connection.channel = AsyncMock(return_value=mock_channel)
+        mock_exchange = AsyncMock()
+        mock_channel.declare_exchange = AsyncMock(return_value=mock_exchange)
+
+        mock_build.side_effect = [
+            b"<StatusCheck/>",
+            b"<StatusCheck/>",
+        ]
+        mock_exchange.publish.side_effect = [
+            Exception("transient broker failure"),
+            asyncio.CancelledError(),
+        ]
+
+        with patch("src.status.xml_validator.validate"):
+            try:
+                await run_status_check(mock_connection, config)
+            except asyncio.CancelledError:
+                pass
+
+        assert mock_connection.channel.call_count == 2
+        assert mock_exchange.publish.call_count == 2
