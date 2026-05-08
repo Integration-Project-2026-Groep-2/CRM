@@ -5,6 +5,7 @@ Publiceert periodiek systeemmetrieken naar statuscheck.direct exchange.
 
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime, timezone
 
@@ -25,6 +26,8 @@ from src.config import Config
 logger = logging.getLogger(__name__)
 
 _PROCESS_START_MONOTONIC = time.monotonic()
+# Linux is the production target; Windows fallback so local dev runs do not crash.
+_DISK_PATH = "C:\\" if os.name == "nt" else "/"
 
 
 def _clip_fraction(percent: float) -> float:
@@ -46,7 +49,7 @@ def _build_status_xml(service_id: str) -> bytes:
     # CPU, Memory and Disk as decimals (fractions 0.0-1.0)
     cpu = _clip_fraction(psutil.cpu_percent(interval=0.1))
     memory = _clip_fraction(psutil.virtual_memory().percent)
-    disk = _clip_fraction(psutil.disk_usage("/").percent)
+    disk = _clip_fraction(psutil.disk_usage(_DISK_PATH).percent)
 
     etree.SubElement(root, "cpu").text = f"{cpu:.4f}"
     etree.SubElement(root, "memory").text = f"{memory:.4f}"
