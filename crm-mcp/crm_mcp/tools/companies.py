@@ -278,9 +278,8 @@ async def update_company(
         sf_payload["VAT_Number__c"] = vat_number
     if street is not None:
         sf_payload["BillingStreet"] = street
-    if house_number is not None:
-        if await client.has_account_house_number_field():
-            sf_payload["House_Number__c"] = house_number
+    if house_number is not None and await client.has_account_house_number_field():
+        sf_payload["House_Number__c"] = house_number
     if postal_code is not None:
         sf_payload["BillingPostalCode"] = postal_code
     if city is not None:
