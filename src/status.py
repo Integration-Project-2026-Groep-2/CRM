@@ -29,6 +29,11 @@ _PROCESS_START_MONOTONIC = time.monotonic()
 # Linux is the production target; Windows fallback so local dev runs do not crash.
 _DISK_PATH = "C:\\" if os.name == "nt" else "/"
 
+# Prime psutil's CPU counter so subsequent cpu_percent(interval=None) calls
+# return the average since the previous call without blocking the event loop.
+# The very first call is always 0.0 — we discard it here at import time.
+psutil.cpu_percent(interval=None)
+
 
 def _clip_fraction(percent: float) -> float:
     """Clip a 0-100 percentage into a 0.0-1.0 fraction."""
@@ -46,8 +51,8 @@ def _build_status_xml(service_id: str) -> bytes:
         int(time.monotonic() - _PROCESS_START_MONOTONIC)
     )
 
-    # CPU, Memory and Disk as decimals (fractions 0.0-1.0)
-    cpu = _clip_fraction(psutil.cpu_percent(interval=0.1))
+    # interval=None: non-blocking, returns avg since last call (primed at import).
+    cpu = _clip_fraction(psutil.cpu_percent(interval=None))
     memory = _clip_fraction(psutil.virtual_memory().percent)
     disk = _clip_fraction(psutil.disk_usage(_DISK_PATH).percent)
 
