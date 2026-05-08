@@ -84,6 +84,7 @@ class TestRunStatusCheck:
             except asyncio.CancelledError:
                 pass
 
+        mock_connection.channel.assert_called_once_with(publisher_confirms=True)
         mock_channel.declare_exchange.assert_called_once_with(
             "statuscheck.direct", type=ExchangeType.DIRECT, durable=True
         )

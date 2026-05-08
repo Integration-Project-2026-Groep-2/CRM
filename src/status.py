@@ -73,8 +73,13 @@ def _on_unrouted(message: AbstractIncomingMessage) -> None:
 async def _get_channel(
     connection: AbstractRobustConnection,
 ) -> tuple[AbstractChannel, AbstractExchange]:
-    """Open a new channel and declare the statuscheck exchange."""
-    channel = await connection.channel()
+    """Open a new channel and declare the statuscheck exchange.
+
+    publisher_confirms=True: publish() awaits broker ack instead of returning
+    as soon as the bytes leave the socket. Without it, broker crashes between
+    accept and persist drop messages with no log signal on our side.
+    """
+    channel = await connection.channel(publisher_confirms=True)
     channel.return_callbacks.add(_on_unrouted)
     exchange = await channel.declare_exchange(
         "statuscheck.direct", type=ExchangeType.DIRECT, durable=True
