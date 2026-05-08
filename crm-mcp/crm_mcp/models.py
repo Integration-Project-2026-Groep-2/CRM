@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 # ---- Contact-related ----
 
+
 class ContactSummary(BaseModel):
     """Lightweight contact info for search results and activity feeds."""
 
@@ -46,12 +47,11 @@ class ContactCount(BaseModel):
     by_role: dict[str, int] = Field(
         description="Counts per Role__c picklist value plus 'UNKNOWN' for missing"
     )
-    by_active: dict[str, int] = Field(
-        description="Counts split into 'active' and 'inactive'"
-    )
+    by_active: dict[str, int] = Field(description="Counts split into 'active' and 'inactive'")
 
 
 # ---- Company-related (Salesforce Account) ----
+
 
 class CompanySummary(BaseModel):
     id: str = Field(description="Salesforce 18-character Account Id")
@@ -75,9 +75,27 @@ class CompanyDetails(BaseModel):
 
 # ---- Registration-related (Session_Registration__c) ----
 
+
 class RegistrationCount(BaseModel):
     """Aggregated session-registration counts."""
 
     total: int
     paid: int
     unpaid: int
+
+
+# ---- Mutation results (write-tools) ----
+
+
+class MutationResult(BaseModel):
+    """Result of a CRUD write-tool: SF-write outcome plus broadcast routing-key."""
+
+    id: str = Field(description="CRM_ID__c UUID v4 stamped on the record")
+    success: bool
+    routing_key: str = Field(
+        description="RabbitMQ routing-key of the broadcast event (e.g. 'crm.company.confirmed')"
+    )
+    salesforce_id: str | None = Field(
+        default=None,
+        description="Salesforce 18-character Id (Account or Contact) post-upsert",
+    )
