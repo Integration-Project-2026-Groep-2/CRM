@@ -1,8 +1,17 @@
 """CRM MCP server entrypoint.
 
-Registers all seven tools against a single FastMCP instance and starts the
-server on the configured transport (stdio for local dev, streamable-http for
-the deployed agent).
+Registers all CRM tools against a single FastMCP instance and starts the server
+on the configured transport (stdio for local dev, streamable-http for the
+deployed agent).
+
+Tools split:
+    - 7 read-only (search/get/count/recent on Contact, Company, Registration)
+    - 6 write (create/update/delete on Contact, Company) — R2 actionable agent
+
+Write-tools require a bound `MessagePublisher` (see `messaging.py`) to broadcast
+XSD-validated XML events on RabbitMQ. They are annotated with
+`requires_approval=True` so MCP-clients (mcp-master) can route them through an
+approval-flow before execution.
 """
 
 from __future__ import annotations
@@ -12,14 +21,17 @@ from datetime import datetime
 from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from .config import SalesforceConfig, ServerConfig
+from .messaging import MessagePublisher
 from .models import (
     CompanyDetails,
     CompanySummary,
     ContactCount,
     ContactDetails,
     ContactSummary,
+    MutationResult,
     RegistrationCount,
 )
 from .salesforce import CrmSalesforceClient
@@ -30,21 +42,42 @@ from .tools import registrations as registration_tools
 logger = logging.getLogger(__name__)
 
 
-def build_server(client: CrmSalesforceClient, *, host: str = "0.0.0.0", port: int = 7001) -> FastMCP:
-    """Build the FastMCP server with all CRM tools registered."""
+_READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+
+
+def build_server(
+    client: CrmSalesforceClient,
+    publisher: MessagePublisher,
+    *,
+    host: str = "0.0.0.0",
+    port: int = 7001,
+) -> FastMCP:
+    """Build the FastMCP server with all CRM tools registered.
+
+    `publisher` may be unbound at registration time — write-tools tolerate this
+    via `MessagePublisher.is_ready()` and raise `PublisherNotReadyError` only
+    when actually invoked before the publisher is bound.
+    """
     mcp = FastMCP(
         "crm-mcp",
         instructions=(
             "CRM team's MCP server for the Desideriushogeschool ShiftFestival "
-            "integration project. Provides read-only access to Salesforce "
-            "Contacts, Accounts (Companies), and Session_Registration__c records. "
-            "Write flows happen via XML contracts on RabbitMQ — never via this server."
+            "integration project. Provides read access to Salesforce Contacts, "
+            "Accounts (Companies), and Session_Registration__c records, plus "
+            "CRUD write-tools for Contact and Company. Write operations broadcast "
+            "XSD-validated XML on RabbitMQ (`crm.user.*` / `crm.company.*`) so all "
+            "consumer teams (Mailing, Facturatie, Kassa, Planning, IoT, "
+            "Controlroom) stay in sync — there is no team-private state. "
+            "Write-tools are annotated `requires_approval=true` and should be "
+            "routed through approval-flow by MCP-clients."
         ),
         host=host,
         port=port,
     )
 
-    @mcp.tool()
+    # ---- Read-only tools ----
+
+    @mcp.tool(annotations=_READ_ONLY)
     async def search_contact(query: str, limit: int = 10) -> list[ContactSummary]:
         """Find candidate contacts (deelnemers) by name, email, or phone fragment.
 
@@ -53,7 +86,7 @@ def build_server(client: CrmSalesforceClient, *, host: str = "0.0.0.0", port: in
         """
         return await contact_tools.search_contact(client, query=query, limit=limit)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def get_contact(contact_id: str) -> ContactDetails | None:
         """Retrieve full contact details by exact Salesforce Contact Id (starts with '003').
 
@@ -61,7 +94,7 @@ def build_server(client: CrmSalesforceClient, *, host: str = "0.0.0.0", port: in
         """
         return await contact_tools.get_contact(client, contact_id=contact_id)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def count_contacts(
         role: Literal["VISITOR", "COMPANY_CONTACT"] | None = None,
         is_active: bool | None = True,
@@ -83,7 +116,7 @@ def build_server(client: CrmSalesforceClient, *, host: str = "0.0.0.0", port: in
             has_paid=has_paid,
         )
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def recent_contacts(
         mode: Literal["created", "modified"] = "modified",
         since_hours: int = 24,
@@ -98,7 +131,7 @@ def build_server(client: CrmSalesforceClient, *, host: str = "0.0.0.0", port: in
             client, mode=mode, since_hours=since_hours, limit=limit
         )
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def search_company(query: str, limit: int = 10) -> list[CompanySummary]:
         """Find candidate companies by name or VAT-number fragment.
 
@@ -106,7 +139,7 @@ def build_server(client: CrmSalesforceClient, *, host: str = "0.0.0.0", port: in
         """
         return await company_tools.search_company(client, query=query, limit=limit)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def get_company(
         vat_number: str | None = None,
         company_id: str | None = None,
@@ -116,11 +149,9 @@ def build_server(client: CrmSalesforceClient, *, host: str = "0.0.0.0", port: in
         Provide one of `vat_number` or `company_id`. VAT-number is the canonical
         business key per Contract 3 deduplication rule.
         """
-        return await company_tools.get_company(
-            client, vat_number=vat_number, company_id=company_id
-        )
+        return await company_tools.get_company(client, vat_number=vat_number, company_id=company_id)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def count_registrations(
         session_id: str | None = None,
         is_active: bool | None = True,
@@ -142,6 +173,221 @@ def build_server(client: CrmSalesforceClient, *, host: str = "0.0.0.0", port: in
             since=since,
         )
 
+    # ---- Write tools (R2) — each broadcasts an XSD-validated event ----
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+            requires_approval=True,
+        )
+    )
+    async def create_company(
+        name: str,
+        vat_number: str,
+        email: str,
+        street: str,
+        house_number: str,
+        postal_code: str,
+        city: str,
+        country: str,
+        phone: str | None = None,
+    ) -> MutationResult:
+        """Create a Company (Account) and broadcast C14 `<CompanyConfirmed>`.
+
+        VAT-uniqueness is pre-checked (Contract 3 dedup-rule). `country` is
+        ISO 3166-1 alpha-2 (e.g. 'BE'). All consumer teams subscribe to
+        `crm.company.confirmed` and will create their own copy automatically.
+        """
+        return await company_tools.create_company(
+            client,
+            publisher,
+            name=name,
+            vat_number=vat_number,
+            email=email,
+            street=street,
+            house_number=house_number,
+            postal_code=postal_code,
+            city=city,
+            country=country,
+            phone=phone,
+        )
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+            requires_approval=True,
+        )
+    )
+    async def update_company(
+        crm_id: str,
+        name: str | None = None,
+        vat_number: str | None = None,
+        email: str | None = None,
+        phone: str | None = None,
+        street: str | None = None,
+        house_number: str | None = None,
+        postal_code: str | None = None,
+        city: str | None = None,
+        country: str | None = None,
+        is_active: bool | None = None,
+    ) -> MutationResult:
+        """Patch a Company by CRM_ID__c and broadcast C19 `<CompanyUpdated>`.
+
+        Partial-update: omitted fields stay as-is in Salesforce. `crm_id` is
+        the UUID v4 stamped on the record at create-time (not the Salesforce
+        Id). `street` and `house_number` must be updated together.
+        """
+        return await company_tools.update_company(
+            client,
+            publisher,
+            crm_id=crm_id,
+            name=name,
+            vat_number=vat_number,
+            email=email,
+            phone=phone,
+            street=street,
+            house_number=house_number,
+            postal_code=postal_code,
+            city=city,
+            country=country,
+            is_active=is_active,
+        )
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=False,
+            requires_approval=True,
+        )
+    )
+    async def delete_company(crm_id: str, hard: bool = False) -> MutationResult:
+        """Soft-delete a Company (IsActive__c=false) and broadcast C23 `<CompanyDeactivated>`.
+
+        `hard=True` is rejected — XSD has no hard-delete contract and project
+        policy is GDPR soft-delete only.
+        """
+        return await company_tools.delete_company(client, publisher, crm_id=crm_id, hard=hard)
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+            requires_approval=True,
+        )
+    )
+    async def create_contact(
+        email: str,
+        first_name: str,
+        last_name: str,
+        role: Literal[
+            "VISITOR",
+            "COMPANY_CONTACT",
+            "SPEAKER",
+            "EVENT_MANAGER",
+            "CASHIER",
+            "BAR_STAFF",
+            "ADMIN",
+        ],
+        gdpr_consent: bool,
+        phone: str | None = None,
+        company_id: str | None = None,
+        badge_code: str | None = None,
+    ) -> MutationResult:
+        """Create a Contact and broadcast C13 `<UserConfirmed>`.
+
+        `company_id` is the linked Company's CRM_ID__c (UUID v4) — resolved
+        server-side to the Salesforce AccountId. Email-uniqueness pre-checked.
+        All consumer teams subscribe to `crm.user.confirmed`.
+        """
+        return await contact_tools.create_contact(
+            client,
+            publisher,
+            email=email,
+            first_name=first_name,
+            last_name=last_name,
+            role=role,
+            gdpr_consent=gdpr_consent,
+            phone=phone,
+            company_id=company_id,
+            badge_code=badge_code,
+        )
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+            requires_approval=True,
+        )
+    )
+    async def update_contact(
+        crm_id: str,
+        email: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        role: Literal[
+            "VISITOR",
+            "COMPANY_CONTACT",
+            "SPEAKER",
+            "EVENT_MANAGER",
+            "CASHIER",
+            "BAR_STAFF",
+            "ADMIN",
+        ]
+        | None = None,
+        phone: str | None = None,
+        company_id: str | None = None,
+        badge_code: str | None = None,
+        gdpr_consent: bool | None = None,
+        is_active: bool | None = None,
+    ) -> MutationResult:
+        """Patch a Contact by CRM_ID__c and broadcast C18 `<UserUpdated>`.
+
+        Partial-update: omitted fields stay as-is. `crm_id` is the UUID v4
+        stamped at create-time (not the Salesforce Id).
+        """
+        return await contact_tools.update_contact(
+            client,
+            publisher,
+            crm_id=crm_id,
+            email=email,
+            first_name=first_name,
+            last_name=last_name,
+            role=role,
+            phone=phone,
+            company_id=company_id,
+            badge_code=badge_code,
+            gdpr_consent=gdpr_consent,
+            is_active=is_active,
+        )
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=False,
+            requires_approval=True,
+        )
+    )
+    async def delete_contact(crm_id: str, hard: bool = False) -> MutationResult:
+        """Soft-delete a Contact (IsActive__c=false) and broadcast C22 `<UserDeactivated>`.
+
+        `hard=True` is rejected — GDPR soft-delete only.
+        """
+        return await contact_tools.delete_contact(client, publisher, crm_id=crm_id, hard=hard)
+
     return mcp
 
 
@@ -153,7 +399,8 @@ def main() -> None:
     sf_config = SalesforceConfig.from_env()
     server_config = ServerConfig.from_env()
     client = CrmSalesforceClient(sf_config)
-    mcp = build_server(client, host=server_config.host, port=server_config.port)
+    publisher = MessagePublisher()  # standalone-mode: never bound, write-tools error
+    mcp = build_server(client, publisher, host=server_config.host, port=server_config.port)
 
     logger.info(
         "Starting CRM MCP server (transport=%s host=%s port=%d)",
