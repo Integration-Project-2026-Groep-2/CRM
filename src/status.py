@@ -1,6 +1,23 @@
 """Contract 8 — CRM → Controlroom: periodieke statuscheck.
 
-Publiceert periodiek systeemmetrieken naar statuscheck.direct exchange.
+Publiceert elke STATUS_CHECK_INTERVAL_SECONDS (default 120s) een `<StatusCheck>`
+XML op de `statuscheck.direct` exchange (DIRECT, durable=True) met routing key
+`routing.statuscheck`. Controlroom binds `controlroom.statuscheck.queue` (durable,
+DLQ `controlroom.statuscheck.queue.dlq`) — see ClickUp doc 2kyr1d3m-5735.
+
+Design notes:
+- `mandatory=True` on publish + an on-return callback so unrouted messages
+  surface as WARN logs instead of vanishing silently. Guards against the
+  LogEvent rollout failure mode (2026-05-04: 25/26 messages lost via routing-key
+  mix-up).
+- `publisher_confirms=True` on the channel so publish() awaits broker ack and
+  surfaces transport errors instead of returning success on a half-flushed send.
+- `_PROCESS_START_MONOTONIC` captured at module import — uptime resets on
+  container restart (correct) but not on hot-reload during tests.
+- `_DISK_PATH` defaults to `/` on Linux (production target) and `C:\\` on Windows
+  so `python -m src.main` does not crash on dev machines.
+- `psutil.cpu_percent(interval=None)` is non-blocking; the very first call always
+  returns 0.0, so we prime once at module import and discard the result.
 """
 
 import asyncio
