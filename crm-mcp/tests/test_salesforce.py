@@ -161,3 +161,99 @@ async def test_create_account_passes_through_non_duplicate_errors() -> None:
         pytest.raises(SalesforceMalformedRequest),
     ):
         await client.create_account({})
+
+
+def test_safe_connect_passes_timeout_session() -> None:
+    """A1 — Salesforce(...) must receive a `_TimeoutSession` so HTTP calls
+    can't hang indefinitely. This is the fix for the 794s cold-start incident.
+    """
+    from crm_mcp.salesforce import _TimeoutSession
+
+    client = CrmSalesforceClient(_make_config())
+    captured: dict[str, Any] = {}
+
+    def fake_salesforce(**kwargs):
+        captured.update(kwargs)
+        return MagicMock()
+
+    with patch("crm_mcp.salesforce.Salesforce", side_effect=fake_salesforce):
+        client._safe_connect()
+
+    assert "session" in captured
+    assert isinstance(captured["session"], _TimeoutSession)
+
+
+def test_timeout_session_injects_default_timeout() -> None:
+    """The session must inject `timeout=` on every request unless caller sets it."""
+    from crm_mcp.salesforce import _TimeoutSession
+
+    session = _TimeoutSession(timeout=12.0)
+    captured_kwargs: dict[str, Any] = {}
+
+    def fake_send(self, *args, **kwargs):
+        # `requests.Session.request` calls `self.send`. We intercept higher up
+        # via patching the parent's `request` method instead.
+        return MagicMock()
+
+    with patch.object(
+        type(session).__mro__[1],  # requests.Session
+        "request",
+        autospec=True,
+        side_effect=lambda self, method, url, **kw: captured_kwargs.update(kw) or MagicMock(),
+    ):
+        session.request("GET", "http://example.com/x")
+
+    assert captured_kwargs.get("timeout") == 12.0
+
+
+@pytest.mark.asyncio
+async def test_connect_with_retry_succeeds_after_transient_failures() -> None:
+    """A1 — login retries with backoff and eventually succeeds."""
+    client = CrmSalesforceClient(_make_config())
+    success_sf = MagicMock()
+    attempts = {"count": 0}
+
+    def flaky_safe_connect():
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise RuntimeError("Salesforce login failed: ConnectionError")
+        return success_sf
+
+    with (
+        patch.object(client, "_safe_connect", side_effect=flaky_safe_connect),
+        patch("time.sleep"),  # zero-out backoff
+    ):
+        sf = await client.connect()
+
+    assert sf is success_sf
+    assert attempts["count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_connect_with_retry_gives_up_after_max_attempts() -> None:
+    """A1 — after 3 failed attempts, the original error propagates."""
+    client = CrmSalesforceClient(_make_config())
+
+    def always_fail():
+        raise RuntimeError("Salesforce login failed: AuthError")
+
+    with (
+        patch.object(client, "_safe_connect", side_effect=always_fail),
+        patch("time.sleep"),
+    ):
+        with pytest.raises(RuntimeError, match="login failed"):
+            await client.connect()
+
+
+def test_resolve_timeout_seconds_reads_env_var(monkeypatch) -> None:
+    from crm_mcp.salesforce import _resolve_timeout_seconds
+
+    monkeypatch.setenv("CRM_MCP_SF_TIMEOUT_SECONDS", "45")
+    assert _resolve_timeout_seconds() == 45.0
+
+
+def test_resolve_timeout_seconds_falls_back_on_garbage(monkeypatch) -> None:
+    from crm_mcp.salesforce import _DEFAULT_SF_HTTP_TIMEOUT_SECONDS, _resolve_timeout_seconds
+
+    monkeypatch.setenv("CRM_MCP_SF_TIMEOUT_SECONDS", "not-a-number")
+    assert _resolve_timeout_seconds() == _DEFAULT_SF_HTTP_TIMEOUT_SECONDS
