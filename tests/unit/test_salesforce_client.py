@@ -2589,12 +2589,14 @@ async def test_get_salesforce_client_returns_authenticated_client(config, monkey
     result = await get_salesforce_client(config)
 
     assert result is client_stub
-    sf_constructor.assert_called_once_with(
-        username=config.salesforce_username,
-        password=config.salesforce_password,
-        security_token=config.salesforce_security_token,
-        domain=config.salesforce_domain,
-    )
+    sf_constructor.assert_called_once()
+    call_kwargs = sf_constructor.call_args.kwargs
+    assert call_kwargs["username"] == config.salesforce_username
+    assert call_kwargs["password"] == config.salesforce_password
+    assert call_kwargs["security_token"] == config.salesforce_security_token
+    assert call_kwargs["domain"] == config.salesforce_domain
+    # Session must enforce a default timeout to prevent silent hangs.
+    assert isinstance(call_kwargs["session"], salesforce_client_module._TimeoutSession)
 
 
 @pytest.mark.asyncio
