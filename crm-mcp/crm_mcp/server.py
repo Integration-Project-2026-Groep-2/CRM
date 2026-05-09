@@ -16,12 +16,16 @@ approval-flow before execution.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from .config import SalesforceConfig, ServerConfig
 from .messaging import MessagePublisher
@@ -43,6 +47,53 @@ logger = logging.getLogger(__name__)
 
 
 _READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+
+# Lightweight SOQL probe for the /health endpoint. Cheap (LIMIT 1) and avoids
+# describe-cache side effects. Cached for _SF_PROBE_CACHE_SECONDS so a flood of
+# healthcheck calls (Docker, k8s, monitoring) doesn't burn API quota.
+_SF_PROBE_SOQL = "SELECT Id FROM Contact LIMIT 1"
+_SF_PROBE_CACHE_SECONDS = 30.0
+_SF_PROBE_TIMEOUT_SECONDS = 5.0
+
+
+class _HealthState:
+    """Probe-state for the /health endpoint.
+
+    Caches the SF reachability check so healthcheck-burst doesn't multiply
+    Salesforce API calls. Cache TTL is short on success (30s) and shorter on
+    failure (5s) so recovery is detected quickly.
+    """
+
+    def __init__(self, client: CrmSalesforceClient, publisher: MessagePublisher) -> None:
+        self._client = client
+        self._publisher = publisher
+        self._start_time = time.monotonic()
+        self._sf_cache: tuple[bool, float] | None = None
+        self._sf_lock = asyncio.Lock()
+
+    @property
+    def uptime_seconds(self) -> float:
+        return time.monotonic() - self._start_time
+
+    async def check_sf(self) -> bool:
+        async with self._sf_lock:
+            now = time.monotonic()
+            if self._sf_cache is not None and now < self._sf_cache[1]:
+                return self._sf_cache[0]
+            try:
+                await asyncio.wait_for(
+                    self._client.query(_SF_PROBE_SOQL),
+                    timeout=_SF_PROBE_TIMEOUT_SECONDS,
+                )
+                self._sf_cache = (True, now + _SF_PROBE_CACHE_SECONDS)
+                return True
+            except Exception as exc:
+                logger.warning("Salesforce health-probe failed: %s", type(exc).__name__)
+                self._sf_cache = (False, now + 5.0)
+                return False
+
+    def check_publisher(self) -> bool:
+        return self._publisher.is_ready()
 
 
 def build_server(
@@ -74,6 +125,23 @@ def build_server(
         host=host,
         port=port,
     )
+
+    health_state = _HealthState(client, publisher)
+
+    @mcp.custom_route("/health", methods=["GET"])
+    async def health(request: Request) -> JSONResponse:
+        sf_connected = await health_state.check_sf()
+        publisher_bound = health_state.check_publisher()
+        all_ok = sf_connected and publisher_bound
+        body = {
+            "status": "ok" if all_ok else "degraded",
+            "uptime_seconds": round(health_state.uptime_seconds, 1),
+            "checks": {
+                "sf_connected": sf_connected,
+                "publisher_bound": publisher_bound,
+            },
+        }
+        return JSONResponse(body, status_code=200 if all_ok else 503)
 
     # ---- Read-only tools ----
 

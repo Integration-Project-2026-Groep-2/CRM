@@ -2,6 +2,11 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
+# curl gives the Docker healthcheck a real probe of the MCP /health endpoint
+# (was: `python -c "sys.exit(0)"` no-op that flagged hung processes as healthy).
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
 # Dependencies als aparte laag -- betere build cache
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -23,8 +28,9 @@ USER appuser
 # Alleen op het docker-network bereikbaar -- geen ports: in compose, expose:.
 EXPOSE 7001
 
-# Docker healthcheck -- onafhankelijk van de RabbitMQ heartbeat
-HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
-  CMD python -c "import sys; sys.exit(0)"
+# Docker healthcheck -- probes the MCP /health endpoint which validates SF
+# connectivity + AMQP publisher bound state. 503 → unhealthy, 200 → healthy.
+HEALTHCHECK --interval=10s --timeout=5s --retries=3 --start-period=30s \
+  CMD curl -fsS http://localhost:7001/health || exit 1
 
 CMD ["python", "-m", "src.main"]
