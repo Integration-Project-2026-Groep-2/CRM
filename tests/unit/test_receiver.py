@@ -5380,6 +5380,30 @@ class TestRunReceiver:
         assert "crm.mailing.user.deactivated" in queues
         assert "mailing.user.deactivated" not in queues
 
+    @pytest.mark.asyncio
+    async def test_run_receiver_sets_bounded_channel_prefetch(self):
+        """One hung consumer must not drain the channel buffer (incident 2026-05-09)."""
+        sf_client = MagicMock()
+        channel = AsyncMock(name="channel")
+        connection = AsyncMock(name="connection")
+        connection.channel = AsyncMock(return_value=channel)
+
+        async def _declare_queue(*_args, **_kwargs):  # noqa: ARG001
+            return AsyncMock()
+
+        with (
+            patch("src.receiver.get_salesforce_client", return_value=sf_client),
+            patch("src.receiver._declare_and_bind", AsyncMock(side_effect=_declare_queue)),
+            patch("src.receiver._ensure_dlq_topology", AsyncMock()),
+            patch("src.receiver.asyncio.Future", side_effect=RuntimeError("stop receiver loop")),
+        ):
+            from src.receiver import run_receiver
+
+            with pytest.raises(RuntimeError, match="stop receiver loop"):
+                await run_receiver(connection, MagicMock())
+
+        channel.set_qos.assert_awaited_once_with(prefetch_count=10)
+
 
 class TestWrapHandler:
     """Safety guarantees of the receiver's centralized failure-routing wrapper."""
@@ -5516,6 +5540,45 @@ class TestWrapHandler:
         message.reject.assert_not_called()
         # Handler is responsible for its own ack on success path.
         message.ack.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_wrap_handler_logs_start_and_done_on_success(self, message, caplog):
+        """Entry + exit logs make hangs observable (incident 2026-05-09)."""
+        import logging
+
+        from src.receiver import _wrap_handler
+
+        message.delivery_tag = 42
+        message.message_id = "test-msg-1"
+
+        async def ok_handler(_msg):
+            return None
+
+        with caplog.at_level(logging.INFO, logger="src.receiver"):
+            await _wrap_handler(ok_handler, "crm.frontend.registration.created", message)
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("handler start" in m and "delivery_tag=42" in m for m in messages), messages
+        assert any("handler done" in m and "delivery_tag=42" in m for m in messages), messages
+
+    @pytest.mark.asyncio
+    async def test_wrap_handler_logs_start_even_when_handler_hangs_then_fails(self, message, caplog):
+        """Start-log must fire BEFORE handler-await so a hung handler is observable."""
+        import logging
+
+        from src.receiver import _wrap_handler
+
+        message.delivery_tag = 99
+
+        async def boom_handler(_msg):
+            raise RuntimeError("simulated hang-then-crash")
+
+        with patch("src.receiver._handle_failure", new_callable=AsyncMock):
+            with caplog.at_level(logging.INFO, logger="src.receiver"):
+                await _wrap_handler(boom_handler, "crm.frontend.registration.created", message)
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("handler start" in m and "delivery_tag=99" in m for m in messages), messages
 
 
 class TestExponentialBackoff:
