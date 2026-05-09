@@ -26,6 +26,49 @@ _LOGIN_RETRY_ATTEMPTS = 3
 _LOGIN_RETRY_BASE_DELAY = 1.0
 _LOGIN_RETRY_MAX_DELAY = 8.0
 
+# Per-call retry: a single `REQUEST_LIMIT_EXCEEDED` from SF or a transient
+# network blip should not bubble up as a tool-failure to the LLM. We retry
+# transparently on transient errors only — validation/auth errors propagate
+# immediately so callers see real problems (and don't waste API quota).
+_CALL_RETRY_ATTEMPTS = 3
+_CALL_RETRY_BASE_DELAY = 0.5
+_CALL_RETRY_MAX_DELAY = 4.0
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """Detect Salesforce REQUEST_LIMIT_EXCEEDED via content attribute or message.
+
+    Mirrors `src/salesforce/client.py:127-140` — duplicated here because the
+    crm-mcp package is structurally independent from the parent receiver.
+    Consolidation into a shared module is Tier-3's L3 PR.
+    """
+    content = getattr(exc, "content", None)
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("errorCode") == "REQUEST_LIMIT_EXCEEDED":
+                return True
+    return "REQUEST_LIMIT_EXCEEDED" in str(exc)
+
+
+def _is_transient_call_error(exc: Exception) -> bool:
+    """True for transient errors worth a retry (connection / timeout)."""
+    if _is_rate_limit_error(exc):
+        return True
+    # `requests`-layer flakes: peer reset, DNS blip, read timeout, chunked
+    # encoding mid-response, generic IO failure on the SF socket.
+    if isinstance(
+        exc,
+        (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+        ),
+    ):
+        return True
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    return False
+
 
 class _TimeoutSession(requests.Session):
     """`requests.Session` that injects a default timeout on every call."""
@@ -150,9 +193,45 @@ class CrmSalesforceClient:
         except Exception as exc:
             raise RuntimeError(f"Salesforce login failed: {type(exc).__name__}") from None
 
+    async def _call_with_retry(self, label: str, fn: Any, *args: Any, **kwargs: Any) -> Any:
+        """Run a blocking SF call on a worker-thread; retry on transient errors.
+
+        Used by `query`, `create_*`, `update_*` so a single rate-limit / network
+        blip becomes an invisible retry instead of a tool-failure to the LLM.
+        Validation, auth, and other deterministic errors propagate immediately
+        (re-trying them wastes API quota and delays the real failure).
+
+        `label` is used only for the warning log so operators can correlate
+        retries with which SF operation was flaky.
+        """
+        last_exc: Exception | None = None
+        for attempt in range(1, _CALL_RETRY_ATTEMPTS + 1):
+            try:
+                return await asyncio.to_thread(fn, *args, **kwargs)
+            except Exception as exc:
+                if not _is_transient_call_error(exc) or attempt == _CALL_RETRY_ATTEMPTS:
+                    raise
+                last_exc = exc
+                delay = min(
+                    _CALL_RETRY_BASE_DELAY * (2 ** (attempt - 1)),
+                    _CALL_RETRY_MAX_DELAY,
+                ) + random.uniform(0, 0.25)
+                logger.warning(
+                    "Salesforce %s attempt %d/%d failed (%s); retrying in %.1fs",
+                    label,
+                    attempt,
+                    _CALL_RETRY_ATTEMPTS,
+                    type(exc).__name__,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+        # Unreachable: loop either returns or raises. Defensive fallback.
+        assert last_exc is not None
+        raise last_exc
+
     async def query(self, soql: str) -> dict[str, Any]:
         sf = await self.connect()
-        return await asyncio.to_thread(sf.query, soql)
+        return await self._call_with_retry("query", sf.query, soql)
 
     async def query_count(self, soql_count: str) -> int:
         result = await self.query(soql_count)
@@ -169,7 +248,7 @@ class CrmSalesforceClient:
         """
         sf = await self.connect()
         try:
-            return await asyncio.to_thread(sf.Account.create, data)
+            return await self._call_with_retry("Account.create", sf.Account.create, data)
         except SalesforceMalformedRequest as exc:
             if _is_duplicate_error(exc):
                 raise ValueError(f"Account create rejected as duplicate: {exc}") from None
@@ -178,13 +257,13 @@ class CrmSalesforceClient:
     async def update_account(self, account_id: str, data: dict[str, Any]) -> int:
         """Patch an existing Account by Salesforce Id. Returns HTTP status (204)."""
         sf = await self.connect()
-        return await asyncio.to_thread(sf.Account.update, account_id, data)
+        return await self._call_with_retry("Account.update", sf.Account.update, account_id, data)
 
     async def create_contact(self, data: dict[str, Any]) -> dict[str, Any]:
         """Insert a new Contact; map SF duplicate-errors to ValueError. See `create_account`."""
         sf = await self.connect()
         try:
-            return await asyncio.to_thread(sf.Contact.create, data)
+            return await self._call_with_retry("Contact.create", sf.Contact.create, data)
         except SalesforceMalformedRequest as exc:
             if _is_duplicate_error(exc):
                 raise ValueError(f"Contact create rejected as duplicate: {exc}") from None
@@ -193,7 +272,7 @@ class CrmSalesforceClient:
     async def update_contact(self, contact_id: str, data: dict[str, Any]) -> int:
         """Patch an existing Contact by Salesforce Id. Returns HTTP status (204)."""
         sf = await self.connect()
-        return await asyncio.to_thread(sf.Contact.update, contact_id, data)
+        return await self._call_with_retry("Contact.update", sf.Contact.update, contact_id, data)
 
     async def get_contact_active_field(self) -> str:
         """Return the Contact active-flag field; cached after first describe."""
