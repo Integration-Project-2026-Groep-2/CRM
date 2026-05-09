@@ -54,6 +54,28 @@ async def _find_account_by_crm_id(
     return records[0] if records else None
 
 
+async def _resolve_account_record(
+    client: CrmSalesforceClient, ref: str
+) -> dict[str, Any] | None:
+    """Look up an Account by CRM_ID__c UUID OR Salesforce Id (001-prefix).
+
+    Drop-in replacement for `_find_account_by_crm_id` that accepts both formats.
+    The return shape additionally includes CRM_ID__c so callers can echo the
+    canonical UUID in MutationResult regardless of input format.
+    """
+    if is_valid_sf_id(ref, prefix="001"):
+        where_clause = f"Id = '{escape_soql(ref)}'"
+    else:
+        where_clause = f"{_CRM_ID_FIELD} = '{escape_soql(ref)}'"
+    soql = (
+        f"SELECT Id, {_CRM_ID_FIELD}, Name, VAT_Number__c FROM Account "
+        f"WHERE {where_clause} LIMIT 1"
+    )
+    result = await client.query(soql)
+    records = result.get("records", [])
+    return records[0] if records else None
+
+
 async def search_company(
     client: CrmSalesforceClient,
     query: str,
@@ -253,7 +275,12 @@ async def update_company(
     country: str | None = None,
     is_active: bool | None = None,
 ) -> MutationResult:
-    """Patch an Account by CRM_ID__c and broadcast C19 `<CompanyUpdated>`.
+    """Patch an Account and broadcast C19 `<CompanyUpdated>`.
+
+    `crm_id` accepts either the CRM_ID__c UUID (canonical, returned by other
+    tools as `crm_id`) or the Salesforce Id (001-prefix, returned as `id`).
+    The MutationResult always echoes the canonical UUID regardless of input
+    format.
 
     Partial-update friendly: omitted fields are left unchanged in Salesforce.
     XSD-required fields (vatNumber, name, isActive) on the broadcast payload
@@ -264,10 +291,11 @@ async def update_company(
     if vat_number is not None:
         validate_vat_number(vat_number)
 
-    existing = await _find_account_by_crm_id(client, crm_id)
+    existing = await _resolve_account_record(client, crm_id)
     if existing is None:
-        raise ValueError(f"no company found with crm_id '{crm_id}'")
+        raise ValueError(f"no company found with id '{crm_id}'")
     sf_id = str(existing["Id"])
+    canonical_crm_id = str(existing[_CRM_ID_FIELD])
     existing_vat = existing.get("VAT_Number__c")
     existing_name = existing.get("Name") or ""
 
@@ -309,7 +337,7 @@ async def update_company(
     updated_at = _now_iso()
 
     company_data: dict[str, Any] = {
-        "id": crm_id,
+        "id": canonical_crm_id,
         "vatNumber": final_vat,
         "name": final_name,
         "isActive": final_is_active,
@@ -328,11 +356,13 @@ async def update_company(
             company_data[key] = val
     publisher.publish_company_updated(company_data)
     logger.info(
-        "MCP write-tool update_company succeeded crm_id=%s sf_id=%s", crm_id, sf_id
+        "MCP write-tool update_company succeeded crm_id=%s sf_id=%s",
+        canonical_crm_id,
+        sf_id,
     )
 
     return MutationResult(
-        id=crm_id,
+        id=canonical_crm_id,
         success=True,
         routing_key="crm.company.updated",
         salesforce_id=sf_id,
@@ -348,6 +378,9 @@ async def delete_company(
 ) -> MutationResult:
     """Soft-delete an Account (IsActive__c=false) and broadcast C23 `<CompanyDeactivated>`.
 
+    `crm_id` accepts either the CRM_ID__c UUID or the Salesforce Id (001-prefix).
+    The MutationResult always echoes the canonical UUID.
+
     `hard=True` is rejected — XSD has no hard-delete contract and the
     project-policy in `src/salesforce/accounts.py:388-390` forbids hard-deletes
     on Accounts to preserve relationship-integrity.
@@ -357,10 +390,11 @@ async def delete_company(
     if not crm_id.strip():
         raise ValueError("crm_id must not be empty")
 
-    existing = await _find_account_by_crm_id(client, crm_id)
+    existing = await _resolve_account_record(client, crm_id)
     if existing is None:
-        raise ValueError(f"no company found with crm_id '{crm_id}'")
+        raise ValueError(f"no company found with id '{crm_id}'")
     sf_id = str(existing["Id"])
+    canonical_crm_id = str(existing[_CRM_ID_FIELD])
     vat_number = existing.get("VAT_Number__c")
     if not vat_number:
         raise ValueError("vat_number missing on existing record — cannot publish C23")
@@ -374,17 +408,19 @@ async def delete_company(
     await client.update_account(sf_id, {active_field: False})
 
     company_data = {
-        "id": crm_id,
+        "id": canonical_crm_id,
         "vatNumber": vat_number,
         "deactivatedAt": _now_iso(),
     }
     publisher.publish_company_deactivated(company_data)
     logger.info(
-        "MCP write-tool delete_company succeeded crm_id=%s sf_id=%s", crm_id, sf_id
+        "MCP write-tool delete_company succeeded crm_id=%s sf_id=%s",
+        canonical_crm_id,
+        sf_id,
     )
 
     return MutationResult(
-        id=crm_id,
+        id=canonical_crm_id,
         success=True,
         routing_key="crm.company.deactivated",
         salesforce_id=sf_id,

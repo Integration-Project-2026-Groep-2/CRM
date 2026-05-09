@@ -223,7 +223,12 @@ async def test_update_company_happy_path(
 ) -> None:
     fake_sf_client.query.return_value = make_query_response(
         [
-            {"Id": "001gK00000ExistAA", "Name": "Old Name", "VAT_Number__c": "BE0123456789"},
+            {
+                "Id": "001gK00000ExistAA",
+                "CRM_ID__c": "11111111-2222-4333-8444-555555555555",
+                "Name": "Old Name",
+                "VAT_Number__c": "BE0123456789",
+            },
         ]
     )
 
@@ -319,7 +324,12 @@ async def test_delete_company_soft_default(
 ) -> None:
     fake_sf_client.query.return_value = make_query_response(
         [
-            {"Id": "001gK00000ExistAA", "Name": "X", "VAT_Number__c": "BE0123456789"},
+            {
+                "Id": "001gK00000ExistAA",
+                "CRM_ID__c": "11111111-2222-4333-8444-555555555555",
+                "Name": "X",
+                "VAT_Number__c": "BE0123456789",
+            },
         ]
     )
 
@@ -342,3 +352,60 @@ async def test_delete_company_rejects_hard(fake_sf_client, fake_publisher) -> No
         await company_tools.delete_company(fake_sf_client, fake_publisher, crm_id="abc", hard=True)
     fake_sf_client.update_account.assert_not_awaited()
     fake_publisher.publish_company_deactivated.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_company_accepts_sf_id(
+    fake_sf_client, fake_publisher, make_query_response
+) -> None:
+    """Plan B — SF Id (001-prefix, 18 chars) input resolves to canonical UUID."""
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "001dM00003kxOrvQAE",
+                "CRM_ID__c": "11111111-2222-4333-8444-555555555555",
+                "Name": "Old Name",
+                "VAT_Number__c": "BE0123456789",
+            },
+        ]
+    )
+
+    result = await company_tools.update_company(
+        fake_sf_client,
+        fake_publisher,
+        crm_id="001dM00003kxOrvQAE",  # SF Id (18 char), not UUID
+        city="Antwerpen",
+    )
+
+    soql_arg = fake_sf_client.query.call_args.args[0]
+    assert "Id = '001dM00003kxOrvQAE'" in soql_arg
+    assert "CRM_ID__c =" not in soql_arg
+    assert result.id == "11111111-2222-4333-8444-555555555555"
+    broadcast = fake_publisher.publish_company_updated.call_args.args[0]
+    assert broadcast["id"] == "11111111-2222-4333-8444-555555555555"
+
+
+@pytest.mark.asyncio
+async def test_delete_company_accepts_sf_id(
+    fake_sf_client, fake_publisher, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "001dM00003kxOrvQAE",
+                "CRM_ID__c": "11111111-2222-4333-8444-555555555555",
+                "Name": "X",
+                "VAT_Number__c": "BE0123456789",
+            },
+        ]
+    )
+
+    result = await company_tools.delete_company(
+        fake_sf_client, fake_publisher, crm_id="001dM00003kxOrvQAE"
+    )
+
+    soql_arg = fake_sf_client.query.call_args.args[0]
+    assert "Id = '001dM00003kxOrvQAE'" in soql_arg
+    assert result.id == "11111111-2222-4333-8444-555555555555"
+    broadcast = fake_publisher.publish_company_deactivated.call_args.args[0]
+    assert broadcast["id"] == "11111111-2222-4333-8444-555555555555"

@@ -68,6 +68,50 @@ async def _find_contact_by_crm_id(
     return records[0] if records else None
 
 
+async def _resolve_contact_record(
+    client: CrmSalesforceClient, ref: str
+) -> dict[str, Any] | None:
+    """Look up a Contact by CRM_ID__c UUID OR Salesforce Id (003-prefix).
+
+    Drop-in replacement for `_find_contact_by_crm_id` that accepts both formats.
+    The return shape additionally includes CRM_ID__c so callers can echo the
+    canonical UUID in MutationResult regardless of input format.
+    """
+    if is_valid_sf_id(ref, prefix="003"):
+        where_clause = f"Id = '{escape_soql(ref)}'"
+    else:
+        where_clause = f"{_CRM_ID_FIELD} = '{escape_soql(ref)}'"
+    active_field = await client.get_contact_active_field()
+    soql = (
+        f"SELECT Id, {_CRM_ID_FIELD}, Email, FirstName, LastName, Role__c, "
+        f"GDPR_Consent__c, Company_ID__c, {active_field} "
+        f"FROM Contact WHERE {where_clause} LIMIT 1"
+    )
+    result = await client.query(soql)
+    records = result.get("records", [])
+    return records[0] if records else None
+
+
+async def _resolve_account_record_for_contact(
+    client: CrmSalesforceClient, ref: str
+) -> dict[str, Any] | None:
+    """Resolve a Company reference (CRM_ID__c UUID or Salesforce Id 001-prefix).
+
+    Returns a dict with `Id` and `CRM_ID__c`, or None when not found. Used by
+    create/update_contact when linking a Contact to an Account: the
+    Company_ID__c custom field stores the canonical CRM_ID__c UUID regardless
+    of which format the caller provided.
+    """
+    if is_valid_sf_id(ref, prefix="001"):
+        where_clause = f"Id = '{escape_soql(ref)}'"
+    else:
+        where_clause = f"{_CRM_ID_FIELD} = '{escape_soql(ref)}'"
+    soql = f"SELECT Id, {_CRM_ID_FIELD} FROM Account WHERE {where_clause} LIMIT 1"
+    result = await client.query(soql)
+    records = result.get("records", [])
+    return records[0] if records else None
+
+
 async def search_contact(
     client: CrmSalesforceClient,
     query: str,
@@ -310,10 +354,11 @@ async def create_contact(
     """Create a Contact in Salesforce and broadcast C13 `<UserConfirmed>`.
 
     `role` is the C13 `UserRoleType` enum (VISITOR, COMPANY_CONTACT, SPEAKER,
-    EVENT_MANAGER, CASHIER, BAR_STAFF, ADMIN). `company_id` is the linked
-    Account's CRM_ID__c UUID — stored in the Contact's `Company_ID__c` custom
-    field (matches the project's Frontend/Facturatie/Mailing handler convention,
-    not the standard `AccountId` foreign-key). Email-uniqueness is pre-checked.
+    EVENT_MANAGER, CASHIER, BAR_STAFF, ADMIN). `company_id` accepts either the
+    Account's CRM_ID__c UUID or its Salesforce Id (001-prefix); the canonical
+    UUID is stored in the Contact's `Company_ID__c` custom field (matches the
+    project's Frontend/Facturatie/Mailing handler convention, not the standard
+    `AccountId` foreign-key). Email-uniqueness is pre-checked.
     """
     if not email.strip():
         raise ValueError("email must not be empty")
@@ -328,12 +373,12 @@ async def create_contact(
     if existing.get("records"):
         raise ValueError(f"email '{email}' already exists")
 
+    company_uuid: str | None = None
     if company_id is not None:
-        company_check = await client.query(
-            f"SELECT Id FROM Account WHERE {_CRM_ID_FIELD} = '{escape_soql(company_id)}' LIMIT 1"
-        )
-        if not company_check.get("records"):
-            raise ValueError(f"no company found with crm_id '{company_id}'")
+        company_record = await _resolve_account_record_for_contact(client, company_id)
+        if company_record is None:
+            raise ValueError(f"no company found with id '{company_id}'")
+        company_uuid = company_record[_CRM_ID_FIELD]
 
     crm_id = str(uuid.uuid4())
     sf_payload: dict[str, Any] = {
@@ -346,8 +391,8 @@ async def create_contact(
     }
     if phone:
         sf_payload["Phone"] = phone
-    if company_id:
-        sf_payload["Company_ID__c"] = company_id
+    if company_uuid:
+        sf_payload["Company_ID__c"] = company_uuid
     if badge_code:
         sf_payload["Badge_Code__c"] = badge_code
 
@@ -369,8 +414,8 @@ async def create_contact(
     }
     if phone:
         user_data["phone"] = phone
-    if company_id:
-        user_data["companyId"] = company_id
+    if company_uuid:
+        user_data["companyId"] = company_uuid
     if badge_code:
         user_data["badgeCode"] = badge_code
 
@@ -402,7 +447,13 @@ async def update_contact(
     gdpr_consent: bool | None = None,
     is_active: bool | None = None,
 ) -> MutationResult:
-    """Patch a Contact by CRM_ID__c and broadcast C18 `<UserUpdated>`.
+    """Patch a Contact and broadcast C18 `<UserUpdated>`.
+
+    `crm_id` accepts either the CRM_ID__c UUID (canonical, returned by other
+    tools as `crm_id`) or the Salesforce Id (003-prefix, returned as `id`).
+    `company_id` accepts the Account's CRM_ID__c UUID or its Salesforce Id
+    (001-prefix). The MutationResult always echoes the canonical UUID
+    regardless of input format.
 
     Partial-update friendly: omitted fields are left unchanged in Salesforce.
     XSD-required broadcast fields (email/firstName/lastName/role/isActive)
@@ -413,10 +464,11 @@ async def update_contact(
     if role is not None and role not in _VALID_USER_ROLES:
         raise ValueError(f"role must be one of {sorted(_VALID_USER_ROLES)}, got '{role}'")
 
-    existing = await _find_contact_by_crm_id(client, crm_id)
+    existing = await _resolve_contact_record(client, crm_id)
     if existing is None:
-        raise ValueError(f"no contact found with crm_id '{crm_id}'")
+        raise ValueError(f"no contact found with id '{crm_id}'")
     sf_id = str(existing["Id"])
+    canonical_crm_id = str(existing[_CRM_ID_FIELD])
 
     sf_payload: dict[str, Any] = {}
     if first_name is not None:
@@ -433,13 +485,13 @@ async def update_contact(
         sf_payload["GDPR_Consent__c"] = gdpr_consent
     if badge_code is not None:
         sf_payload["Badge_Code__c"] = badge_code
+    company_uuid: str | None = None
     if company_id is not None:
-        company_check = await client.query(
-            f"SELECT Id FROM Account WHERE {_CRM_ID_FIELD} = '{escape_soql(company_id)}' LIMIT 1"
-        )
-        if not company_check.get("records"):
-            raise ValueError(f"no company found with crm_id '{company_id}'")
-        sf_payload["Company_ID__c"] = company_id
+        company_record = await _resolve_account_record_for_contact(client, company_id)
+        if company_record is None:
+            raise ValueError(f"no company found with id '{company_id}'")
+        company_uuid = company_record[_CRM_ID_FIELD]
+        sf_payload["Company_ID__c"] = company_uuid
 
     active_field = await client.get_contact_active_field()
     if is_active is not None:
@@ -471,7 +523,7 @@ async def update_contact(
     )
 
     user_data: dict[str, Any] = {
-        "id": crm_id,
+        "id": canonical_crm_id,
         "email": final_email,
         "firstName": final_first,
         "lastName": final_last,
@@ -482,18 +534,20 @@ async def update_contact(
     }
     if phone is not None:
         user_data["phone"] = phone
-    if company_id is not None:
-        user_data["companyId"] = company_id
+    if company_uuid is not None:
+        user_data["companyId"] = company_uuid
     if badge_code is not None:
         user_data["badgeCode"] = badge_code
 
     publisher.publish_user_updated(user_data)
     logger.info(
-        "MCP write-tool update_contact succeeded crm_id=%s sf_id=%s", crm_id, sf_id
+        "MCP write-tool update_contact succeeded crm_id=%s sf_id=%s",
+        canonical_crm_id,
+        sf_id,
     )
 
     return MutationResult(
-        id=crm_id,
+        id=canonical_crm_id,
         success=True,
         routing_key="crm.user.updated",
         salesforce_id=sf_id,
@@ -509,6 +563,9 @@ async def delete_contact(
 ) -> MutationResult:
     """Soft-delete a Contact (IsActive__c=false) and broadcast C22 `<UserDeactivated>`.
 
+    `crm_id` accepts either the CRM_ID__c UUID or the Salesforce Id (003-prefix).
+    The MutationResult always echoes the canonical UUID.
+
     `hard=True` is rejected — XSD has no hard-delete contract and project policy
     is GDPR soft-delete (cf. `src/salesforce/contacts/`).
     """
@@ -517,10 +574,11 @@ async def delete_contact(
     if not crm_id.strip():
         raise ValueError("crm_id must not be empty")
 
-    existing = await _find_contact_by_crm_id(client, crm_id)
+    existing = await _resolve_contact_record(client, crm_id)
     if existing is None:
-        raise ValueError(f"no contact found with crm_id '{crm_id}'")
+        raise ValueError(f"no contact found with id '{crm_id}'")
     sf_id = str(existing["Id"])
+    canonical_crm_id = str(existing[_CRM_ID_FIELD])
     email = existing.get("Email")
     if not email:
         raise ValueError("email missing on existing record — cannot publish C22")
@@ -529,17 +587,19 @@ async def delete_contact(
     await client.update_contact(sf_id, {active_field: False})
 
     user_data = {
-        "id": crm_id,
+        "id": canonical_crm_id,
         "email": email,
         "deactivatedAt": _now_iso(),
     }
     publisher.publish_user_deactivated(user_data)
     logger.info(
-        "MCP write-tool delete_contact succeeded crm_id=%s sf_id=%s", crm_id, sf_id
+        "MCP write-tool delete_contact succeeded crm_id=%s sf_id=%s",
+        canonical_crm_id,
+        sf_id,
     )
 
     return MutationResult(
-        id=crm_id,
+        id=canonical_crm_id,
         success=True,
         routing_key="crm.user.deactivated",
         salesforce_id=sf_id,
