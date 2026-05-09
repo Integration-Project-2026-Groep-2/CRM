@@ -35,6 +35,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, TypeVar
 
+import requests
 from simple_salesforce import Salesforce
 from simple_salesforce.exceptions import (
     SalesforceAuthenticationFailed,
@@ -57,6 +58,24 @@ _PAYMENT_TIMESTAMP_FIELD = "Paid_At__c"
 _SF_STARTUP_DELAY: float = 1.0
 _SF_STARTUP_MAX_DELAY: float = 60.0
 _TRANSIENT_SF_AUTH_CODES = frozenset({"SERVER_UNAVAILABLE", "SERVICE_UNAVAILABLE"})
+
+# Default per-request timeout for the Salesforce HTTP session. Without this
+# `requests` blocks indefinitely on stalled sockets, which manifests as a
+# silently-hung receiver handler (see incident 2026-05-09: stuck unacked
+# messages on crm.frontend.registration.created).
+_SF_HTTP_TIMEOUT_SECONDS: float = 30.0
+
+
+class _TimeoutSession(requests.Session):
+    """`requests.Session` that injects a default timeout on every call."""
+
+    def __init__(self, timeout: float = _SF_HTTP_TIMEOUT_SECONDS) -> None:
+        super().__init__()
+        self._default_timeout = timeout
+
+    def request(self, method, url, **kwargs):  # type: ignore[override]
+        kwargs.setdefault("timeout", self._default_timeout)
+        return super().request(method, url, **kwargs)
 
 
 def escape_soql(value: str) -> str:
@@ -378,6 +397,7 @@ async def get_salesforce_client(
                 password=config.salesforce_password,
                 security_token=config.salesforce_security_token,
                 domain=config.salesforce_domain,
+                session=_TimeoutSession(),
             )
             logger.info("Connected to Salesforce.")
             return sf
