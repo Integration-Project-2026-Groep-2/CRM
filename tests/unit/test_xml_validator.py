@@ -87,6 +87,40 @@ class TestValidate:
         with pytest.raises(ValueError, match="unexpected namespace"):
             validate(invalid_xml)
 
+    def test_accepts_namespaced_companycreated_with_allowed_frontend_namespace(self) -> None:
+        """C3 CompanyCreated payloads from Frontend carry the same urn:frontend:crm:contract namespace."""
+        xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<CompanyCreated xmlns='urn:frontend:crm:contract'>
+    <name>Acme NV</name>
+    <vatNumber>BE0123456789</vatNumber>
+    <email>info@acme.test</email>
+    <street>Stationsstraat</street>
+    <city>Brussel</city>
+    <country>BE</country>
+</CompanyCreated>"""
+
+        doc = validate(xml)
+
+        assert doc.tag == "CompanyCreated"
+        assert doc.findtext("name") == "Acme NV"
+        assert doc.findtext("vatNumber") == "BE0123456789"
+
+    def test_accepts_companycreated_with_unordered_children(self) -> None:
+        """Reorder helper must apply to CompanyCreated, not just Registration."""
+        xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<CompanyCreated xmlns='urn:frontend:crm:contract'>
+    <city>Brussel</city>
+    <vatNumber>BE0123456789</vatNumber>
+    <name>Acme NV</name>
+    <country>BE</country>
+</CompanyCreated>"""
+
+        doc = validate(xml)
+
+        assert doc.tag == "CompanyCreated"
+        children = [c.tag for c in doc if isinstance(c.tag, str)]
+        assert children == ["name", "vatNumber", "city", "country"]
+
     def test_accepts_registration_with_lowercase_role_normalized(self) -> None:
         xml = b"""<?xml version='1.0' encoding='utf-8'?>
 <Registration>
