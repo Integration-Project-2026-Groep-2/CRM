@@ -291,7 +291,14 @@ async def test_create_contact_with_company_id_uses_uuid_in_custom_field(
 ) -> None:
     fake_sf_client.query.side_effect = [
         make_query_response([]),  # email-uniqueness probe
-        make_query_response([{"Id": "001gK00000LinkedAA"}]),  # company exists
+        make_query_response(
+            [
+                {
+                    "Id": "001gK00000LinkedAA",
+                    "CRM_ID__c": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+                }
+            ]
+        ),  # company exists
     ]
 
     result = await contact_tools.create_contact(
@@ -358,6 +365,7 @@ async def test_update_contact_happy_path(
         [
             {
                 "Id": "003gK00000ExistAA",
+                "CRM_ID__c": "11111111-2222-4333-8444-555555555555",
                 "Email": "jan@example.com",
                 "FirstName": "Jan",
                 "LastName": "Janssens",
@@ -406,6 +414,7 @@ async def test_update_contact_falls_back_to_existing_gdpr_and_active(
         [
             {
                 "Id": "003gK00000ExistAA",
+                "CRM_ID__c": "11111111-2222-4333-8444-555555555555",
                 "Email": "jan@example.com",
                 "FirstName": "Jan",
                 "LastName": "Janssens",
@@ -439,6 +448,7 @@ async def test_delete_contact_soft_default(
         [
             {
                 "Id": "003gK00000ExistAA",
+                "CRM_ID__c": "11111111-2222-4333-8444-555555555555",
                 "Email": "jan@example.com",
                 "FirstName": "Jan",
                 "LastName": "Janssens",
@@ -464,3 +474,106 @@ async def test_delete_contact_soft_default(
 async def test_delete_contact_rejects_hard(fake_sf_client, fake_publisher) -> None:
     with pytest.raises(ValueError, match="hard-delete not supported"):
         await contact_tools.delete_contact(fake_sf_client, fake_publisher, crm_id="abc", hard=True)
+
+
+@pytest.mark.asyncio
+async def test_update_contact_accepts_sf_id(
+    fake_sf_client, fake_publisher, make_query_response
+) -> None:
+    """Plan B — SF Id (003-prefix, 18 chars) input resolves to canonical UUID."""
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "003dM00001wmNGXQA2",
+                "CRM_ID__c": "11111111-2222-4333-8444-555555555555",
+                "Email": "jan@example.com",
+                "FirstName": "Jan",
+                "LastName": "Janssens",
+                "Role__c": "VISITOR",
+            },
+        ]
+    )
+
+    result = await contact_tools.update_contact(
+        fake_sf_client,
+        fake_publisher,
+        crm_id="003dM00001wmNGXQA2",  # SF Id (18 char), not UUID
+        phone="+32499000111",
+    )
+
+    soql_arg = fake_sf_client.query.call_args.args[0]
+    assert "Id = '003dM00001wmNGXQA2'" in soql_arg
+    assert "CRM_ID__c =" not in soql_arg  # took the SF-Id path
+    assert result.id == "11111111-2222-4333-8444-555555555555"  # canonical UUID
+    broadcast = fake_publisher.publish_user_updated.call_args.args[0]
+    assert broadcast["id"] == "11111111-2222-4333-8444-555555555555"
+
+
+@pytest.mark.asyncio
+async def test_delete_contact_accepts_sf_id(
+    fake_sf_client, fake_publisher, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "003dM00001wmNGXQA2",
+                "CRM_ID__c": "11111111-2222-4333-8444-555555555555",
+                "Email": "jan@example.com",
+                "FirstName": "Jan",
+                "LastName": "Janssens",
+                "Role__c": "VISITOR",
+            },
+        ]
+    )
+
+    result = await contact_tools.delete_contact(
+        fake_sf_client, fake_publisher, crm_id="003dM00001wmNGXQA2"
+    )
+
+    soql_arg = fake_sf_client.query.call_args.args[0]
+    assert "Id = '003dM00001wmNGXQA2'" in soql_arg
+    assert result.id == "11111111-2222-4333-8444-555555555555"
+    broadcast = fake_publisher.publish_user_deactivated.call_args.args[0]
+    assert broadcast["id"] == "11111111-2222-4333-8444-555555555555"
+
+
+@pytest.mark.asyncio
+async def test_update_contact_company_id_accepts_sf_id(
+    fake_sf_client, fake_publisher, make_query_response
+) -> None:
+    """Plan B — secondary company_id lookup also accepts both formats."""
+    fake_sf_client.query.side_effect = [
+        make_query_response(  # contact lookup
+            [
+                {
+                    "Id": "003dM00001ContaQA1",
+                    "CRM_ID__c": "11111111-2222-4333-8444-555555555555",
+                    "Email": "jan@example.com",
+                    "FirstName": "Jan",
+                    "LastName": "Janssens",
+                    "Role__c": "VISITOR",
+                },
+            ]
+        ),
+        make_query_response(  # company lookup via SF Id (001-prefix, 18 char)
+            [
+                {
+                    "Id": "001dM00003kxOrvQAE",
+                    "CRM_ID__c": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+                }
+            ]
+        ),
+    ]
+
+    await contact_tools.update_contact(
+        fake_sf_client,
+        fake_publisher,
+        crm_id="11111111-2222-4333-8444-555555555555",
+        company_id="001dM00003kxOrvQAE",  # SF Id for company
+    )
+
+    company_soql = fake_sf_client.query.call_args_list[1].args[0]
+    assert "Id = '001dM00003kxOrvQAE'" in company_soql
+    payload = fake_sf_client.update_contact.await_args.args[1]
+    # Stored value is canonical CRM_ID__c UUID, not the input SF Id.
+    assert payload["Company_ID__c"] == "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"

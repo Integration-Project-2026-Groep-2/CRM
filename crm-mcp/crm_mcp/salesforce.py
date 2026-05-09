@@ -4,14 +4,55 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import random
 from typing import Any
 
+import requests
 from simple_salesforce import Salesforce
 from simple_salesforce.exceptions import SalesforceMalformedRequest
 
 from .config import SalesforceConfig
 
 logger = logging.getLogger(__name__)
+
+
+# Without a default per-request timeout, `requests` blocks forever on stalled
+# sockets. Symptom in productie 2026-05-09: cold-start tool-call hung 794s
+# before the receiver-side fix landed (`src/salesforce/client.py`). MCP needed
+# the same shield — that's this class.
+_DEFAULT_SF_HTTP_TIMEOUT_SECONDS = 30.0
+_LOGIN_RETRY_ATTEMPTS = 3
+_LOGIN_RETRY_BASE_DELAY = 1.0
+_LOGIN_RETRY_MAX_DELAY = 8.0
+
+
+class _TimeoutSession(requests.Session):
+    """`requests.Session` that injects a default timeout on every call."""
+
+    def __init__(self, timeout: float = _DEFAULT_SF_HTTP_TIMEOUT_SECONDS) -> None:
+        super().__init__()
+        self._default_timeout = timeout
+
+    def request(self, method, url, **kwargs):  # type: ignore[override]
+        kwargs.setdefault("timeout", self._default_timeout)
+        return super().request(method, url, **kwargs)
+
+
+def _resolve_timeout_seconds() -> float:
+    raw = os.getenv("CRM_MCP_SF_TIMEOUT_SECONDS")
+    if raw is None:
+        return _DEFAULT_SF_HTTP_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "CRM_MCP_SF_TIMEOUT_SECONDS=%r not a float; using default %.1fs",
+            raw,
+            _DEFAULT_SF_HTTP_TIMEOUT_SECONDS,
+        )
+        return _DEFAULT_SF_HTTP_TIMEOUT_SECONDS
+    return value if value > 0 else _DEFAULT_SF_HTTP_TIMEOUT_SECONDS
 
 
 class CrmSalesforceClient:
@@ -52,19 +93,51 @@ class CrmSalesforceClient:
     async def _ensure_sf_locked(self) -> Salesforce:
         """Caller must already hold `self._lock`."""
         if self._sf is None:
-            self._sf = await asyncio.to_thread(self._safe_connect)
+            self._sf = await asyncio.to_thread(self._connect_with_retry)
             logger.info(
                 "Connected to Salesforce instance %s",
                 self._config.domain,
             )
         return self._sf
 
+    def _connect_with_retry(self) -> Salesforce:
+        """Login with exponential-backoff retry on transient failures."""
+        last_exc: Exception | None = None
+        for attempt in range(1, _LOGIN_RETRY_ATTEMPTS + 1):
+            try:
+                return self._safe_connect()
+            except RuntimeError as exc:
+                last_exc = exc
+                if attempt == _LOGIN_RETRY_ATTEMPTS:
+                    break
+                delay = min(
+                    _LOGIN_RETRY_BASE_DELAY * (2 ** (attempt - 1)),
+                    _LOGIN_RETRY_MAX_DELAY,
+                ) + random.uniform(0, 0.5)
+                logger.warning(
+                    "Salesforce login attempt %d/%d failed; retrying in %.1fs",
+                    attempt,
+                    _LOGIN_RETRY_ATTEMPTS,
+                    delay,
+                )
+                # Synchronous sleep — caller already on a worker-thread via
+                # asyncio.to_thread, so blocking here doesn't stall the event
+                # loop. Using asyncio.sleep would require restructuring.
+                import time
+                time.sleep(delay)
+        assert last_exc is not None
+        raise last_exc
+
     def _safe_connect(self) -> Salesforce:
-        """Connect with credential-leak protection.
+        """Connect with credential-leak protection + bounded HTTP timeouts.
 
         `simple_salesforce.Salesforce(...)` may include keyword arguments
         (password / security_token) in the chained traceback. `from None`
         breaks the chain so credentials never reach the JSON-RPC error layer.
+
+        The injected `_TimeoutSession` enforces a per-request read-timeout so
+        a stalled socket can't hang a tool-call indefinitely (cf. 2026-05-09
+        cold-start incident — see module-docstring on `_TimeoutSession`).
         """
         try:
             return Salesforce(
@@ -72,6 +145,7 @@ class CrmSalesforceClient:
                 password=self._config.password,
                 security_token=self._config.security_token,
                 domain=self._config.domain,
+                session=_TimeoutSession(timeout=_resolve_timeout_seconds()),
             )
         except Exception as exc:
             raise RuntimeError(f"Salesforce login failed: {type(exc).__name__}") from None
