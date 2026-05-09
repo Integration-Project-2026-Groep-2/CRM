@@ -119,8 +119,16 @@ async def _wrap_handler(
     helper itself raises (channel closed, bug), we last-resort
     `reject(requeue=False)` to keep the message off the work-queue.
     """
+    logger.info(
+        "%s — handler start (delivery_tag=%s, message_id=%s)",
+        queue_name, message.delivery_tag, message.message_id,
+    )
     try:
         await handler(message)
+        logger.info(
+            "%s — handler done (delivery_tag=%s)",
+            queue_name, message.delivery_tag,
+        )
         if xml_validator.reorder_was_applied():
             logger.warning(
                 "frontend.reorder_applied queue=%s message_id=%s — Frontend payload accepted after element reorder; "
@@ -169,6 +177,10 @@ async def run_receiver(
     container.
     """
     channel = await connection.channel()
+    # Bound per-consumer prefetch so one hung handler-task can't drain the
+    # channel buffer + starve other queues (each queue.consume() registers
+    # an independent consumer-tag that gets its own prefetch budget).
+    await channel.set_qos(prefetch_count=10)
     await _ensure_dlq_topology(channel)
     sf_client = await get_salesforce_client(config, shutdown_event=shutdown_event)
 
