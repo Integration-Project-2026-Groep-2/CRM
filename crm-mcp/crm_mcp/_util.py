@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -47,6 +48,17 @@ def is_valid_sf_id(value: str | None, prefix: str) -> bool:
     if len(value) not in (15, 18):
         return False
     return bool(_SF_ID_CHARSET.fullmatch(value))
+
+
+def is_uuid_format(value: str | None) -> bool:
+    """True if value parses as RFC 4122 UUID. Lenient on case + version."""
+    if not value:
+        return False
+    try:
+        uuid.UUID(value)
+        return True
+    except (ValueError, AttributeError):
+        return False
 
 
 def validate_vat_number(vat: str) -> None:
