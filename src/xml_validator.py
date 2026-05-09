@@ -15,7 +15,11 @@ _schema: etree.XMLSchema | None = None
 _kassa_schema: etree.XMLSchema | None = None
 
 _ALLOWED_FRONTEND_NAMESPACE = "urn:frontend:crm:contract"
-_ALLOWED_FRONTEND_NAMESPACED_ROOTS = {"Registration", "RegistrationChange"}
+_ALLOWED_FRONTEND_NAMESPACED_ROOTS = {
+    "Registration",
+    "RegistrationChange",
+    "CompanyCreated",
+}
 _ALLOWED_FRONTEND_CHILD_ORDER: dict[str, tuple[str, ...]] = {
     "Registration": (
         "registrationId",
@@ -40,6 +44,17 @@ _ALLOWED_FRONTEND_CHILD_ORDER: dict[str, tuple[str, ...]] = {
         "phone",
         "role",
         "company",
+    ),
+    "CompanyCreated": (
+        "name",
+        "vatNumber",
+        "email",
+        "phone",
+        "street",
+        "houseNumber",
+        "postalCode",
+        "city",
+        "country",
     ),
 }
 _FRONTEND_ROLE_NORMALIZATION = {
