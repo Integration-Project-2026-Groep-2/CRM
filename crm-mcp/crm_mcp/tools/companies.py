@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .._util import (
+    VALID_USER_ROLES,
     coerce_is_active,
     is_valid_sf_id,
     parse_sf_datetime,
@@ -26,7 +27,7 @@ from .._util import (
 )
 from ..escaping import escape_soql, escape_soql_like
 from ..messaging import MessagePublisher
-from ..models import CompanyDetails, CompanySummary, MutationResult
+from ..models import CompanyContactSummary, CompanyDetails, CompanySummary, MutationResult
 from ..salesforce import CrmSalesforceClient
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,8 @@ logger = logging.getLogger(__name__)
 _MIN_QUERY_LENGTH = 2
 _MAX_QUERY_LENGTH = 200
 _MAX_LIMIT_SEARCH = 100
+_MAX_LIMIT_COMPANY_CONTACTS = 100
+_MAX_LIMIT_LIST_COMPANIES = 100
 _CRM_ID_FIELD = "CRM_ID__c"
 
 
@@ -167,6 +170,131 @@ async def get_company(
         created_at=parse_sf_datetime(r.get("CreatedDate")) or now,
         last_modified_at=parse_sf_datetime(r.get("LastModifiedDate")) or now,
     )
+
+
+async def get_company_contacts(
+    client: CrmSalesforceClient,
+    vat_number: str | None = None,
+    company_id: str | None = None,
+    role: str | None = None,
+    is_active: bool | None = True,
+    limit: int = 20,
+) -> list[CompanyContactSummary]:
+    """List all contacts linked to a specific company.
+
+    Provide `vat_number` (preferred, canonical key) or `company_id` (CRM_ID__c UUID
+    or 001-prefix Salesforce Id). Optional filters: `role` (Role__c picklist value),
+    `is_active` (default: active only). Results ordered by LastModifiedDate DESC.
+    """
+    if vat_number is None and company_id is None:
+        raise ValueError("provide either vat_number or company_id")
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+    if role is not None and role not in VALID_USER_ROLES:
+        raise ValueError(
+            f"role must be one of {sorted(VALID_USER_ROLES)}"
+        )
+
+    safe_limit = min(limit, _MAX_LIMIT_COMPANY_CONTACTS)
+
+    if vat_number is not None:
+        validate_vat_number(vat_number)
+        result = await client.query(
+            f"SELECT Id FROM Account WHERE VAT_Number__c = '{escape_soql(vat_number)}' LIMIT 1"
+        )
+        records = result.get("records", [])
+        if not records:
+            raise ValueError(f"no company found with vat_number '{vat_number}'")
+        account_sf_id = records[0]["Id"]
+    else:
+        existing = await _resolve_account_record(client, company_id)  # type: ignore[arg-type]
+        if existing is None:
+            raise ValueError(f"no company found with id '{company_id}'")
+        account_sf_id = str(existing["Id"])
+
+    active_field = await client.get_contact_active_field()
+    clauses: list[str] = [f"AccountId = '{escape_soql(account_sf_id)}'"]
+    if role is not None:
+        clauses.append(f"Role__c = '{escape_soql(role)}'")
+    if is_active is True:
+        clauses.append(f"{active_field} = true")
+    elif is_active is False:
+        clauses.append(f"{active_field} = false")
+
+    where = " AND ".join(clauses)
+    soql = (
+        f"SELECT Id, Name, Email, Role__c, {active_field}, Paid_At__c "
+        f"FROM Contact "
+        f"WHERE {where} "
+        f"ORDER BY LastModifiedDate DESC "
+        f"LIMIT {safe_limit}"
+    )
+    result = await client.query(soql)
+    return [
+        CompanyContactSummary(
+            id=r["Id"],
+            name=r.get("Name") or "",
+            email=r.get("Email"),
+            role=r.get("Role__c"),
+            is_active=coerce_is_active(r.get(active_field)),
+            paid_at=parse_sf_datetime(r.get("Paid_At__c")),
+        )
+        for r in result.get("records", [])
+    ]
+
+
+async def list_companies(
+    client: CrmSalesforceClient,
+    country: str | None = None,
+    is_active: bool | None = True,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[CompanySummary]:
+    """Browse all companies with optional filters and pagination.
+
+    Unlike `search_company` (which requires a query string), this tool enumerates
+    companies. `country` must be ISO 3166-1 alpha-2 (e.g. 'BE'). `is_active`
+    defaults to active-only; pass `None` for all. Results ordered by Name.
+    """
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+    if offset < 0:
+        raise ValueError("offset must be non-negative")
+    if country is not None:
+        if len(country) != 2 or not country.isalpha():
+            raise ValueError("country must be ISO 3166-1 alpha-2 (2 letters, e.g. 'BE')")
+        country = country.upper()
+
+    safe_limit = min(limit, _MAX_LIMIT_LIST_COMPANIES)
+    country_field = await client.get_account_country_field()
+    active_field = await client.get_account_active_field()
+
+    clauses: list[str] = []
+    if country is not None:
+        clauses.append(f"{country_field} = '{escape_soql(country)}'")
+    if is_active is True and active_field:
+        clauses.append(f"{active_field} = true")
+    elif is_active is False and active_field:
+        clauses.append(f"{active_field} = false")
+
+    where_clause = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+    soql = (
+        f"SELECT Id, Name, VAT_Number__c, BillingCountryCode "
+        f"FROM Account "
+        f"{where_clause}"
+        f"ORDER BY Name "
+        f"LIMIT {safe_limit} OFFSET {offset}"
+    )
+    result = await client.query(soql)
+    return [
+        CompanySummary(
+            id=r["Id"],
+            name=r.get("Name") or "",
+            vat_number=r.get("VAT_Number__c"),
+            country=r.get("BillingCountryCode"),
+        )
+        for r in result.get("records", [])
+    ]
 
 
 # ---------------------------------------------------------------------------

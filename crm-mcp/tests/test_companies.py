@@ -142,6 +142,272 @@ async def test_search_company_returns_summaries(fake_sf_client, make_query_respo
     assert results[0].country == "BE"
 
 
+# ---- get_company_contacts ----
+
+
+@pytest.mark.asyncio
+async def test_get_company_contacts_requires_one_input(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="vat_number or company_id"):
+        await company_tools.get_company_contacts(fake_sf_client)
+
+
+@pytest.mark.asyncio
+async def test_get_company_contacts_rejects_bad_limit(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="limit must be at least 1"):
+        await company_tools.get_company_contacts(
+            fake_sf_client, company_id="001gK00000ExistAA", limit=0
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_company_contacts_rejects_invalid_role(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="role must be one of"):
+        await company_tools.get_company_contacts(
+            fake_sf_client, company_id="001gK00000ExistAA", role="JANITOR"
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_company_contacts_company_not_found_by_vat_raises(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+    with pytest.raises(ValueError, match="no company found"):
+        await company_tools.get_company_contacts(fake_sf_client, vat_number="BE0123456789")
+
+
+@pytest.mark.asyncio
+async def test_get_company_contacts_company_not_found_by_id_raises(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+    with pytest.raises(ValueError, match="no company found"):
+        await company_tools.get_company_contacts(
+            fake_sf_client, company_id="001gK00000ExistAA"
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_company_contacts_returns_summaries(
+    fake_sf_client, make_query_response
+) -> None:
+    # First call: resolve account by SF Id; second call: fetch contacts.
+    fake_sf_client.query.side_effect = [
+        make_query_response(
+            [{"Id": "001gK00000ExistAA", "CRM_ID__c": "uuid-1", "Name": "Acme", "VAT_Number__c": "BE01"}]
+        ),
+        make_query_response(
+            [
+                {
+                    "Id": "003gK00000Con1AAA",
+                    "Name": "Alice",
+                    "Email": "alice@acme.be",
+                    "Role__c": "COMPANY_CONTACT",
+                    "IsActive__c": True,
+                    "Paid_At__c": None,
+                },
+                {
+                    "Id": "003gK00000Con2AAA",
+                    "Name": "Bob",
+                    "Email": "bob@acme.be",
+                    "Role__c": "VISITOR",
+                    "IsActive__c": True,
+                    "Paid_At__c": "2026-05-01T10:00:00.000+0000",
+                },
+            ]
+        ),
+    ]
+
+    results = await company_tools.get_company_contacts(
+        fake_sf_client, company_id="001gK00000ExistAA"
+    )
+
+    assert len(results) == 2
+    assert results[0].name == "Alice"
+    assert results[0].role == "COMPANY_CONTACT"
+    assert results[0].is_active is True
+    assert results[0].paid_at is None
+    assert results[1].name == "Bob"
+    assert results[1].paid_at is not None
+
+
+@pytest.mark.asyncio
+async def test_get_company_contacts_by_vat(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.side_effect = [
+        make_query_response([{"Id": "001gK00000ExistAA"}]),  # VAT lookup
+        make_query_response([]),  # contacts (empty)
+    ]
+
+    results = await company_tools.get_company_contacts(
+        fake_sf_client, vat_number="BE0123456789"
+    )
+
+    assert results == []
+    # Verify first query used VAT_Number__c
+    first_soql = fake_sf_client.query.call_args_list[0].args[0]
+    assert "VAT_Number__c" in first_soql
+    # Verify second query used the resolved AccountId
+    second_soql = fake_sf_client.query.call_args_list[1].args[0]
+    assert "AccountId = '001gK00000ExistAA'" in second_soql
+
+
+@pytest.mark.asyncio
+async def test_get_company_contacts_active_filter_in_soql(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.side_effect = [
+        make_query_response([{"Id": "001gK00000ExistAA", "CRM_ID__c": "u", "Name": "X", "VAT_Number__c": "BE01"}]),
+        make_query_response([]),
+    ]
+
+    await company_tools.get_company_contacts(
+        fake_sf_client, company_id="001gK00000ExistAA", is_active=True
+    )
+
+    contact_soql = fake_sf_client.query.call_args_list[1].args[0]
+    assert "IsActive__c = true" in contact_soql
+
+
+@pytest.mark.asyncio
+async def test_get_company_contacts_role_filter_in_soql(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.side_effect = [
+        make_query_response([{"Id": "001gK00000ExistAA", "CRM_ID__c": "u", "Name": "X", "VAT_Number__c": "BE01"}]),
+        make_query_response([]),
+    ]
+
+    await company_tools.get_company_contacts(
+        fake_sf_client, company_id="001gK00000ExistAA", role="VISITOR"
+    )
+
+    contact_soql = fake_sf_client.query.call_args_list[1].args[0]
+    assert "Role__c = 'VISITOR'" in contact_soql
+
+
+@pytest.mark.asyncio
+async def test_get_company_contacts_caps_limit(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.side_effect = [
+        make_query_response([{"Id": "001gK00000ExistAA", "CRM_ID__c": "u", "Name": "X", "VAT_Number__c": "BE01"}]),
+        make_query_response([]),
+    ]
+
+    await company_tools.get_company_contacts(
+        fake_sf_client, company_id="001gK00000ExistAA", limit=500
+    )
+
+    contact_soql = fake_sf_client.query.call_args_list[1].args[0]
+    assert "LIMIT 100" in contact_soql
+
+
+# ---- list_companies ----
+
+
+@pytest.mark.asyncio
+async def test_list_companies_rejects_bad_limit(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="limit must be at least 1"):
+        await company_tools.list_companies(fake_sf_client, limit=0)
+
+
+@pytest.mark.asyncio
+async def test_list_companies_rejects_negative_offset(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="offset must be non-negative"):
+        await company_tools.list_companies(fake_sf_client, offset=-1)
+
+
+@pytest.mark.asyncio
+async def test_list_companies_rejects_invalid_country(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="ISO 3166-1 alpha-2"):
+        await company_tools.list_companies(fake_sf_client, country="BEL")
+    with pytest.raises(ValueError, match="ISO 3166-1 alpha-2"):
+        await company_tools.list_companies(fake_sf_client, country="B1")
+
+
+@pytest.mark.asyncio
+async def test_list_companies_returns_summaries(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {"Id": "001gK00000AAA", "Name": "Acme NV", "VAT_Number__c": "BE01", "BillingCountryCode": "BE"},
+            {"Id": "001gK00000BBB", "Name": "Beta BV", "VAT_Number__c": "NL01", "BillingCountryCode": "NL"},
+        ]
+    )
+
+    results = await company_tools.list_companies(fake_sf_client)
+
+    assert len(results) == 2
+    assert results[0].name == "Acme NV"
+    assert results[1].country == "NL"
+
+
+@pytest.mark.asyncio
+async def test_list_companies_country_filter_in_soql(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await company_tools.list_companies(fake_sf_client, country="be")  # lowercase
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "BillingCountryCode = 'BE'" in soql  # normalised to uppercase
+
+
+@pytest.mark.asyncio
+async def test_list_companies_active_filter_in_soql(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await company_tools.list_companies(fake_sf_client, is_active=False)
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "IsActive__c = false" in soql
+
+
+@pytest.mark.asyncio
+async def test_list_companies_no_active_field_skips_filter(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.get_account_active_field.return_value = None
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await company_tools.list_companies(fake_sf_client, is_active=True)
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "IsActive__c" not in soql
+    assert "Active__c" not in soql
+
+
+@pytest.mark.asyncio
+async def test_list_companies_pagination_offset(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await company_tools.list_companies(fake_sf_client, limit=10, offset=20)
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "LIMIT 10" in soql
+    assert "OFFSET 20" in soql
+
+
+@pytest.mark.asyncio
+async def test_list_companies_caps_limit(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await company_tools.list_companies(fake_sf_client, limit=999)
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "LIMIT 100" in soql
+
+
 # ---- Write-tools (R2) ----
 
 

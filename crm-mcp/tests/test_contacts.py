@@ -577,3 +577,153 @@ async def test_update_contact_company_id_accepts_sf_id(
     payload = fake_sf_client.update_contact.await_args.args[1]
     # Stored value is canonical CRM_ID__c UUID, not the input SF Id.
     assert payload["Company_ID__c"] == "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+
+
+# ---- find_contacts_without_company ----
+
+
+@pytest.mark.asyncio
+async def test_find_contacts_without_company_rejects_bad_limit(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="limit must be at least 1"):
+        await contact_tools.find_contacts_without_company(fake_sf_client, limit=0)
+
+
+@pytest.mark.asyncio
+async def test_find_contacts_without_company_rejects_invalid_role(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="role must be one of"):
+        await contact_tools.find_contacts_without_company(fake_sf_client, role="JANITOR")
+
+
+@pytest.mark.asyncio
+async def test_find_contacts_without_company_soql_has_account_id_null(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.find_contacts_without_company(fake_sf_client)
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "AccountId = null" in soql
+
+
+@pytest.mark.asyncio
+async def test_find_contacts_without_company_role_filter_in_soql(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.find_contacts_without_company(fake_sf_client, role="VISITOR")
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "Role__c = 'VISITOR'" in soql
+
+
+@pytest.mark.asyncio
+async def test_find_contacts_without_company_caps_limit(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.find_contacts_without_company(fake_sf_client, limit=999)
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "LIMIT 100" in soql
+
+
+@pytest.mark.asyncio
+async def test_find_contacts_without_company_returns_summaries(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "003gK00000OrphanAAA",
+                "Name": "Orphan User",
+                "Email": "orphan@example.com",
+                "IsActive__c": True,
+                "LastModifiedDate": "2026-05-10T09:00:00.000+0000",
+            }
+        ]
+    )
+
+    results = await contact_tools.find_contacts_without_company(fake_sf_client)
+
+    assert len(results) == 1
+    assert results[0].id == "003gK00000OrphanAAA"
+    assert results[0].name == "Orphan User"
+    assert results[0].is_active is True
+
+
+@pytest.mark.asyncio
+async def test_find_contacts_without_company_empty_returns_list(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    results = await contact_tools.find_contacts_without_company(fake_sf_client)
+
+    assert results == []
+
+
+# ---- contact_activity_summary ----
+
+
+@pytest.mark.asyncio
+async def test_contact_activity_summary_happy_path(fake_sf_client) -> None:
+    # 8 parallel query_count calls in order:
+    # total, active, gdpr, paid, new_7d, modified_24h, visitor, company_contact
+    fake_sf_client.query_count = AsyncMock(side_effect=[200, 150, 180, 60, 10, 25, 120, 55])
+
+    result = await contact_tools.contact_activity_summary(fake_sf_client)
+
+    assert result.total == 200
+    assert result.active == 150
+    assert result.inactive == 50  # 200 - 150
+    assert result.gdpr_consent == 180
+    assert result.paid == 60
+    assert result.new_last_7_days == 10
+    assert result.modified_last_24h == 25
+    assert result.by_role["VISITOR"] == 120
+    assert result.by_role["COMPANY_CONTACT"] == 55
+    assert result.by_role["UNKNOWN"] == 25  # 200 - 120 - 55
+
+
+@pytest.mark.asyncio
+async def test_contact_activity_summary_computes_inactive_correctly(
+    fake_sf_client,
+) -> None:
+    fake_sf_client.query_count = AsyncMock(side_effect=[100, 70, 90, 40, 5, 12, 60, 30])
+
+    result = await contact_tools.contact_activity_summary(fake_sf_client)
+
+    assert result.inactive == 30  # 100 - 70
+
+
+@pytest.mark.asyncio
+async def test_contact_activity_summary_computes_unknown_role(fake_sf_client) -> None:
+    fake_sf_client.query_count = AsyncMock(side_effect=[100, 80, 90, 50, 3, 8, 60, 30])
+
+    result = await contact_tools.contact_activity_summary(fake_sf_client)
+
+    assert result.by_role["UNKNOWN"] == 10  # 100 - 60 - 30
+
+
+@pytest.mark.asyncio
+async def test_contact_activity_summary_fires_8_queries(fake_sf_client) -> None:
+    fake_sf_client.query_count = AsyncMock(return_value=0)
+
+    await contact_tools.contact_activity_summary(fake_sf_client)
+
+    assert fake_sf_client.query_count.await_count == 8
+
+
+@pytest.mark.asyncio
+async def test_contact_activity_summary_zero_counts(fake_sf_client) -> None:
+    fake_sf_client.query_count = AsyncMock(return_value=0)
+
+    result = await contact_tools.contact_activity_summary(fake_sf_client)
+
+    assert result.total == 0
+    assert result.active == 0
+    assert result.inactive == 0
+    assert result.by_role == {"VISITOR": 0, "COMPANY_CONTACT": 0, "UNKNOWN": 0}

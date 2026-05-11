@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from .._util import (
+    VALID_USER_ROLES,
     coerce_is_active,
     coerce_known_role,
     format_soql_datetime,
@@ -23,7 +24,7 @@ from .._util import (
 )
 from ..escaping import escape_soql, escape_soql_like
 from ..messaging import MessagePublisher
-from ..models import ContactCount, ContactDetails, ContactSummary, MutationResult
+from ..models import ContactActivitySummary, ContactCount, ContactDetails, ContactSummary, MutationResult
 from ..salesforce import CrmSalesforceClient
 
 logger = logging.getLogger(__name__)
@@ -35,17 +36,7 @@ _MAX_LIMIT_RECENT = 100
 _MAX_RECENT_HOURS = 168  # one week
 _CRM_ID_FIELD = "CRM_ID__c"
 
-_VALID_USER_ROLES: frozenset[str] = frozenset(
-    {
-        "VISITOR",
-        "COMPANY_CONTACT",
-        "SPEAKER",
-        "EVENT_MANAGER",
-        "CASHIER",
-        "BAR_STAFF",
-        "ADMIN",
-    }
-)
+_VALID_USER_ROLES = VALID_USER_ROLES
 
 
 def _now_iso() -> str:
@@ -603,4 +594,122 @@ async def delete_contact(
         success=True,
         routing_key="crm.user.deactivated",
         salesforce_id=sf_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Additional read-only analytics tools
+# ---------------------------------------------------------------------------
+
+_MAX_LIMIT_ORPHAN_CONTACTS = 100
+
+
+async def find_contacts_without_company(
+    client: CrmSalesforceClient,
+    role: str | None = None,
+    is_active: bool | None = True,
+    limit: int = 20,
+) -> list[ContactSummary]:
+    """Find contacts that have no linked company (AccountId is null).
+
+    Useful for data-quality checks and onboarding flows. Optional filters:
+    `role` (Role__c picklist value), `is_active` (default: active only).
+    Results ordered by LastModifiedDate DESC.
+    """
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+    if role is not None and role not in _VALID_USER_ROLES:
+        raise ValueError(f"role must be one of {sorted(_VALID_USER_ROLES)}")
+
+    safe_limit = min(limit, _MAX_LIMIT_ORPHAN_CONTACTS)
+    active_field = await client.get_contact_active_field()
+
+    clauses: list[str] = ["AccountId = null"]
+    if role is not None:
+        clauses.append(f"Role__c = '{escape_soql(role)}'")
+    if is_active is True:
+        clauses.append(f"{active_field} = true")
+    elif is_active is False:
+        clauses.append(f"{active_field} = false")
+
+    where = " AND ".join(clauses)
+    soql = (
+        f"SELECT Id, Name, Email, {active_field}, LastModifiedDate "
+        f"FROM Contact "
+        f"WHERE {where} "
+        f"ORDER BY LastModifiedDate DESC "
+        f"LIMIT {safe_limit}"
+    )
+    result = await client.query(soql)
+    return [
+        ContactSummary(
+            id=r["Id"],
+            name=r.get("Name") or "",
+            email=r.get("Email"),
+            is_active=coerce_is_active(r.get(active_field)),
+            last_modified_at=parse_sf_datetime(r.get("LastModifiedDate")),
+        )
+        for r in result.get("records", [])
+    ]
+
+
+async def contact_activity_summary(
+    client: CrmSalesforceClient,
+) -> ContactActivitySummary:
+    """Org-wide analytics dashboard.
+
+    Returns total, active/inactive split, GDPR consent count, paid count,
+    per-role breakdown, new contacts in the last 7 days, and contacts
+    modified in the last 24 hours. All counts are computed in a single
+    parallel batch of SOQL queries.
+    """
+    import asyncio
+
+    active_field = await client.get_contact_active_field()
+    now = datetime.now(timezone.utc)
+    threshold_7d = format_soql_datetime(now - timedelta(days=7))
+    threshold_24h = format_soql_datetime(now - timedelta(hours=24))
+
+    (
+        total,
+        active_count,
+        gdpr_count,
+        paid_count,
+        new_7d,
+        modified_24h,
+        visitor_count,
+        company_contact_count,
+    ) = await asyncio.gather(
+        client.query_count("SELECT COUNT() FROM Contact"),
+        client.query_count(f"SELECT COUNT() FROM Contact WHERE {active_field} = true"),
+        client.query_count("SELECT COUNT() FROM Contact WHERE GDPR_Consent__c = true"),
+        client.query_count("SELECT COUNT() FROM Contact WHERE Paid_At__c != null"),
+        client.query_count(
+            f"SELECT COUNT() FROM Contact WHERE CreatedDate >= {threshold_7d}"
+        ),
+        client.query_count(
+            f"SELECT COUNT() FROM Contact WHERE LastModifiedDate >= {threshold_24h}"
+        ),
+        client.query_count("SELECT COUNT() FROM Contact WHERE Role__c = 'VISITOR'"),
+        client.query_count(
+            "SELECT COUNT() FROM Contact WHERE Role__c = 'COMPANY_CONTACT'"
+        ),
+    )
+
+    inactive_count = max(total - active_count, 0)
+    unknown_role_count = max(total - visitor_count - company_contact_count, 0)
+
+    return ContactActivitySummary(
+        total=total,
+        active=active_count,
+        inactive=inactive_count,
+        gdpr_consent=gdpr_count,
+        paid=paid_count,
+        by_role={
+            "VISITOR": visitor_count,
+            "COMPANY_CONTACT": company_contact_count,
+            "UNKNOWN": unknown_role_count,
+        },
+        new_last_7_days=new_7d,
+        modified_last_24h=modified_24h,
     )
