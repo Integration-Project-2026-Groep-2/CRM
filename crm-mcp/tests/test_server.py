@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import pytest
 
-from crm_mcp.server import _HealthState, build_server
+from crm_mcp.server import _HealthCheckAccessLogFilter, _HealthState, build_server
 
 
 @pytest.mark.asyncio
@@ -108,6 +109,29 @@ async def test_health_endpoint_returns_503_when_publisher_unbound(
     assert body["status"] == "degraded"
     assert body["checks"]["sf_connected"] is True
     assert body["checks"]["publisher_bound"] is False
+
+
+def _uvicorn_access_record(request_line: str) -> logging.LogRecord:
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=0,
+        msg='%s - "%s" %d',
+        args=("127.0.0.1:12345", request_line, 200),
+        exc_info=None,
+    )
+    return record
+
+
+def test_healthcheck_filter_drops_health_access_log() -> None:
+    f = _HealthCheckAccessLogFilter()
+    assert f.filter(_uvicorn_access_record("GET /health HTTP/1.1")) is False
+
+
+def test_healthcheck_filter_keeps_mcp_access_log() -> None:
+    f = _HealthCheckAccessLogFilter()
+    assert f.filter(_uvicorn_access_record("POST /mcp HTTP/1.1")) is True
 
 
 def _find_health_handler(mcp):

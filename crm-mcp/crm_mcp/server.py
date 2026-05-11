@@ -56,6 +56,18 @@ _SF_PROBE_CACHE_SECONDS = 30.0
 _SF_PROBE_TIMEOUT_SECONDS = 5.0
 
 
+class _HealthCheckAccessLogFilter(logging.Filter):
+    """Drop /health access-log lines so Docker's 10s probe doesn't spam stdout."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 2:
+            request_line = args[1]
+            if isinstance(request_line, str) and "GET /health" in request_line:
+                return False
+        return True
+
+
 class _HealthState:
     """Probe-state for the /health endpoint.
 
@@ -127,6 +139,8 @@ def build_server(
     )
 
     health_state = _HealthState(client, publisher)
+
+    logging.getLogger("uvicorn.access").addFilter(_HealthCheckAccessLogFilter())
 
     @mcp.custom_route("/health", methods=["GET"])
     async def health(request: Request) -> JSONResponse:
