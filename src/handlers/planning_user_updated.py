@@ -4,7 +4,9 @@ Queue: crm.planning.user.updated (routing key: planning.user.updated)
 Exchange: user.topic | durable: true
 """
 
+import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import aio_pika
@@ -13,8 +15,14 @@ from src import sender, xml_validator
 from src.handlers._exceptions import MissingDependencyError
 from src.handlers._helpers import _normalize_optional_text
 from src.handlers._planning_helpers import _build_planning_user_conflict_data
-from src.salesforce.contacts import _build_updated_user_data
+from src.salesforce.contacts import (
+    _build_updated_user_data,
+    _build_user_deactivation_data,
+    _get_contact_is_active,
+)
 from src.salesforce_client import (
+    apply_is_active,
+    deactivate_contact_record,
     ensure_contact_identifiers,
     get_contact_match_by_email,
     get_contact_match_by_planning_id,
@@ -35,13 +43,13 @@ async def handle(
 
     Behaviour:
     - Validate XML against schema.
-    - Reject users without GDPR consent.
     - Resolve the Contact strictly by Planning_ID__c.
     - Raise MissingDependencyError on unknown Planning identities (TTL-DLX deferral).
     - Ack ambiguous Planning identities without retry.
     - Publish crm.user.conflict on email collisions.
-    - Update Planning-owned fields authoritatively in Salesforce.
-    - Publish crm.user.updated after a successful update.
+    - If `isActive=false`, soft-delete the Contact and publish crm.user.deactivated.
+    - Otherwise update Planning-owned fields authoritatively in Salesforce,
+      reactivate when needed, and publish crm.user.updated.
     - Invalid XML: rejected without requeue.
     - Other errors: bubble to _wrap_handler for retry/DLQ routing.
     """
@@ -54,15 +62,7 @@ async def handle(
 
     email = xml.findtext("email") or ""
     planning_id = xml.findtext("id") or ""
-    gdpr_text = xml.findtext("gdprConsent")
-    if gdpr_text not in ("true", "1"):
-        logger.warning(
-            "PlanningUserUpdated refused — gdprConsent=%s for email %s",
-            gdpr_text,
-            email,
-        )
-        await message.reject(requeue=False)
-        return
+    is_active = xml.findtext("isActive") in ("true", "1")
 
     if not await has_contact_planning_id_field(sf):
         logger.error(
@@ -111,6 +111,21 @@ async def handle(
         existing_contact,
         planning_id=planning_id,
     )
+    if not is_active:
+        contact = await deactivate_contact_record(
+            sf, contact, log_value=f"Planning_ID__c {planning_id}",
+        )
+        deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        await sender.publish_user_deactivated(
+            _build_user_deactivation_data(contact, deactivated_at),
+        )
+        logger.info(
+            "Published crm.user.deactivated for Planning user %s (isActive=false on update)",
+            email,
+        )
+        await message.ack()
+        return
+
     contact = await update_planning_contact(
         sf,
         contact,
@@ -120,6 +135,17 @@ async def handle(
         role=xml.findtext("role") or "VISITOR",
         phone_number=_normalize_optional_text(xml.findtext("phoneNumber")),
     )
+    if not _get_contact_is_active(contact):
+        reactivation_update = await apply_is_active(sf, {}, True)
+        if reactivation_update:
+            contact_id = contact["Id"]
+            await asyncio.to_thread(sf.Contact.update, contact_id, reactivation_update)
+            contact = await asyncio.to_thread(sf.Contact.get, contact_id)
+            logger.info(
+                "Reactivated Contact %s for Planning user %s (isActive=true on update)",
+                contact_id,
+                email,
+            )
     await sender.publish_user_updated(_build_updated_user_data(contact))
     logger.info("Published crm.user.updated for Planning user %s", email)
     await message.ack()
