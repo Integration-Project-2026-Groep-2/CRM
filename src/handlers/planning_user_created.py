@@ -5,6 +5,7 @@ Exchange: user.topic | durable: true
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import aio_pika
@@ -16,10 +17,12 @@ from src.handlers._planning_helpers import (
     _build_planning_user_conflict_data,
     _planning_user_has_conflicting_data,
 )
-from src.salesforce.contacts import _build_user_data
+from src.salesforce.contacts import _build_user_data, _build_user_deactivation_data
 from src.salesforce_client import (
+    apply_is_active,
     backfill_planning_contact_fields,
     create_contact,
+    deactivate_contact_record,
     ensure_contact_identifiers,
     get_contact_match_by_email,
     get_contact_match_by_planning_id,
@@ -39,10 +42,12 @@ async def handle(
 
     Behaviour:
     - Validate XML against schema.
-    - Reject users without GDPR consent.
+    - Mirror Planning's `isActive` flag to the Contact active field.
     - Resolve users primarily by Planning_ID__c (stable producer identifier).
     - Only use email as a secondary bootstrap key for safe first-time linking.
     - Persist Planning_ID__c on Contact for future idempotent matching.
+    - When `isActive=false` reaches an existing Contact, deactivate it and
+      publish crm.user.deactivated instead of crm.user.confirmed.
     - Publish crm.user.confirmed or crm.user.conflict as needed.
     - Invalid XML: rejected without requeue.
     - Ambiguous Contacts: ack without retry.
@@ -57,15 +62,7 @@ async def handle(
 
     email = xml.findtext("email") or ""
     planning_id = xml.findtext("id") or ""
-    gdpr_text = xml.findtext("gdprConsent")
-    if gdpr_text not in ("true", "1"):
-        logger.warning(
-            "PlanningUserCreated refused — gdprConsent=%s for email %s",
-            gdpr_text,
-            email,
-        )
-        await message.reject(requeue=False)
-        return
+    is_active = xml.findtext("isActive") in ("true", "1")
 
     if not await has_contact_planning_id_field(sf):
         logger.error(
@@ -136,6 +133,20 @@ async def handle(
             phone_number=_normalize_optional_text(xml.findtext("phoneNumber")),
             gdpr_consent=True,
         )
+        if not is_active:
+            contact = await deactivate_contact_record(
+                sf, contact, log_value=f"Planning_ID__c {planning_id}",
+            )
+            deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            await sender.publish_user_deactivated(
+                _build_user_deactivation_data(contact, deactivated_at),
+            )
+            logger.info(
+                "Published crm.user.deactivated for existing Planning user %s (isActive=false on create)",
+                email,
+            )
+            await message.ack()
+            return
         await sender.publish_user_confirmed(_build_user_data(contact))
         logger.info("Published crm.user.confirmed for existing Planning user %s", email)
         await message.ack()
@@ -151,9 +162,16 @@ async def handle(
         return
 
     if email_match_status == "none":
-        contact = await create_contact(sf, _build_planning_contact_data(xml))
+        contact_data = _build_planning_contact_data(xml)
+        if not is_active:
+            contact_data = await apply_is_active(sf, contact_data, False)
+        contact = await create_contact(sf, contact_data)
         await sender.publish_user_confirmed(_build_user_data(contact))
-        logger.info("Published crm.user.confirmed for new Planning user %s", email)
+        logger.info(
+            "Published crm.user.confirmed for new Planning user %s (isActive=%s)",
+            email,
+            is_active,
+        )
         await message.ack()
         return
 
@@ -207,6 +225,20 @@ async def handle(
         phone_number=_normalize_optional_text(xml.findtext("phoneNumber")),
         gdpr_consent=True,
     )
+    if not is_active:
+        contact = await deactivate_contact_record(
+            sf, contact, log_value=f"email {email}",
+        )
+        deactivated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        await sender.publish_user_deactivated(
+            _build_user_deactivation_data(contact, deactivated_at),
+        )
+        logger.info(
+            "Published crm.user.deactivated for linked Planning user %s (isActive=false on create)",
+            email,
+        )
+        await message.ack()
+        return
     await sender.publish_user_confirmed(_build_user_data(contact))
     logger.info("Published crm.user.confirmed for linked Planning user %s", email)
     await message.ack()

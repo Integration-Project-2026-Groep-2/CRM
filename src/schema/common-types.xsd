@@ -118,7 +118,7 @@
       <xs:element name="firstName"   type="xs:string"/>
       <xs:element name="lastName"    type="xs:string"/>
       <xs:element name="role"        type="PlanningUserRoleType"/>
-      <xs:element name="gdprConsent" type="xs:boolean"/>
+      <xs:element name="isActive"    type="xs:boolean"/>
       <xs:element name="phoneNumber" type="xs:string" minOccurs="0"/>
       <xs:element name="company"     type="xs:string" minOccurs="0"/>
     </xs:sequence>

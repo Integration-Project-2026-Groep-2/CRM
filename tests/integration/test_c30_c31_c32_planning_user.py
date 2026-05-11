@@ -3,7 +3,7 @@
 Contract 30 — Planning → CRM: user created
   Queue: crm.planning.user.created | Routing key: planning.user.created
   Exchange: user.topic | Root: PlanningUserCreated
-  Required fields: id (UUID), email, firstName, lastName, role (SPEAKER|VISITOR), gdprConsent
+  Required fields: id (UUID), email, firstName, lastName, role (SPEAKER|VISITOR), isActive
 
 Contract 31 — Planning → CRM: user updated
   Queue: crm.planning.user.updated | Routing key: planning.user.updated
@@ -108,7 +108,7 @@ async def test_c30_planning_user_created_flows_through_user_topic(_skip_if_no_br
     <firstName>Jane</firstName>
     <lastName>Janssen</lastName>
     <role>VISITOR</role>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
 </PlanningUserCreated>""".encode()
 
     received = await _publish_and_consume(
@@ -122,7 +122,7 @@ async def test_c30_planning_user_created_flows_through_user_topic(_skip_if_no_br
     assert doc.tag == "PlanningUserCreated"
     assert doc.findtext("id") == _PLANNING_UUID
     assert doc.findtext("email") == "planning.c30@example.com"
-    assert doc.findtext("gdprConsent") == "true"
+    assert doc.findtext("isActive") == "true"
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +141,7 @@ async def test_c31_planning_user_updated_flows_through_user_topic(_skip_if_no_br
     <firstName>Jane</firstName>
     <lastName>Janssen</lastName>
     <role>SPEAKER</role>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
 </PlanningUserUpdated>""".encode()
 
     received = await _publish_and_consume(

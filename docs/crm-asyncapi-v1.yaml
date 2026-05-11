@@ -285,7 +285,7 @@ channels:
     description: >-
       Contract 30 — Planning → CRM: Planning-user synchroniseren naar
       Salesforce (Planning ref 21). Payload volgt de Planning XSD met
-      verplichte velden id, email, firstName, lastName, role en gdprConsent.
+      verplichte velden id, email, firstName, lastName, role en isActive.
       phoneNumber en company blijven optioneel zoals door Planning
       aangeleverd.
     messages:
@@ -1564,7 +1564,7 @@ components:
               <firstName>Sofie</firstName>
               <lastName>Declercq</lastName>
               <role>SPEAKER</role>
-              <gdprConsent>true</gdprConsent>
+              <isActive>true</isActive>
               <phoneNumber>+32470123456</phoneNumber>
               <company>Desideriushogeschool</company>
             </PlanningUserCreated>
@@ -1592,7 +1592,7 @@ components:
               <firstName>Sofie</firstName>
               <lastName>De Clercq</lastName>
               <role>VISITOR</role>
-              <gdprConsent>true</gdprConsent>
+              <isActive>true</isActive>
               <phoneNumber>+32470999888</phoneNumber>
               <company>Desideriushogeschool</company>
             </PlanningUserUpdated>
@@ -2808,7 +2808,7 @@ components:
         - firstName
         - lastName
         - role
-        - gdprConsent
+        - isActive
       description: >-
         Planning synchroniseert een user uit de eigen datastore naar CRM.
         Lokale CRM-contractnummering gebruikt 30; Planning documenteert dit
@@ -2830,9 +2830,9 @@ components:
           enum:
             - SPEAKER
             - VISITOR
-        gdprConsent:
+        isActive:
           type: boolean
-          description: Verplicht — Planning levert enkel users met expliciete toestemming.
+          description: Lifecycle-flag van Planning — false triggert soft-delete + crm.user.deactivated.
         phoneNumber:
           type: string
           description: Optioneel — Planning-specifieke telefoonveldnaam.
@@ -2848,7 +2848,7 @@ components:
         - firstName
         - lastName
         - role
-        - gdprConsent
+        - isActive
       description: >-
         Planning stuurt steeds het volledige gekende user-object voor updates.
         Lokale CRM-contractnummering gebruikt 31; Planning documenteert dit
@@ -2870,8 +2870,9 @@ components:
           enum:
             - SPEAKER
             - VISITOR
-        gdprConsent:
+        isActive:
           type: boolean
+          description: Lifecycle-flag van Planning — false triggert soft-delete + crm.user.deactivated.
         phoneNumber:
           type: string
           description: Optioneel — Planning-specifieke telefoonveldnaam.
