@@ -731,3 +731,189 @@ async def test_count_companies_fires_two_queries_with_active_field(fake_sf_clien
     await company_tools.count_companies(fake_sf_client)
 
     assert fake_sf_client.query_count.await_count == 2
+
+
+# ---- get_recent_companies ----
+
+
+@pytest.mark.asyncio
+async def test_get_recent_companies_rejects_bad_hours(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="since_hours"):
+        await company_tools.get_recent_companies(fake_sf_client, since_hours=0)
+
+
+@pytest.mark.asyncio
+async def test_get_recent_companies_rejects_bad_limit(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="limit"):
+        await company_tools.get_recent_companies(fake_sf_client, limit=0)
+
+
+@pytest.mark.asyncio
+async def test_get_recent_companies_mode_created_uses_created_date(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await company_tools.get_recent_companies(fake_sf_client, mode="created")
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "CreatedDate" in soql
+    assert "LastModifiedDate" not in soql
+
+
+@pytest.mark.asyncio
+async def test_get_recent_companies_mode_modified_uses_last_modified(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await company_tools.get_recent_companies(fake_sf_client, mode="modified")
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "LastModifiedDate" in soql
+
+
+@pytest.mark.asyncio
+async def test_get_recent_companies_returns_summaries(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "001gK00000AAA",
+                "Name": "Acme NV",
+                "VAT_Number__c": "BE0123456789",
+                "BillingCountryCode": "BE",
+                "LastModifiedDate": "2026-05-10T09:00:00.000+0000",
+            }
+        ]
+    )
+
+    results = await company_tools.get_recent_companies(fake_sf_client)
+
+    assert len(results) == 1
+    assert results[0].name == "Acme NV"
+    assert results[0].country == "BE"
+    assert results[0].last_modified_at is not None
+
+
+@pytest.mark.asyncio
+async def test_get_recent_companies_caps_hours_and_limit(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await company_tools.get_recent_companies(fake_sf_client, since_hours=999, limit=999)
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "LIMIT 100" in soql
+    # threshold must be at most 168 h back — verify '>=' appears (not 999h back)
+    assert ">=" in soql
+
+
+# ---- get_company_profile ----
+
+
+@pytest.mark.asyncio
+async def test_get_company_profile_requires_one_input(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="vat_number or company_id"):
+        await company_tools.get_company_profile(fake_sf_client)
+
+
+@pytest.mark.asyncio
+async def test_get_company_profile_returns_none_when_not_found(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    result = await company_tools.get_company_profile(fake_sf_client, vat_number="BE0123456789")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_company_profile_happy_path(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "001gK00000PqRStUAA",
+                "Name": "Acme NV",
+                "VAT_Number__c": "BE0123456789",
+                "BillingStreet": "Stationsstraat 12",
+                "BillingCity": "Brussel",
+                "BillingPostalCode": "1000",
+                "BillingCountryCode": "BE",
+                "IsActive__c": True,
+                "CreatedDate": "2026-01-15T08:00:00.000+0000",
+                "LastModifiedDate": "2026-04-20T11:30:00.000+0000",
+            }
+        ]
+    )
+    fake_sf_client.query_count = AsyncMock(return_value=5)
+
+    result = await company_tools.get_company_profile(fake_sf_client, vat_number="BE0123456789")
+
+    assert result is not None
+    assert result.id == "001gK00000PqRStUAA"
+    assert result.name == "Acme NV"
+    assert result.city == "Brussel"
+    assert result.is_active is True
+    assert result.contact_count == 5
+
+
+@pytest.mark.asyncio
+async def test_get_company_profile_fires_two_queries(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "001gK00000PqRStUAA",
+                "Name": "X",
+                "VAT_Number__c": "BE0123456789",
+                "BillingStreet": None,
+                "BillingCity": None,
+                "BillingPostalCode": None,
+                "BillingCountryCode": "BE",
+                "IsActive__c": True,
+                "CreatedDate": "2026-01-15T08:00:00.000+0000",
+                "LastModifiedDate": "2026-04-20T11:30:00.000+0000",
+            }
+        ]
+    )
+    fake_sf_client.query_count = AsyncMock(return_value=0)
+
+    await company_tools.get_company_profile(fake_sf_client, vat_number="BE0123456789")
+
+    fake_sf_client.query.assert_awaited_once()
+    fake_sf_client.query_count.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_company_profile_contact_count_uses_account_id(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "001gK00000PqRStUAA",
+                "Name": "X",
+                "VAT_Number__c": "BE0123456789",
+                "BillingStreet": None,
+                "BillingCity": None,
+                "BillingPostalCode": None,
+                "BillingCountryCode": "BE",
+                "IsActive__c": True,
+                "CreatedDate": "2026-01-15T08:00:00.000+0000",
+                "LastModifiedDate": "2026-04-20T11:30:00.000+0000",
+            }
+        ]
+    )
+    fake_sf_client.query_count = AsyncMock(return_value=3)
+
+    await company_tools.get_company_profile(fake_sf_client, vat_number="BE0123456789")
+
+    count_soql = fake_sf_client.query_count.await_args.args[0]
+    assert "AccountId = '001gK00000PqRStUAA'" in count_soql

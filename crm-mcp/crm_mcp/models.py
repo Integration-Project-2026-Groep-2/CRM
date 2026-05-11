@@ -82,6 +82,7 @@ class CompanySummary(BaseModel):
     name: str
     vat_number: str | None = None
     country: str | None = Field(default=None, description="ISO 3166-1 alpha-2")
+    last_modified_at: datetime | None = None
 
 
 class CompanyDetails(BaseModel):
@@ -103,6 +104,22 @@ class CompanyCount(BaseModel):
     total: int
     active: int
     inactive: int
+
+
+class CompanyProfile(BaseModel):
+    """Full company details with linked contact count."""
+
+    id: str
+    name: str
+    vat_number: str | None = None
+    street: str | None = None
+    city: str | None = None
+    postal_code: str | None = None
+    country: str | None = Field(default=None, description="ISO 3166-1 alpha-2")
+    is_active: bool = True
+    created_at: datetime
+    last_modified_at: datetime
+    contact_count: int = Field(description="Number of contacts linked via AccountId")
 
 
 # ---- Registration-related (Session_Registration__c) ----

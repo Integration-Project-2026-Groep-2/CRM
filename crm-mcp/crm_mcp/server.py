@@ -5,7 +5,7 @@ on the configured transport (stdio for local dev, streamable-http for the
 deployed agent).
 
 Tools split:
-    - 15 read-only (search/get/count/recent/list/analytics on Contact, Company, Registration)
+    - 17 read-only (search/get/count/recent/list/analytics on Contact, Company, Registration)
     - 6 write (create/update/delete on Contact, Company) — R2 actionable agent
 
 Write-tools require a bound `MessagePublisher` (see `messaging.py`) to broadcast
@@ -33,6 +33,7 @@ from .models import (
     CompanyContactSummary,
     CompanyCount,
     CompanyDetails,
+    CompanyProfile,
     CompanySummary,
     ContactActivitySummary,
     ContactCount,
@@ -390,6 +391,36 @@ def build_server(
         who the badge belongs to. Returns None if no contact has that badge.
         """
         return await contact_tools.get_contact_by_badge(client, badge_code=badge_code)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def get_recent_companies(
+        mode: Literal["created", "modified"] = "modified",
+        since_hours: int = 24,
+        limit: int = 20,
+    ) -> list[CompanySummary]:
+        """Recently created or modified companies within `since_hours` hours.
+
+        `mode`: 'created' filters on CreatedDate, 'modified' (default) on
+        LastModifiedDate. since_hours capped at 168 (one week), limit at 100.
+        """
+        return await company_tools.get_recent_companies(
+            client, mode=mode, since_hours=since_hours, limit=limit
+        )
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def get_company_profile(
+        vat_number: str | None = None,
+        company_id: str | None = None,
+    ) -> CompanyProfile | None:
+        """Full company details plus linked contact count in one call.
+
+        Provide one of `vat_number` (canonical key) or `company_id`. Returns
+        None if not found. Combines the data from `get_company` and the contact
+        count into a single response, avoiding two separate tool calls.
+        """
+        return await company_tools.get_company_profile(
+            client, vat_number=vat_number, company_id=company_id
+        )
 
     # ---- Write tools (R2) — each broadcasts an XSD-validated event ----
 

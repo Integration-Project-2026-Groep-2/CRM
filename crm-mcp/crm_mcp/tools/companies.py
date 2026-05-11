@@ -16,19 +16,20 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timezone
-from typing import Any
+from datetime import datetime, timedelta, timezone
+from typing import Any, Literal
 
 from .._util import (
     VALID_USER_ROLES,
     coerce_is_active,
+    format_soql_datetime,
     is_valid_sf_id,
     parse_sf_datetime,
     validate_vat_number,
 )
 from ..escaping import escape_soql, escape_soql_like
 from ..messaging import MessagePublisher
-from ..models import CompanyContactSummary, CompanyCount, CompanyDetails, CompanySummary, MutationResult
+from ..models import CompanyContactSummary, CompanyCount, CompanyDetails, CompanyProfile, CompanySummary, MutationResult
 from ..salesforce import CrmSalesforceClient
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,8 @@ _MAX_QUERY_LENGTH = 200
 _MAX_LIMIT_SEARCH = 100
 _MAX_LIMIT_COMPANY_CONTACTS = 100
 _MAX_LIMIT_LIST_COMPANIES = 100
+_MAX_RECENT_HOURS_COMPANIES = 168
+_MAX_LIMIT_RECENT_COMPANIES = 100
 _CRM_ID_FIELD = "CRM_ID__c"
 
 
@@ -296,6 +299,127 @@ async def list_companies(
         )
         for r in result.get("records", [])
     ]
+
+
+async def get_recent_companies(
+    client: CrmSalesforceClient,
+    mode: Literal["created", "modified"] = "modified",
+    since_hours: int = 24,
+    limit: int = 20,
+) -> list[CompanySummary]:
+    """Recently created or modified companies within `since_hours` hours.
+
+    `mode` selects the date field: 'created' uses CreatedDate, 'modified'
+    (default) uses LastModifiedDate. since_hours capped at 168 (one week),
+    limit capped at 100.
+    """
+    if since_hours < 1:
+        raise ValueError("since_hours must be at least 1")
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+
+    safe_hours = min(since_hours, _MAX_RECENT_HOURS_COMPANIES)
+    safe_limit = min(limit, _MAX_LIMIT_RECENT_COMPANIES)
+    threshold = format_soql_datetime(
+        datetime.now(timezone.utc) - timedelta(hours=safe_hours)
+    )
+    date_field = "CreatedDate" if mode == "created" else "LastModifiedDate"
+
+    soql = (
+        f"SELECT Id, Name, VAT_Number__c, BillingCountryCode, {date_field} "
+        f"FROM Account "
+        f"WHERE {date_field} >= {threshold} "
+        f"ORDER BY {date_field} DESC "
+        f"LIMIT {safe_limit}"
+    )
+    result = await client.query(soql)
+    return [
+        CompanySummary(
+            id=r["Id"],
+            name=r.get("Name") or "",
+            vat_number=r.get("VAT_Number__c"),
+            country=r.get("BillingCountryCode"),
+            last_modified_at=parse_sf_datetime(r.get(date_field)),
+        )
+        for r in result.get("records", [])
+    ]
+
+
+async def get_company_profile(
+    client: CrmSalesforceClient,
+    vat_number: str | None = None,
+    company_id: str | None = None,
+) -> CompanyProfile | None:
+    """Fetch company details plus linked contact count in one call.
+
+    Provide `vat_number` (canonical key) or `company_id` (CRM_ID__c UUID or
+    001-prefix Salesforce Id). Returns None if not found.
+    """
+    if vat_number is None and company_id is None:
+        raise ValueError("provide either vat_number or company_id")
+
+    active_field = await client.get_account_active_field()
+    fields = (
+        "Id, Name, VAT_Number__c, BillingStreet, BillingCity, "
+        "BillingPostalCode, BillingCountryCode, CreatedDate, LastModifiedDate"
+    )
+    if active_field:
+        fields = f"{fields}, {active_field}"
+
+    if vat_number is not None:
+        validate_vat_number(vat_number)
+        soql = (
+            f"SELECT {fields} FROM Account "
+            f"WHERE VAT_Number__c = '{escape_soql(vat_number)}' LIMIT 1"
+        )
+    else:
+        if company_id is None or not (
+            is_valid_sf_id(company_id, prefix="001")
+            or len(company_id) == 36  # UUID format check (rough)
+        ):
+            # Accept either UUID or 001-prefix SF Id via _resolve helper
+            pass
+        # Use the existing resolve helper to support both UUID and SF Id
+        record = await _resolve_account_record(client, company_id)  # type: ignore[arg-type]
+        if record is None:
+            return None
+        sf_id = str(record["Id"])
+        # Re-fetch with full field list
+        soql = f"SELECT {fields} FROM Account WHERE Id = '{escape_soql(sf_id)}' LIMIT 1"
+
+    if vat_number is not None:
+        result = await client.query(soql)
+        records = result.get("records", [])
+        if not records:
+            return None
+        r = records[0]
+        sf_id = str(r["Id"])
+    else:
+        result = await client.query(soql)
+        records = result.get("records", [])
+        if not records:
+            return None
+        r = records[0]
+        sf_id = str(r["Id"])
+
+    contact_count = await client.query_count(
+        f"SELECT COUNT() FROM Contact WHERE AccountId = '{escape_soql(sf_id)}'"
+    )
+
+    now = datetime.now(timezone.utc)
+    return CompanyProfile(
+        id=r["Id"],
+        name=r.get("Name") or "",
+        vat_number=r.get("VAT_Number__c"),
+        street=r.get("BillingStreet"),
+        city=r.get("BillingCity"),
+        postal_code=r.get("BillingPostalCode"),
+        country=r.get("BillingCountryCode"),
+        is_active=coerce_is_active(r.get(active_field)) if active_field else True,
+        created_at=parse_sf_datetime(r.get("CreatedDate")) or now,
+        last_modified_at=parse_sf_datetime(r.get("LastModifiedDate")) or now,
+        contact_count=contact_count,
+    )
 
 
 async def count_companies(
