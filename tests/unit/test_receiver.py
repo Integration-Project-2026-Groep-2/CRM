@@ -5580,6 +5580,153 @@ class TestWrapHandler:
         messages = [r.getMessage() for r in caplog.records]
         assert any("handler start" in m and "delivery_tag=99" in m for m in messages), messages
 
+    @pytest.mark.asyncio
+    async def test_session_expired_triggers_reauth_and_retries_handler_once(self, message):
+        from functools import partial
+
+        from src.receiver import _wrap_handler
+
+        initial_sf = MagicMock(name="initial_sf")
+        fresh_sf = MagicMock(name="fresh_sf")
+
+        fake_session = MagicMock()
+        fake_session.sf = initial_sf
+
+        async def _reauth():
+            fake_session.sf = fresh_sf
+
+        fake_session.reauth = AsyncMock(side_effect=_reauth)
+
+        invocations: list[object] = []
+
+        async def flaky_handler(_msg, sf):
+            invocations.append(sf)
+            if len(invocations) == 1:
+                raise RuntimeError("INVALID_SESSION_ID: simulated session expiry")
+
+        inner = partial(flaky_handler, sf=initial_sf)
+
+        with patch("src.receiver._handle_failure", new_callable=AsyncMock) as mock_failure:
+            await _wrap_handler(
+                inner,
+                "crm.frontend.registration.created",
+                message,
+                session=fake_session,
+            )
+
+        fake_session.reauth.assert_awaited_once()
+        assert invocations == [initial_sf, fresh_sf]
+        mock_failure.assert_not_called()
+        message.reject.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_session_expired_retry_also_fails_routes_to_handle_failure(self, message):
+        from functools import partial
+
+        from src.receiver import _wrap_handler
+
+        initial_sf = MagicMock(name="initial_sf")
+        fresh_sf = MagicMock(name="fresh_sf")
+
+        fake_session = MagicMock()
+        fake_session.sf = initial_sf
+
+        async def _reauth():
+            fake_session.sf = fresh_sf
+
+        fake_session.reauth = AsyncMock(side_effect=_reauth)
+
+        invocations: list[object] = []
+
+        async def perma_expired_handler(_msg, sf):
+            invocations.append(sf)
+            raise RuntimeError("INVALID_SESSION_ID: still expired")
+
+        inner = partial(perma_expired_handler, sf=initial_sf)
+
+        with patch("src.receiver._handle_failure", new_callable=AsyncMock) as mock_failure:
+            await _wrap_handler(
+                inner,
+                "crm.frontend.registration.created",
+                message,
+                session=fake_session,
+            )
+
+        fake_session.reauth.assert_awaited_once()
+        assert invocations == [initial_sf, fresh_sf]
+        mock_failure.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_non_session_exception_does_not_trigger_reauth(self, message):
+        from functools import partial
+
+        from src.receiver import _wrap_handler
+
+        sf = MagicMock(name="sf")
+        fake_session = MagicMock()
+        fake_session.sf = sf
+        fake_session.reauth = AsyncMock()
+
+        async def boom_handler(_msg, sf):
+            raise RuntimeError("not a session error")
+
+        inner = partial(boom_handler, sf=sf)
+
+        with patch("src.receiver._handle_failure", new_callable=AsyncMock) as mock_failure:
+            await _wrap_handler(
+                inner,
+                "crm.frontend.registration.created",
+                message,
+                session=fake_session,
+            )
+
+        fake_session.reauth.assert_not_called()
+        mock_failure.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_session_expired_without_session_kwarg_skips_reauth(self, message):
+        from src.receiver import _wrap_handler
+
+        async def expired_handler(_msg):
+            raise RuntimeError("INVALID_SESSION_ID: simulated")
+
+        with patch("src.receiver._handle_failure", new_callable=AsyncMock) as mock_failure:
+            await _wrap_handler(
+                expired_handler, "crm.frontend.registration.created", message,
+            )
+
+        mock_failure.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_reauth_failure_routes_original_exception_to_handle_failure(self, message):
+        from functools import partial
+
+        from src.receiver import _wrap_handler
+
+        sf = MagicMock(name="sf")
+        fake_session = MagicMock()
+        fake_session.sf = sf
+        fake_session.reauth = AsyncMock(side_effect=RuntimeError("login down"))
+
+        original_exc = RuntimeError("INVALID_SESSION_ID: stale")
+
+        async def expired_handler(_msg, sf):
+            raise original_exc
+
+        inner = partial(expired_handler, sf=sf)
+
+        with patch("src.receiver._handle_failure", new_callable=AsyncMock) as mock_failure:
+            await _wrap_handler(
+                inner,
+                "crm.frontend.registration.created",
+                message,
+                session=fake_session,
+            )
+
+        fake_session.reauth.assert_awaited_once()
+        mock_failure.assert_awaited_once()
+        assert mock_failure.await_args.args[2] is original_exc
+
 
 class TestExponentialBackoff:
     @pytest.mark.parametrize(
