@@ -264,7 +264,7 @@ VALID_PLANNING_USER_CREATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <firstName>Sofie</firstName>
     <lastName>Declercq</lastName>
     <role>SPEAKER</role>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
     <phoneNumber>+32470123456</phoneNumber>
     <company>Desideriushogeschool</company>
 </PlanningUserCreated>"""
@@ -276,7 +276,7 @@ VALID_PLANNING_USER_UPDATED_XML = b"""<?xml version='1.0' encoding='utf-8'?>
     <firstName>Sofie</firstName>
     <lastName>Updated</lastName>
     <role>SPEAKER</role>
-    <gdprConsent>true</gdprConsent>
+    <isActive>true</isActive>
     <phoneNumber>+32470999999</phoneNumber>
     <company>Desideriushogeschool</company>
 </PlanningUserUpdated>"""
@@ -1079,6 +1079,66 @@ class TestHandlePlanningUserCreated:
 
             msg.reject.assert_called_once_with(requeue=False)
             assert "Planning_ID__c is missing" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_planning_user_created_inactive_new_contact_created_inactive(self, sf_mock, caplog):
+        inactive_xml = VALID_PLANNING_USER_CREATED_XML.replace(
+            b"<isActive>true</isActive>",
+            b"<isActive>false</isActive>",
+        )
+        parsed_xml = etree.fromstring(inactive_xml)
+        inactive_contact = {**PLANNING_CONTACT_RETURN, "IsActive__c": False}
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.handlers.planning_user_created.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_created.get_contact_match_by_planning_id", return_value=("none", None)),
+            patch("src.handlers.planning_user_created.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.planning_user_created.apply_is_active", side_effect=lambda _sf, data, flag: {**data, "IsActive__c": flag}),
+            patch("src.handlers.planning_user_created.create_contact", return_value=inactive_contact) as mock_create,
+            patch("src.sender.publish_user_confirmed") as mock_confirmed,
+            caplog.at_level(logging.INFO),
+        ):
+            from src.receiver import handle_planning_user_created
+
+            msg = _make_message(inactive_xml)
+            await handle_planning_user_created(msg, sf_mock)
+
+            create_payload = mock_create.call_args.args[1]
+            assert create_payload["IsActive__c"] is False
+            mock_confirmed.assert_called_once()
+            msg.ack.assert_called_once()
+            assert "isActive=False" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_planning_user_created_inactive_existing_contact_deactivates_and_publishes_c22(self, sf_mock, caplog):
+        inactive_xml = VALID_PLANNING_USER_CREATED_XML.replace(
+            b"<isActive>true</isActive>",
+            b"<isActive>false</isActive>",
+        )
+        parsed_xml = etree.fromstring(inactive_xml)
+        existing_contact = {**PLANNING_CONTACT_RETURN}
+        deactivated_contact = {**existing_contact, "IsActive__c": False}
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.handlers.planning_user_created.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_created.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.planning_user_created.ensure_contact_identifiers", return_value=existing_contact),
+            patch("src.handlers.planning_user_created.backfill_planning_contact_fields", return_value=existing_contact),
+            patch("src.handlers.planning_user_created.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
+            patch("src.sender.publish_user_deactivated") as mock_deactivated_publish,
+            patch("src.sender.publish_user_confirmed") as mock_confirmed_publish,
+            caplog.at_level(logging.INFO),
+        ):
+            from src.receiver import handle_planning_user_created
+
+            msg = _make_message(inactive_xml)
+            await handle_planning_user_created(msg, sf_mock)
+
+            mock_deactivate.assert_called_once()
+            mock_deactivated_publish.assert_called_once()
+            mock_confirmed_publish.assert_not_called()
+            msg.ack.assert_called_once()
+            assert "isActive=false on create" in caplog.text
 
     @pytest.mark.asyncio
     async def test_existing_unique_facturatie_user_is_reused_and_confirmed(self, sf_mock):
@@ -3533,23 +3593,68 @@ class TestHandlePlanningUserUpdated:
             assert "email sofie.updated@example.com is ambiguous" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_planning_user_updated_without_gdpr_consent_rejected(self, sf_mock, caplog):
-        invalid_gdpr_xml = VALID_PLANNING_USER_UPDATED_XML.replace(
-            b"<gdprConsent>true</gdprConsent>",
-            b"<gdprConsent>false</gdprConsent>",
+    async def test_planning_user_updated_inactive_deactivates_contact(self, sf_mock, caplog):
+        inactive_xml = VALID_PLANNING_USER_UPDATED_XML.replace(
+            b"<isActive>true</isActive>",
+            b"<isActive>false</isActive>",
         )
-        parsed_xml = etree.fromstring(invalid_gdpr_xml)
+        parsed_xml = etree.fromstring(inactive_xml)
+        existing_contact = {**PLANNING_CONTACT_RETURN}
+        deactivated_contact = {**existing_contact, "IsActive__c": False}
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
-            caplog.at_level(logging.WARNING),
+            patch("src.handlers.planning_user_updated.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_updated.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.planning_user_updated.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.planning_user_updated.ensure_contact_identifiers", return_value=existing_contact),
+            patch("src.handlers.planning_user_updated.deactivate_contact_record", return_value=deactivated_contact) as mock_deactivate,
+            patch("src.handlers.planning_user_updated.update_planning_contact") as mock_update,
+            patch("src.sender.publish_user_deactivated") as mock_deactivated_publish,
+            patch("src.sender.publish_user_updated") as mock_updated_publish,
+            caplog.at_level(logging.INFO),
         ):
             from src.receiver import handle_planning_user_updated
 
-            msg = _make_message(invalid_gdpr_xml)
+            msg = _make_message(inactive_xml)
             await handle_planning_user_updated(msg, sf_mock)
 
-            msg.reject.assert_called_once_with(requeue=False)
-            assert "PlanningUserUpdated refused — gdprConsent=false" in caplog.text
+            mock_deactivate.assert_called_once()
+            mock_update.assert_not_called()
+            mock_deactivated_publish.assert_called_once()
+            mock_updated_publish.assert_not_called()
+            msg.ack.assert_called_once()
+            assert "isActive=false on update" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_planning_user_updated_reactivates_when_isActive_true_after_deactivation(self, sf_mock, caplog):
+        parsed_xml = etree.fromstring(VALID_PLANNING_USER_UPDATED_XML)
+        existing_contact = {**PLANNING_CONTACT_RETURN, "IsActive__c": False}
+        updated_contact = {**PLANNING_UPDATED_CONTACT_RETURN, "IsActive__c": False}
+        reactivated_contact = {**updated_contact, "IsActive__c": True}
+        sf_mock.Contact = MagicMock()
+        sf_mock.Contact.update = MagicMock()
+        sf_mock.Contact.get = MagicMock(return_value=reactivated_contact)
+        with (
+            patch("src.xml_validator.validate", return_value=parsed_xml),
+            patch("src.handlers.planning_user_updated.has_contact_planning_id_field", return_value=True),
+            patch("src.handlers.planning_user_updated.get_contact_match_by_planning_id", return_value=("unique", existing_contact)),
+            patch("src.handlers.planning_user_updated.get_contact_match_by_email", return_value=("none", None)),
+            patch("src.handlers.planning_user_updated.ensure_contact_identifiers", return_value=existing_contact),
+            patch("src.handlers.planning_user_updated.update_planning_contact", return_value=updated_contact),
+            patch("src.handlers.planning_user_updated._get_contact_is_active", return_value=False),
+            patch("src.handlers.planning_user_updated.apply_is_active", return_value={"IsActive__c": True}),
+            patch("src.sender.publish_user_updated") as mock_updated_publish,
+            caplog.at_level(logging.INFO),
+        ):
+            from src.receiver import handle_planning_user_updated
+
+            msg = _make_message(VALID_PLANNING_USER_UPDATED_XML)
+            await handle_planning_user_updated(msg, sf_mock)
+
+            sf_mock.Contact.update.assert_called_once()
+            mock_updated_publish.assert_called_once()
+            msg.ack.assert_called_once()
+            assert "Reactivated Contact" in caplog.text
 
     @pytest.mark.asyncio
     async def test_invalid_xml_rejected_without_requeue(self, sf_mock):
