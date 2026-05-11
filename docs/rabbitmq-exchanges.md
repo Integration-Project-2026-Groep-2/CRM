@@ -85,7 +85,7 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 
 **Contract 24 runtime-gedrag:** Bij een uniek bestaand Contact hergebruikt CRM dat Contact en kent zo nodig eerst een CRM UUID toe. Deze flow publiceert geen `crm.mail.requested`.
 **Contracten 27-28 inbound-vereisten:** Mailing user sync gebruikt verplichte velden `id`, `email` en `gdprConsent`; `firstName`, `lastName` en `companyId` blijven optioneel volgens de Mailing XSD.
-**Contracten 30-31 inbound-vereisten:** Planning user sync gebruikt verplichte velden `id`, `email`, `firstName`, `lastName`, `role` en `gdprConsent`; `phoneNumber` en `company` blijven optioneel volgens de Planning XSD.
+**Contracten 30-31 inbound-vereisten:** Planning user sync gebruikt verplichte velden `id`, `email`, `firstName`, `lastName`, `role` en `isActive`; `phoneNumber` en `company` blijven optioneel volgens de Planning XSD.
 
 > Dezelfde exchange delen betekent **niet** dat berichten automatisch compatibel zijn. CRM moet elke routing key expliciet binden en de payload moet overeenkomen met het contract dat de receiver valideert.
 
