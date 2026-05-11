@@ -13,6 +13,7 @@ from src import xml_validator
 from src.config import Config
 from src.handlers._registry import PENDING_EXCHANGES, QUEUE_REGISTRY
 from src.handlers._transport import _handle_failure
+from src.salesforce.client import SalesforceSession, is_expired_session_error
 from src.salesforce_client import get_salesforce_client
 
 logger = logging.getLogger(__name__)
@@ -111,6 +112,8 @@ async def _wrap_handler(
     handler: Any,
     queue_name: str,
     message: aio_pika.abc.AbstractIncomingMessage,
+    *,
+    session: SalesforceSession | None = None,
 ) -> None:
     """Run a handler under the centralised failure-routing policy.
 
@@ -118,47 +121,89 @@ async def _wrap_handler(
     Other queues route uncaught exceptions through `_handle_failure`; if that
     helper itself raises (channel closed, bug), we last-resort
     `reject(requeue=False)` to keep the message off the work-queue.
+
+    When `session` is provided and `handler` is a `functools.partial` carrying
+    an `sf` keyword argument, an expired Salesforce session (raised by the
+    handler) triggers a single reauth + retry with the refreshed client. This
+    closes the same recovery loop polling already enjoys via `sf_call`, so the
+    receiver does not need a container restart to recover from a session TTL
+    expiry. The retry is one-shot — a second failure falls through to the
+    standard failure-routing path.
     """
     logger.info(
         "%s — handler start (delivery_tag=%s, message_id=%s)",
         queue_name, message.delivery_tag, message.message_id,
     )
-    try:
-        await handler(message)
-        logger.info(
-            "%s — handler done (delivery_tag=%s)",
-            queue_name, message.delivery_tag,
-        )
-        if xml_validator.reorder_was_applied():
-            logger.warning(
-                "frontend.reorder_applied queue=%s message_id=%s — Frontend payload accepted after element reorder; "
-                "producer is out of spec, please notify Frontend team.",
-                queue_name,
-                message.message_id,
-            )
-    except Exception as exc:  # noqa: BLE001
-        if queue_name in _NO_RETRY_QUEUES:
-            logger.error(
-                "%s — %s; ack-and-drop (no retry by contract)", queue_name, exc,
-            )
-            try:
-                await message.ack()
-            except Exception:  # noqa: BLE001
-                pass
-            return
+    current_handler = handler
+    reauth_attempted = False
+    while True:
         try:
-            await _handle_failure(
-                queue_name, message, exc, work_queue=queue_name,
+            await current_handler(message)
+            logger.info(
+                "%s — handler done (delivery_tag=%s)",
+                queue_name, message.delivery_tag,
             )
-        except Exception as meta_exc:  # noqa: BLE001
-            logger.exception(
-                "%s — meta-failure in _handle_failure: %s; force-rejecting",
-                queue_name, meta_exc,
-            )
+            if xml_validator.reorder_was_applied():
+                logger.warning(
+                    "frontend.reorder_applied queue=%s message_id=%s — Frontend payload accepted after element reorder; "
+                    "producer is out of spec, please notify Frontend team.",
+                    queue_name,
+                    message.message_id,
+                )
+            return
+        except Exception as exc:  # noqa: BLE001
+            if (
+                not reauth_attempted
+                and session is not None
+                and isinstance(current_handler, partial)
+                and "sf" in current_handler.keywords
+                and is_expired_session_error(exc)
+            ):
+                reauth_attempted = True
+                logger.warning(
+                    "%s — Salesforce session expired during handler; "
+                    "reauthenticating and retrying once.",
+                    queue_name,
+                )
+                try:
+                    await session.reauth()
+                except Exception as reauth_exc:  # noqa: BLE001
+                    logger.error(
+                        "%s — Salesforce reauth failed: %s; "
+                        "routing original session-expired error to failure path.",
+                        queue_name, reauth_exc,
+                    )
+                else:
+                    current_handler = partial(
+                        current_handler.func,
+                        *current_handler.args,
+                        **{**current_handler.keywords, "sf": session.sf},
+                    )
+                    continue
+
+            if queue_name in _NO_RETRY_QUEUES:
+                logger.error(
+                    "%s — %s; ack-and-drop (no retry by contract)", queue_name, exc,
+                )
+                try:
+                    await message.ack()
+                except Exception:  # noqa: BLE001
+                    pass
+                return
             try:
-                await message.reject(requeue=False)
-            except Exception:  # noqa: BLE001
-                pass
+                await _handle_failure(
+                    queue_name, message, exc, work_queue=queue_name,
+                )
+            except Exception as meta_exc:  # noqa: BLE001
+                logger.exception(
+                    "%s — meta-failure in _handle_failure: %s; force-rejecting",
+                    queue_name, meta_exc,
+                )
+                try:
+                    await message.reject(requeue=False)
+                except Exception:  # noqa: BLE001
+                    pass
+            return
 
 
 async def run_receiver(
@@ -183,6 +228,7 @@ async def run_receiver(
     await channel.set_qos(prefetch_count=10)
     await _ensure_dlq_topology(channel)
     sf_client = await get_salesforce_client(config, shutdown_event=shutdown_event)
+    sf_session = SalesforceSession(sf_client, config, shutdown_event=shutdown_event)
 
     for queue_name, handler, requires_sf, routing_key, durable, exchange in QUEUE_REGISTRY:
         queue = await _declare_and_bind(
@@ -192,8 +238,11 @@ async def run_receiver(
             routing_key=routing_key,
             exchange_name=exchange,
         )
-        inner = partial(handler, sf=sf_client) if requires_sf else handler
-        consumer = partial(_wrap_handler, inner, queue_name)
+        if requires_sf:
+            inner = partial(handler, sf=sf_session.sf)
+            consumer = partial(_wrap_handler, inner, queue_name, session=sf_session)
+        else:
+            consumer = partial(_wrap_handler, handler, queue_name)
         await queue.consume(consumer)
 
     logger.info("Receiver started. Listening on all configured queues.")
