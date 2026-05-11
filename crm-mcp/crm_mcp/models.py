@@ -97,6 +97,14 @@ class CompanyDetails(BaseModel):
     last_modified_at: datetime
 
 
+class CompanyCount(BaseModel):
+    """Aggregated company counts with active/inactive breakdown."""
+
+    total: int
+    active: int
+    inactive: int
+
+
 # ---- Registration-related (Session_Registration__c) ----
 
 

@@ -144,32 +144,8 @@ async def search_contact(
     ]
 
 
-async def get_contact(
-    client: CrmSalesforceClient,
-    contact_id: str,
-) -> ContactDetails | None:
-    """Fetch full contact details by exact Salesforce Contact Id (prefix '003')."""
-    if not is_valid_sf_id(contact_id, prefix="003"):
-        raise ValueError(
-            "contact_id must be a 15- or 18-character alphanumeric "
-            "Salesforce Id starting with '003'"
-        )
-
-    safe_id = escape_soql(contact_id)
-    active_field = await client.get_contact_active_field()
-
-    soql = (
-        f"SELECT Id, Name, FirstName, LastName, Email, Phone, "
-        f"{active_field}, Role__c, GDPR_Consent__c, Paid_At__c, "
-        f"AccountId, Account.Name, CreatedDate, LastModifiedDate "
-        f"FROM Contact WHERE Id = '{safe_id}' LIMIT 1"
-    )
-    result = await client.query(soql)
-    records = result.get("records", [])
-    if not records:
-        return None
-
-    r = records[0]
+def _map_contact_record(r: dict[str, Any], active_field: str) -> ContactDetails:
+    """Map a raw Salesforce Contact record to ContactDetails."""
     account = r.get("Account") if isinstance(r.get("Account"), dict) else None
     now = datetime.now(timezone.utc)
     return ContactDetails(
@@ -188,6 +164,40 @@ async def get_contact(
         created_at=parse_sf_datetime(r.get("CreatedDate")) or now,
         last_modified_at=parse_sf_datetime(r.get("LastModifiedDate")) or now,
     )
+
+
+def _contact_detail_fields(active_field: str) -> str:
+    """SOQL field list shared by all ContactDetails lookups."""
+    return (
+        f"Id, Name, FirstName, LastName, Email, Phone, "
+        f"{active_field}, Role__c, GDPR_Consent__c, Paid_At__c, "
+        f"AccountId, Account.Name, CreatedDate, LastModifiedDate"
+    )
+
+
+async def get_contact(
+    client: CrmSalesforceClient,
+    contact_id: str,
+) -> ContactDetails | None:
+    """Fetch full contact details by exact Salesforce Contact Id (prefix '003')."""
+    if not is_valid_sf_id(contact_id, prefix="003"):
+        raise ValueError(
+            "contact_id must be a 15- or 18-character alphanumeric "
+            "Salesforce Id starting with '003'"
+        )
+
+    safe_id = escape_soql(contact_id)
+    active_field = await client.get_contact_active_field()
+
+    soql = (
+        f"SELECT {_contact_detail_fields(active_field)} "
+        f"FROM Contact WHERE Id = '{safe_id}' LIMIT 1"
+    )
+    result = await client.query(soql)
+    records = result.get("records", [])
+    if not records:
+        return None
+    return _map_contact_record(records[0], active_field)
 
 
 async def count_contacts(
@@ -713,3 +723,120 @@ async def contact_activity_summary(
         new_last_7_days=new_7d,
         modified_last_24h=modified_24h,
     )
+
+
+async def get_contact_by_email(
+    client: CrmSalesforceClient,
+    email: str,
+) -> ContactDetails | None:
+    """Fetch full contact details by exact email address.
+
+    Returns None when no contact has that email. Use `search_contact` for
+    fuzzy matching; this function requires an exact address.
+    """
+    stripped = email.strip()
+    if not stripped:
+        raise ValueError("email must not be empty")
+
+    active_field = await client.get_contact_active_field()
+    soql = (
+        f"SELECT {_contact_detail_fields(active_field)} "
+        f"FROM Contact WHERE Email = '{escape_soql(stripped)}' LIMIT 1"
+    )
+    result = await client.query(soql)
+    records = result.get("records", [])
+    if not records:
+        return None
+    return _map_contact_record(records[0], active_field)
+
+
+_MAX_LIMIT_LIST_CONTACTS = 100
+
+
+async def list_contacts(
+    client: CrmSalesforceClient,
+    role: str | None = None,
+    is_active: bool | None = True,
+    gdpr_consent: bool | None = None,
+    has_paid: bool | None = None,
+    company_id: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[ContactSummary]:
+    """Browse contacts with optional filters and pagination.
+
+    `company_id` accepts a Salesforce AccountId (001-prefix) to filter contacts
+    linked to a specific company. Results are ordered by LastModifiedDate DESC.
+    """
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+    if offset < 0:
+        raise ValueError("offset must be non-negative")
+    if role is not None and role not in _VALID_USER_ROLES:
+        raise ValueError(f"role must be one of {sorted(_VALID_USER_ROLES)}")
+
+    safe_limit = min(limit, _MAX_LIMIT_LIST_CONTACTS)
+    active_field = await client.get_contact_active_field()
+
+    clauses: list[str] = []
+    if role is not None:
+        clauses.append(f"Role__c = '{escape_soql(role)}'")
+    if is_active is True:
+        clauses.append(f"{active_field} = true")
+    elif is_active is False:
+        clauses.append(f"{active_field} = false")
+    if gdpr_consent is True:
+        clauses.append("GDPR_Consent__c = true")
+    elif gdpr_consent is False:
+        clauses.append("GDPR_Consent__c = false")
+    if has_paid is True:
+        clauses.append("Paid_At__c != null")
+    elif has_paid is False:
+        clauses.append("Paid_At__c = null")
+    if company_id is not None:
+        clauses.append(f"AccountId = '{escape_soql(company_id)}'")
+
+    where_clause = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+    soql = (
+        f"SELECT Id, Name, Email, {active_field}, LastModifiedDate "
+        f"FROM Contact "
+        f"{where_clause}"
+        f"ORDER BY LastModifiedDate DESC "
+        f"LIMIT {safe_limit} OFFSET {offset}"
+    )
+    result = await client.query(soql)
+    return [
+        ContactSummary(
+            id=r["Id"],
+            name=r.get("Name") or "",
+            email=r.get("Email"),
+            is_active=coerce_is_active(r.get(active_field)),
+            last_modified_at=parse_sf_datetime(r.get("LastModifiedDate")),
+        )
+        for r in result.get("records", [])
+    ]
+
+
+async def get_contact_by_badge(
+    client: CrmSalesforceClient,
+    badge_code: str,
+) -> ContactDetails | None:
+    """Fetch full contact details by badge code (Badge_Code__c).
+
+    Designed for event gate scanning: given a scanned badge code, returns who
+    the badge belongs to. Returns None when the badge code is not found.
+    """
+    stripped = badge_code.strip()
+    if not stripped:
+        raise ValueError("badge_code must not be empty")
+
+    active_field = await client.get_contact_active_field()
+    soql = (
+        f"SELECT {_contact_detail_fields(active_field)} "
+        f"FROM Contact WHERE Badge_Code__c = '{escape_soql(stripped)}' LIMIT 1"
+    )
+    result = await client.query(soql)
+    records = result.get("records", [])
+    if not records:
+        return None
+    return _map_contact_record(records[0], active_field)

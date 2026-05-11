@@ -727,3 +727,261 @@ async def test_contact_activity_summary_zero_counts(fake_sf_client) -> None:
     assert result.active == 0
     assert result.inactive == 0
     assert result.by_role == {"VISITOR": 0, "COMPANY_CONTACT": 0, "UNKNOWN": 0}
+
+
+# ---- get_contact_by_email ----
+
+
+@pytest.mark.asyncio
+async def test_get_contact_by_email_rejects_empty(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="email must not be empty"):
+        await contact_tools.get_contact_by_email(fake_sf_client, email="   ")
+
+
+@pytest.mark.asyncio
+async def test_get_contact_by_email_returns_none_when_not_found(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    result = await contact_tools.get_contact_by_email(fake_sf_client, email="unknown@example.com")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_contact_by_email_soql_uses_email_field(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.get_contact_by_email(fake_sf_client, email="alice@example.com")
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "Email = 'alice@example.com'" in soql
+
+
+@pytest.mark.asyncio
+async def test_get_contact_by_email_returns_details(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "003gK00000Con1AAA",
+                "Name": "Alice Example",
+                "FirstName": "Alice",
+                "LastName": "Example",
+                "Email": "alice@example.com",
+                "Phone": None,
+                "IsActive__c": True,
+                "Role__c": "VISITOR",
+                "GDPR_Consent__c": True,
+                "Paid_At__c": None,
+                "AccountId": None,
+                "Account": None,
+                "CreatedDate": "2026-01-01T10:00:00.000+0000",
+                "LastModifiedDate": "2026-05-01T10:00:00.000+0000",
+            }
+        ]
+    )
+
+    result = await contact_tools.get_contact_by_email(fake_sf_client, email="alice@example.com")
+
+    assert result is not None
+    assert result.id == "003gK00000Con1AAA"
+    assert result.email == "alice@example.com"
+    assert result.role == "VISITOR"
+    assert result.gdpr_consent is True
+
+
+@pytest.mark.asyncio
+async def test_get_contact_by_email_strips_whitespace(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.get_contact_by_email(fake_sf_client, email="  alice@example.com  ")
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "Email = 'alice@example.com'" in soql
+
+
+# ---- list_contacts ----
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_rejects_bad_limit(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="limit must be at least 1"):
+        await contact_tools.list_contacts(fake_sf_client, limit=0)
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_rejects_negative_offset(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="offset must be non-negative"):
+        await contact_tools.list_contacts(fake_sf_client, offset=-1)
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_rejects_invalid_role(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="role must be one of"):
+        await contact_tools.list_contacts(fake_sf_client, role="JANITOR")
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_role_filter_in_soql(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.list_contacts(fake_sf_client, role="VISITOR")
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "Role__c = 'VISITOR'" in soql
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_gdpr_filter_in_soql(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.list_contacts(fake_sf_client, gdpr_consent=True)
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "GDPR_Consent__c = true" in soql
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_has_paid_filter_in_soql(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.list_contacts(fake_sf_client, has_paid=False)
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "Paid_At__c = null" in soql
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_company_id_filter_in_soql(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.list_contacts(fake_sf_client, company_id="001gK00000ExistAA")
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "AccountId = '001gK00000ExistAA'" in soql
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_pagination_in_soql(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.list_contacts(fake_sf_client, limit=10, offset=30)
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "LIMIT 10" in soql
+    assert "OFFSET 30" in soql
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_caps_limit(fake_sf_client, make_query_response) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.list_contacts(fake_sf_client, limit=999)
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "LIMIT 100" in soql
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_returns_summaries(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "003gK00000Con1AAA",
+                "Name": "Alice",
+                "Email": "alice@example.com",
+                "IsActive__c": True,
+                "LastModifiedDate": "2026-05-01T10:00:00.000+0000",
+            }
+        ]
+    )
+
+    results = await contact_tools.list_contacts(fake_sf_client)
+
+    assert len(results) == 1
+    assert results[0].id == "003gK00000Con1AAA"
+    assert results[0].name == "Alice"
+
+
+# ---- get_contact_by_badge ----
+
+
+@pytest.mark.asyncio
+async def test_get_contact_by_badge_rejects_empty(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="badge_code must not be empty"):
+        await contact_tools.get_contact_by_badge(fake_sf_client, badge_code="  ")
+
+
+@pytest.mark.asyncio
+async def test_get_contact_by_badge_returns_none_when_not_found(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    result = await contact_tools.get_contact_by_badge(fake_sf_client, badge_code="BADGE-XYZ")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_contact_by_badge_soql_uses_badge_field(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.get_contact_by_badge(fake_sf_client, badge_code="BADGE-123")
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "Badge_Code__c = 'BADGE-123'" in soql
+
+
+@pytest.mark.asyncio
+async def test_get_contact_by_badge_returns_details(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "003gK00000Con1AAA",
+                "Name": "Bob Badge",
+                "FirstName": "Bob",
+                "LastName": "Badge",
+                "Email": "bob@example.com",
+                "Phone": None,
+                "IsActive__c": True,
+                "Role__c": "VISITOR",
+                "GDPR_Consent__c": False,
+                "Paid_At__c": "2026-04-01T09:00:00.000+0000",
+                "AccountId": None,
+                "Account": None,
+                "CreatedDate": "2026-01-01T10:00:00.000+0000",
+                "LastModifiedDate": "2026-05-01T10:00:00.000+0000",
+            }
+        ]
+    )
+
+    result = await contact_tools.get_contact_by_badge(fake_sf_client, badge_code="BADGE-123")
+
+    assert result is not None
+    assert result.id == "003gK00000Con1AAA"
+    assert result.name == "Bob Badge"
+    assert result.paid_at is not None

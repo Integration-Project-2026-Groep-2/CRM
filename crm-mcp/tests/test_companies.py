@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 from crm_mcp.tools import companies as company_tools
@@ -675,3 +677,57 @@ async def test_delete_company_accepts_sf_id(
     assert result.id == "11111111-2222-4333-8444-555555555555"
     broadcast = fake_publisher.publish_company_deactivated.call_args.args[0]
     assert broadcast["id"] == "11111111-2222-4333-8444-555555555555"
+
+
+# ---- count_companies ----
+
+
+@pytest.mark.asyncio
+async def test_count_companies_rejects_invalid_country(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="ISO 3166-1 alpha-2"):
+        await company_tools.count_companies(fake_sf_client, country="BEL")
+
+
+@pytest.mark.asyncio
+async def test_count_companies_happy_path(fake_sf_client) -> None:
+    fake_sf_client.query_count = AsyncMock(side_effect=[50, 40])
+
+    result = await company_tools.count_companies(fake_sf_client)
+
+    assert result.total == 50
+    assert result.active == 40
+    assert result.inactive == 10
+
+
+@pytest.mark.asyncio
+async def test_count_companies_no_active_field_returns_zeros(fake_sf_client) -> None:
+    fake_sf_client.get_account_active_field.return_value = None
+    fake_sf_client.query_count = AsyncMock(return_value=25)
+
+    result = await company_tools.count_companies(fake_sf_client)
+
+    assert result.total == 25
+    assert result.active == 0
+    assert result.inactive == 0
+    fake_sf_client.query_count.assert_awaited_once()  # only total query fired
+
+
+@pytest.mark.asyncio
+async def test_count_companies_country_filter_in_soql(fake_sf_client) -> None:
+    fake_sf_client.query_count = AsyncMock(side_effect=[10, 8])
+
+    result = await company_tools.count_companies(fake_sf_client, country="be")
+
+    # Both queries must contain the country filter normalised to uppercase
+    calls = fake_sf_client.query_count.await_args_list
+    assert all("BillingCountryCode = 'BE'" in call.args[0] for call in calls)
+    assert result.total == 10
+
+
+@pytest.mark.asyncio
+async def test_count_companies_fires_two_queries_with_active_field(fake_sf_client) -> None:
+    fake_sf_client.query_count = AsyncMock(return_value=0)
+
+    await company_tools.count_companies(fake_sf_client)
+
+    assert fake_sf_client.query_count.await_count == 2

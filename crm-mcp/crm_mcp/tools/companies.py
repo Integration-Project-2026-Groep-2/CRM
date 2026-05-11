@@ -13,6 +13,7 @@ anti-corruption layer between Salesforce internals and the AI master agent.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -27,7 +28,7 @@ from .._util import (
 )
 from ..escaping import escape_soql, escape_soql_like
 from ..messaging import MessagePublisher
-from ..models import CompanyContactSummary, CompanyDetails, CompanySummary, MutationResult
+from ..models import CompanyContactSummary, CompanyCount, CompanyDetails, CompanySummary, MutationResult
 from ..salesforce import CrmSalesforceClient
 
 logger = logging.getLogger(__name__)
@@ -295,6 +296,50 @@ async def list_companies(
         )
         for r in result.get("records", [])
     ]
+
+
+async def count_companies(
+    client: CrmSalesforceClient,
+    country: str | None = None,
+) -> CompanyCount:
+    """Aggregate company counts with active/inactive breakdown.
+
+    Optional `country` filter (ISO 3166-1 alpha-2, e.g. 'BE'). When the org
+    has no Account active-flag field, `active` and `inactive` are both 0.
+    """
+    if country is not None:
+        if len(country) != 2 or not country.isalpha():
+            raise ValueError("country must be ISO 3166-1 alpha-2 (2 letters, e.g. 'BE')")
+        country = country.upper()
+
+    active_field = await client.get_account_active_field()
+    country_field = await client.get_account_country_field()
+
+    base_clauses: list[str] = []
+    if country is not None:
+        base_clauses.append(f"{country_field} = '{escape_soql(country)}'")
+    base_where = " AND ".join(base_clauses)
+
+    total_soql = "SELECT COUNT() FROM Account"
+    if base_where:
+        total_soql += f" WHERE {base_where}"
+
+    if active_field:
+        active_clause = f"{active_field} = true"
+        if base_where:
+            active_clause = f"{base_where} AND {active_clause}"
+        active_soql = f"SELECT COUNT() FROM Account WHERE {active_clause}"
+        total, active_count = await asyncio.gather(
+            client.query_count(total_soql),
+            client.query_count(active_soql),
+        )
+        inactive_count = max(total - active_count, 0)
+    else:
+        total = await client.query_count(total_soql)
+        active_count = 0
+        inactive_count = 0
+
+    return CompanyCount(total=total, active=active_count, inactive=inactive_count)
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@ on the configured transport (stdio for local dev, streamable-http for the
 deployed agent).
 
 Tools split:
-    - 11 read-only (search/get/count/recent/list/analytics on Contact, Company, Registration)
+    - 15 read-only (search/get/count/recent/list/analytics on Contact, Company, Registration)
     - 6 write (create/update/delete on Contact, Company) — R2 actionable agent
 
 Write-tools require a bound `MessagePublisher` (see `messaging.py`) to broadcast
@@ -31,6 +31,7 @@ from .config import SalesforceConfig, ServerConfig
 from .messaging import MessagePublisher
 from .models import (
     CompanyContactSummary,
+    CompanyCount,
     CompanyDetails,
     CompanySummary,
     ContactActivitySummary,
@@ -335,6 +336,60 @@ def build_server(
             is_active=is_active,
             limit=limit,
         )
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def get_contact_by_email(email: str) -> ContactDetails | None:
+        """Retrieve full contact details by exact email address.
+
+        Returns None if no contact has that email. Use `search_contact` for
+        fuzzy matching; this tool requires an exact address match.
+        """
+        return await contact_tools.get_contact_by_email(client, email=email)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def list_contacts(
+        role: str | None = None,
+        is_active: bool | None = True,
+        gdpr_consent: bool | None = None,
+        has_paid: bool | None = None,
+        company_id: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[ContactSummary]:
+        """Browse contacts with optional filters and pagination.
+
+        Filters: role (Role__c), is_active (default active-only), gdpr_consent,
+        has_paid (Paid_At__c != null), company_id (Salesforce AccountId 001-prefix).
+        Results ordered by LastModifiedDate DESC. limit capped at 100.
+        """
+        return await contact_tools.list_contacts(
+            client,
+            role=role,
+            is_active=is_active,
+            gdpr_consent=gdpr_consent,
+            has_paid=has_paid,
+            company_id=company_id,
+            limit=limit,
+            offset=offset,
+        )
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def count_companies(country: str | None = None) -> CompanyCount:
+        """Count companies with active/inactive breakdown.
+
+        Optional `country` filter (ISO 3166-1 alpha-2, e.g. 'BE'). When the
+        org has no Account active-flag field, active and inactive are both 0.
+        """
+        return await company_tools.count_companies(client, country=country)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def get_contact_by_badge(badge_code: str) -> ContactDetails | None:
+        """Retrieve full contact details by badge code (Badge_Code__c).
+
+        Designed for event gate scanning: given a scanned badge code, returns
+        who the badge belongs to. Returns None if no contact has that badge.
+        """
+        return await contact_tools.get_contact_by_badge(client, badge_code=badge_code)
 
     # ---- Write tools (R2) — each broadcasts an XSD-validated event ----
 
