@@ -786,6 +786,11 @@ async def list_contacts(
     elif has_paid is False:
         clauses.append("Paid_At__c = null")
     if company_id is not None:
+        if not is_valid_sf_id(company_id, prefix="001"):
+            raise ValueError(
+                "company_id must be a 15- or 18-char Salesforce AccountId "
+                "starting with '001'"
+            )
         clauses.append(f"AccountId = '{escape_soql(company_id)}'")
 
     where_clause = f"WHERE {' AND '.join(clauses)} " if clauses else ""

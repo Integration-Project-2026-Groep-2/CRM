@@ -912,10 +912,16 @@ async def test_list_contacts_company_id_filter_in_soql(
 ) -> None:
     fake_sf_client.query.return_value = make_query_response([])
 
-    await contact_tools.list_contacts(fake_sf_client, company_id="001gK00000ExistAA")
+    await contact_tools.list_contacts(fake_sf_client, company_id="001gK00000ExistAAA")
 
     soql = fake_sf_client.query.await_args.args[0]
-    assert "AccountId = '001gK00000ExistAA'" in soql
+    assert "AccountId = '001gK00000ExistAAA'" in soql
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_rejects_invalid_company_id(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="company_id must be a 15- or 18-char"):
+        await contact_tools.list_contacts(fake_sf_client, company_id="not-an-id")
 
 
 @pytest.mark.asyncio
