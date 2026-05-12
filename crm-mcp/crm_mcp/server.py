@@ -5,7 +5,7 @@ on the configured transport (stdio for local dev, streamable-http for the
 deployed agent).
 
 Tools split:
-    - 7 read-only (search/get/count/recent on Contact, Company, Registration)
+    - 17 read-only (search/get/count/recent/list/analytics on Contact, Company, Registration)
     - 6 write (create/update/delete on Contact, Company) — R2 actionable agent
 
 Write-tools require a bound `MessagePublisher` (see `messaging.py`) to broadcast
@@ -30,8 +30,12 @@ from starlette.responses import JSONResponse
 from .config import SalesforceConfig, ServerConfig
 from .messaging import MessagePublisher
 from .models import (
+    CompanyContactSummary,
+    CompanyCount,
     CompanyDetails,
+    CompanyProfile,
     CompanySummary,
+    ContactActivitySummary,
     ContactCount,
     ContactDetails,
     ContactSummary,
@@ -127,12 +131,15 @@ def build_server(
             "CRM team's MCP server for the Desideriushogeschool ShiftFestival "
             "integration project. Provides read access to Salesforce Contacts, "
             "Accounts (Companies), and Session_Registration__c records, plus "
-            "CRUD write-tools for Contact and Company. Write operations broadcast "
-            "XSD-validated XML on RabbitMQ (`crm.user.*` / `crm.company.*`) so all "
-            "consumer teams (Mailing, Facturatie, Kassa, Planning, IoT, "
-            "Controlroom) stay in sync — there is no team-private state. "
-            "Write-tools are annotated `requires_approval=true` and should be "
-            "routed through approval-flow by MCP-clients."
+            "CRUD write-tools for Contact and Company. Read-only tools include "
+            "search, get, count, recent, list (all companies), analytics dashboard, "
+            "company-contact relationships, and orphan-contact detection. "
+            "Write operations broadcast XSD-validated XML on RabbitMQ "
+            "(`crm.user.*` / `crm.company.*`) so all consumer teams (Mailing, "
+            "Facturatie, Kassa, Planning, IoT, Controlroom) stay in sync — "
+            "there is no team-private state. Write-tools are annotated "
+            "`requires_approval=true` and should be routed through approval-flow "
+            "by MCP-clients."
         ),
         host=host,
         port=port,
@@ -253,6 +260,166 @@ def build_server(
             is_active=is_active,
             paid=paid,
             since=since,
+        )
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def get_company_contacts(
+        vat_number: str | None = None,
+        company_id: str | None = None,
+        role: str | None = None,
+        is_active: bool | None = True,
+        limit: int = 20,
+    ) -> list[CompanyContactSummary]:
+        """List all contacts linked to a specific company.
+
+        Provide one of `vat_number` or `company_id` (VAT is the canonical key).
+        Optional filters: `role` (Role__c picklist value), `is_active` (default:
+        active only). Returns lightweight contact summaries with role, active flag,
+        and payment status. limit is capped at 100.
+        """
+        return await company_tools.get_company_contacts(
+            client,
+            vat_number=vat_number,
+            company_id=company_id,
+            role=role,
+            is_active=is_active,
+            limit=limit,
+        )
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def list_companies(
+        country: str | None = None,
+        is_active: bool | None = True,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[CompanySummary]:
+        """Browse all companies with optional filters and pagination.
+
+        Unlike `search_company` (which requires a query string), this tool
+        enumerates companies. Supports pagination via `offset`. `country` is ISO
+        3166-1 alpha-2 (e.g. 'BE'). `is_active` defaults to active-only. Results
+        are ordered by Name. limit is capped at 100.
+        """
+        return await company_tools.list_companies(
+            client,
+            country=country,
+            is_active=is_active,
+            limit=limit,
+            offset=offset,
+        )
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def contact_activity_summary() -> ContactActivitySummary:
+        """Analytics dashboard: total, active/inactive split, GDPR consent, paid,
+        per-role breakdown, new contacts last 7 days, modified last 24 hours.
+
+        All counts are computed in a single parallel batch of SOQL queries.
+        No parameters — returns org-wide aggregate. Use `count_contacts` for
+        filtered breakdowns.
+        """
+        return await contact_tools.contact_activity_summary(client)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def find_contacts_without_company(
+        role: str | None = None,
+        is_active: bool | None = True,
+        limit: int = 20,
+    ) -> list[ContactSummary]:
+        """Find contacts that have no linked company (AccountId is null).
+
+        Useful for data-quality checks and onboarding flows. Optional filters:
+        `role` (Role__c picklist value), `is_active` (default: active only).
+        Results ordered by LastModifiedDate DESC. limit is capped at 100.
+        """
+        return await contact_tools.find_contacts_without_company(
+            client,
+            role=role,
+            is_active=is_active,
+            limit=limit,
+        )
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def get_contact_by_email(email: str) -> ContactDetails | None:
+        """Retrieve full contact details by exact email address.
+
+        Returns None if no contact has that email. Use `search_contact` for
+        fuzzy matching; this tool requires an exact address match.
+        """
+        return await contact_tools.get_contact_by_email(client, email=email)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def list_contacts(
+        role: str | None = None,
+        is_active: bool | None = True,
+        gdpr_consent: bool | None = None,
+        has_paid: bool | None = None,
+        company_id: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[ContactSummary]:
+        """Browse contacts with optional filters and pagination.
+
+        Filters: role (Role__c), is_active (default active-only), gdpr_consent,
+        has_paid (Paid_At__c != null), company_id (Salesforce AccountId 001-prefix).
+        Results ordered by LastModifiedDate DESC. limit capped at 100.
+        """
+        return await contact_tools.list_contacts(
+            client,
+            role=role,
+            is_active=is_active,
+            gdpr_consent=gdpr_consent,
+            has_paid=has_paid,
+            company_id=company_id,
+            limit=limit,
+            offset=offset,
+        )
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def count_companies(country: str | None = None) -> CompanyCount:
+        """Count companies with active/inactive breakdown.
+
+        Optional `country` filter (ISO 3166-1 alpha-2, e.g. 'BE'). When the
+        org has no Account active-flag field, active and inactive are both 0.
+        """
+        return await company_tools.count_companies(client, country=country)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def get_contact_by_badge(badge_code: str) -> ContactDetails | None:
+        """Retrieve full contact details by badge code (Badge_Code__c).
+
+        Designed for event gate scanning: given a scanned badge code, returns
+        who the badge belongs to. Returns None if no contact has that badge.
+        """
+        return await contact_tools.get_contact_by_badge(client, badge_code=badge_code)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def get_recent_companies(
+        mode: Literal["created", "modified"] = "modified",
+        since_hours: int = 24,
+        limit: int = 20,
+    ) -> list[CompanySummary]:
+        """Recently created or modified companies within `since_hours` hours.
+
+        `mode`: 'created' filters on CreatedDate, 'modified' (default) on
+        LastModifiedDate. since_hours capped at 168 (one week), limit at 100.
+        """
+        return await company_tools.get_recent_companies(
+            client, mode=mode, since_hours=since_hours, limit=limit
+        )
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def get_company_profile(
+        vat_number: str | None = None,
+        company_id: str | None = None,
+    ) -> CompanyProfile | None:
+        """Full company details plus linked contact count in one call.
+
+        Provide one of `vat_number` (canonical key) or `company_id`. Returns
+        None if not found. Combines the data from `get_company` and the contact
+        count into a single response, avoiding two separate tool calls.
+        """
+        return await company_tools.get_company_profile(
+            client, vat_number=vat_number, company_id=company_id
         )
 
     # ---- Write tools (R2) — each broadcasts an XSD-validated event ----

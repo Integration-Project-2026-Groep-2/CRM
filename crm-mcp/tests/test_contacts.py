@@ -577,3 +577,459 @@ async def test_update_contact_company_id_accepts_sf_id(
     payload = fake_sf_client.update_contact.await_args.args[1]
     # Stored value is canonical CRM_ID__c UUID, not the input SF Id.
     assert payload["Company_ID__c"] == "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+
+
+# ---- find_contacts_without_company ----
+
+
+@pytest.mark.asyncio
+async def test_find_contacts_without_company_rejects_bad_limit(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="limit must be at least 1"):
+        await contact_tools.find_contacts_without_company(fake_sf_client, limit=0)
+
+
+@pytest.mark.asyncio
+async def test_find_contacts_without_company_rejects_invalid_role(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="role must be one of"):
+        await contact_tools.find_contacts_without_company(fake_sf_client, role="JANITOR")
+
+
+@pytest.mark.asyncio
+async def test_find_contacts_without_company_soql_has_account_id_null(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.find_contacts_without_company(fake_sf_client)
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "AccountId = null" in soql
+
+
+@pytest.mark.asyncio
+async def test_find_contacts_without_company_role_filter_in_soql(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.find_contacts_without_company(fake_sf_client, role="VISITOR")
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "Role__c = 'VISITOR'" in soql
+
+
+@pytest.mark.asyncio
+async def test_find_contacts_without_company_caps_limit(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.find_contacts_without_company(fake_sf_client, limit=999)
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "LIMIT 100" in soql
+
+
+@pytest.mark.asyncio
+async def test_find_contacts_without_company_returns_summaries(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "003gK00000OrphanAAA",
+                "Name": "Orphan User",
+                "Email": "orphan@example.com",
+                "IsActive__c": True,
+                "LastModifiedDate": "2026-05-10T09:00:00.000+0000",
+            }
+        ]
+    )
+
+    results = await contact_tools.find_contacts_without_company(fake_sf_client)
+
+    assert len(results) == 1
+    assert results[0].id == "003gK00000OrphanAAA"
+    assert results[0].name == "Orphan User"
+    assert results[0].is_active is True
+
+
+@pytest.mark.asyncio
+async def test_find_contacts_without_company_empty_returns_list(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    results = await contact_tools.find_contacts_without_company(fake_sf_client)
+
+    assert results == []
+
+
+# ---- contact_activity_summary ----
+
+
+# Roles ordered alphabetically by `sorted(VALID_USER_ROLES)` — must match the
+# tool's per-role gather order so AsyncMock.side_effect lines up.
+_ROLE_ORDER = ["ADMIN", "BAR_STAFF", "CASHIER", "COMPANY_CONTACT", "EVENT_MANAGER", "SPEAKER", "VISITOR"]
+_QUERY_COUNT = 6 + len(_ROLE_ORDER)  # 6 base + 7 roles = 13
+
+
+@pytest.mark.asyncio
+async def test_contact_activity_summary_happy_path(fake_sf_client) -> None:
+    # 13 parallel query_count calls: 6 base then 7 roles in _ROLE_ORDER.
+    # base:  total=200, active=150, gdpr=180, paid=60, new_7d=10, modified_24h=25
+    # roles: ADMIN=5, BAR_STAFF=8, CASHIER=10, COMPANY_CONTACT=55,
+    #        EVENT_MANAGER=3, SPEAKER=2, VISITOR=110  (sum=193 → UNKNOWN=7)
+    fake_sf_client.query_count = AsyncMock(
+        side_effect=[200, 150, 180, 60, 10, 25, 5, 8, 10, 55, 3, 2, 110]
+    )
+
+    result = await contact_tools.contact_activity_summary(fake_sf_client)
+
+    assert result.total == 200
+    assert result.active == 150
+    assert result.inactive == 50
+    assert result.gdpr_consent == 180
+    assert result.paid == 60
+    assert result.new_last_7_days == 10
+    assert result.modified_last_24h == 25
+    assert result.by_role["VISITOR"] == 110
+    assert result.by_role["COMPANY_CONTACT"] == 55
+    assert result.by_role["SPEAKER"] == 2
+    assert result.by_role["EVENT_MANAGER"] == 3
+    assert result.by_role["CASHIER"] == 10
+    assert result.by_role["BAR_STAFF"] == 8
+    assert result.by_role["ADMIN"] == 5
+    assert result.by_role["UNKNOWN"] == 7
+
+
+@pytest.mark.asyncio
+async def test_contact_activity_summary_computes_inactive_correctly(
+    fake_sf_client,
+) -> None:
+    fake_sf_client.query_count = AsyncMock(
+        side_effect=[100, 70, 90, 40, 5, 12] + [0] * len(_ROLE_ORDER)
+    )
+
+    result = await contact_tools.contact_activity_summary(fake_sf_client)
+
+    assert result.inactive == 30  # 100 - 70
+
+
+@pytest.mark.asyncio
+async def test_contact_activity_summary_computes_unknown_role(fake_sf_client) -> None:
+    # Roles cover 90 out of 100 → UNKNOWN must be 10. Distribute 90 across the
+    # 7 roles so the assertion holds regardless of how individual roles split.
+    role_counts = [0, 0, 0, 30, 0, 0, 60]  # COMPANY_CONTACT=30, VISITOR=60
+    fake_sf_client.query_count = AsyncMock(
+        side_effect=[100, 80, 90, 50, 3, 8] + role_counts
+    )
+
+    result = await contact_tools.contact_activity_summary(fake_sf_client)
+
+    assert result.by_role["UNKNOWN"] == 10
+
+
+@pytest.mark.asyncio
+async def test_contact_activity_summary_fires_13_queries(fake_sf_client) -> None:
+    fake_sf_client.query_count = AsyncMock(return_value=0)
+
+    await contact_tools.contact_activity_summary(fake_sf_client)
+
+    assert fake_sf_client.query_count.await_count == _QUERY_COUNT
+
+
+@pytest.mark.asyncio
+async def test_contact_activity_summary_zero_counts(fake_sf_client) -> None:
+    fake_sf_client.query_count = AsyncMock(return_value=0)
+
+    result = await contact_tools.contact_activity_summary(fake_sf_client)
+
+    assert result.total == 0
+    assert result.active == 0
+    assert result.inactive == 0
+    assert result.by_role == {role: 0 for role in _ROLE_ORDER} | {"UNKNOWN": 0}
+
+
+@pytest.mark.asyncio
+async def test_contact_activity_summary_breaks_down_all_valid_roles(
+    fake_sf_client,
+) -> None:
+    """A SPEAKER (or any non-VISITOR/COMPANY_CONTACT role) must land in its
+    own bucket, not in UNKNOWN. This guards against regressions to the old
+    two-role-only behaviour where these roles were silently mis-aggregated.
+    """
+    # base: total=10, others zero; only SPEAKER has 4, rest 0 → UNKNOWN=6
+    role_counts = [0, 0, 0, 0, 0, 4, 0]  # SPEAKER=4 at index 5 in _ROLE_ORDER
+    fake_sf_client.query_count = AsyncMock(
+        side_effect=[10, 0, 0, 0, 0, 0] + role_counts
+    )
+
+    result = await contact_tools.contact_activity_summary(fake_sf_client)
+
+    assert result.by_role["SPEAKER"] == 4
+    assert result.by_role["UNKNOWN"] == 6  # 10 total - 4 SPEAKER
+
+
+# ---- get_contact_by_email ----
+
+
+@pytest.mark.asyncio
+async def test_get_contact_by_email_rejects_empty(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="email must not be empty"):
+        await contact_tools.get_contact_by_email(fake_sf_client, email="   ")
+
+
+@pytest.mark.asyncio
+async def test_get_contact_by_email_returns_none_when_not_found(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    result = await contact_tools.get_contact_by_email(fake_sf_client, email="unknown@example.com")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_contact_by_email_soql_uses_email_field(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.get_contact_by_email(fake_sf_client, email="alice@example.com")
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "Email = 'alice@example.com'" in soql
+
+
+@pytest.mark.asyncio
+async def test_get_contact_by_email_returns_details(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "003gK00000Con1AAA",
+                "Name": "Alice Example",
+                "FirstName": "Alice",
+                "LastName": "Example",
+                "Email": "alice@example.com",
+                "Phone": None,
+                "IsActive__c": True,
+                "Role__c": "VISITOR",
+                "GDPR_Consent__c": True,
+                "Paid_At__c": None,
+                "AccountId": None,
+                "Account": None,
+                "CreatedDate": "2026-01-01T10:00:00.000+0000",
+                "LastModifiedDate": "2026-05-01T10:00:00.000+0000",
+            }
+        ]
+    )
+
+    result = await contact_tools.get_contact_by_email(fake_sf_client, email="alice@example.com")
+
+    assert result is not None
+    assert result.id == "003gK00000Con1AAA"
+    assert result.email == "alice@example.com"
+    assert result.role == "VISITOR"
+    assert result.gdpr_consent is True
+
+
+@pytest.mark.asyncio
+async def test_get_contact_by_email_strips_whitespace(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.get_contact_by_email(fake_sf_client, email="  alice@example.com  ")
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "Email = 'alice@example.com'" in soql
+
+
+# ---- list_contacts ----
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_rejects_bad_limit(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="limit must be at least 1"):
+        await contact_tools.list_contacts(fake_sf_client, limit=0)
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_rejects_negative_offset(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="offset must be non-negative"):
+        await contact_tools.list_contacts(fake_sf_client, offset=-1)
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_rejects_invalid_role(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="role must be one of"):
+        await contact_tools.list_contacts(fake_sf_client, role="JANITOR")
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_role_filter_in_soql(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.list_contacts(fake_sf_client, role="VISITOR")
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "Role__c = 'VISITOR'" in soql
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_gdpr_filter_in_soql(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.list_contacts(fake_sf_client, gdpr_consent=True)
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "GDPR_Consent__c = true" in soql
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_has_paid_filter_in_soql(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.list_contacts(fake_sf_client, has_paid=False)
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "Paid_At__c = null" in soql
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_company_id_filter_in_soql(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.list_contacts(fake_sf_client, company_id="001gK00000ExistAAA")
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "AccountId = '001gK00000ExistAAA'" in soql
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_rejects_invalid_company_id(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="company_id must be a 15- or 18-char"):
+        await contact_tools.list_contacts(fake_sf_client, company_id="not-an-id")
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_pagination_in_soql(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.list_contacts(fake_sf_client, limit=10, offset=30)
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "LIMIT 10" in soql
+    assert "OFFSET 30" in soql
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_caps_limit(fake_sf_client, make_query_response) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.list_contacts(fake_sf_client, limit=999)
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "LIMIT 100" in soql
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_returns_summaries(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "003gK00000Con1AAA",
+                "Name": "Alice",
+                "Email": "alice@example.com",
+                "IsActive__c": True,
+                "LastModifiedDate": "2026-05-01T10:00:00.000+0000",
+            }
+        ]
+    )
+
+    results = await contact_tools.list_contacts(fake_sf_client)
+
+    assert len(results) == 1
+    assert results[0].id == "003gK00000Con1AAA"
+    assert results[0].name == "Alice"
+
+
+# ---- get_contact_by_badge ----
+
+
+@pytest.mark.asyncio
+async def test_get_contact_by_badge_rejects_empty(fake_sf_client) -> None:
+    with pytest.raises(ValueError, match="badge_code must not be empty"):
+        await contact_tools.get_contact_by_badge(fake_sf_client, badge_code="  ")
+
+
+@pytest.mark.asyncio
+async def test_get_contact_by_badge_returns_none_when_not_found(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    result = await contact_tools.get_contact_by_badge(fake_sf_client, badge_code="BADGE-XYZ")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_contact_by_badge_soql_uses_badge_field(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response([])
+
+    await contact_tools.get_contact_by_badge(fake_sf_client, badge_code="BADGE-123")
+
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "Badge_Code__c = 'BADGE-123'" in soql
+
+
+@pytest.mark.asyncio
+async def test_get_contact_by_badge_returns_details(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "003gK00000Con1AAA",
+                "Name": "Bob Badge",
+                "FirstName": "Bob",
+                "LastName": "Badge",
+                "Email": "bob@example.com",
+                "Phone": None,
+                "IsActive__c": True,
+                "Role__c": "VISITOR",
+                "GDPR_Consent__c": False,
+                "Paid_At__c": "2026-04-01T09:00:00.000+0000",
+                "AccountId": None,
+                "Account": None,
+                "CreatedDate": "2026-01-01T10:00:00.000+0000",
+                "LastModifiedDate": "2026-05-01T10:00:00.000+0000",
+            }
+        ]
+    )
+
+    result = await contact_tools.get_contact_by_badge(fake_sf_client, badge_code="BADGE-123")
+
+    assert result is not None
+    assert result.id == "003gK00000Con1AAA"
+    assert result.name == "Bob Badge"
+    assert result.paid_at is not None

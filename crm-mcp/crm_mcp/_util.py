@@ -10,6 +10,10 @@ from typing import Any
 _VAT_PATTERN = re.compile(r"^[A-Z]{2}[A-Z0-9]{2,12}$")
 _SF_ID_CHARSET = re.compile(r"^[A-Za-z0-9]+$")
 _KNOWN_ROLES = frozenset({"VISITOR", "COMPANY_CONTACT"})
+VALID_USER_ROLES: frozenset[str] = frozenset({
+    "VISITOR", "COMPANY_CONTACT", "SPEAKER",
+    "EVENT_MANAGER", "CASHIER", "BAR_STAFF", "ADMIN",
+})
 
 
 def parse_sf_datetime(raw: str | None) -> datetime | None:

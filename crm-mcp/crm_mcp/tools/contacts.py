@@ -9,12 +9,14 @@ so all consumer teams stay in sync — see `R2_PLANNING_AGENTIC_GATEWAY.md` and
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from .._util import (
+    VALID_USER_ROLES,
     coerce_is_active,
     coerce_known_role,
     format_soql_datetime,
@@ -23,7 +25,7 @@ from .._util import (
 )
 from ..escaping import escape_soql, escape_soql_like
 from ..messaging import MessagePublisher
-from ..models import ContactCount, ContactDetails, ContactSummary, MutationResult
+from ..models import ContactActivitySummary, ContactCount, ContactDetails, ContactSummary, MutationResult
 from ..salesforce import CrmSalesforceClient
 
 logger = logging.getLogger(__name__)
@@ -35,17 +37,7 @@ _MAX_LIMIT_RECENT = 100
 _MAX_RECENT_HOURS = 168  # one week
 _CRM_ID_FIELD = "CRM_ID__c"
 
-_VALID_USER_ROLES: frozenset[str] = frozenset(
-    {
-        "VISITOR",
-        "COMPANY_CONTACT",
-        "SPEAKER",
-        "EVENT_MANAGER",
-        "CASHIER",
-        "BAR_STAFF",
-        "ADMIN",
-    }
-)
+_VALID_USER_ROLES = VALID_USER_ROLES
 
 
 def _now_iso() -> str:
@@ -153,32 +145,8 @@ async def search_contact(
     ]
 
 
-async def get_contact(
-    client: CrmSalesforceClient,
-    contact_id: str,
-) -> ContactDetails | None:
-    """Fetch full contact details by exact Salesforce Contact Id (prefix '003')."""
-    if not is_valid_sf_id(contact_id, prefix="003"):
-        raise ValueError(
-            "contact_id must be a 15- or 18-character alphanumeric "
-            "Salesforce Id starting with '003'"
-        )
-
-    safe_id = escape_soql(contact_id)
-    active_field = await client.get_contact_active_field()
-
-    soql = (
-        f"SELECT Id, Name, FirstName, LastName, Email, Phone, "
-        f"{active_field}, Role__c, GDPR_Consent__c, Paid_At__c, "
-        f"AccountId, Account.Name, CreatedDate, LastModifiedDate "
-        f"FROM Contact WHERE Id = '{safe_id}' LIMIT 1"
-    )
-    result = await client.query(soql)
-    records = result.get("records", [])
-    if not records:
-        return None
-
-    r = records[0]
+def _map_contact_record(r: dict[str, Any], active_field: str) -> ContactDetails:
+    """Map a raw Salesforce Contact record to ContactDetails."""
     account = r.get("Account") if isinstance(r.get("Account"), dict) else None
     now = datetime.now(timezone.utc)
     return ContactDetails(
@@ -197,6 +165,40 @@ async def get_contact(
         created_at=parse_sf_datetime(r.get("CreatedDate")) or now,
         last_modified_at=parse_sf_datetime(r.get("LastModifiedDate")) or now,
     )
+
+
+def _contact_detail_fields(active_field: str) -> str:
+    """SOQL field list shared by all ContactDetails lookups."""
+    return (
+        f"Id, Name, FirstName, LastName, Email, Phone, "
+        f"{active_field}, Role__c, GDPR_Consent__c, Paid_At__c, "
+        f"AccountId, Account.Name, CreatedDate, LastModifiedDate"
+    )
+
+
+async def get_contact(
+    client: CrmSalesforceClient,
+    contact_id: str,
+) -> ContactDetails | None:
+    """Fetch full contact details by exact Salesforce Contact Id (prefix '003')."""
+    if not is_valid_sf_id(contact_id, prefix="003"):
+        raise ValueError(
+            "contact_id must be a 15- or 18-character alphanumeric "
+            "Salesforce Id starting with '003'"
+        )
+
+    safe_id = escape_soql(contact_id)
+    active_field = await client.get_contact_active_field()
+
+    soql = (
+        f"SELECT {_contact_detail_fields(active_field)} "
+        f"FROM Contact WHERE Id = '{safe_id}' LIMIT 1"
+    )
+    result = await client.query(soql)
+    records = result.get("records", [])
+    if not records:
+        return None
+    return _map_contact_record(records[0], active_field)
 
 
 async def count_contacts(
@@ -604,3 +606,234 @@ async def delete_contact(
         routing_key="crm.user.deactivated",
         salesforce_id=sf_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# Additional read-only analytics tools
+# ---------------------------------------------------------------------------
+
+_MAX_LIMIT_ORPHAN_CONTACTS = 100
+
+
+async def find_contacts_without_company(
+    client: CrmSalesforceClient,
+    role: str | None = None,
+    is_active: bool | None = True,
+    limit: int = 20,
+) -> list[ContactSummary]:
+    """Find contacts that have no linked company (AccountId is null).
+
+    Useful for data-quality checks and onboarding flows. Optional filters:
+    `role` (Role__c picklist value), `is_active` (default: active only).
+    Results ordered by LastModifiedDate DESC.
+    """
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+    if role is not None and role not in _VALID_USER_ROLES:
+        raise ValueError(f"role must be one of {sorted(_VALID_USER_ROLES)}")
+
+    safe_limit = min(limit, _MAX_LIMIT_ORPHAN_CONTACTS)
+    active_field = await client.get_contact_active_field()
+
+    clauses: list[str] = ["AccountId = null"]
+    if role is not None:
+        clauses.append(f"Role__c = '{escape_soql(role)}'")
+    if is_active is True:
+        clauses.append(f"{active_field} = true")
+    elif is_active is False:
+        clauses.append(f"{active_field} = false")
+
+    where = " AND ".join(clauses)
+    soql = (
+        f"SELECT Id, Name, Email, {active_field}, LastModifiedDate "
+        f"FROM Contact "
+        f"WHERE {where} "
+        f"ORDER BY LastModifiedDate DESC "
+        f"LIMIT {safe_limit}"
+    )
+    result = await client.query(soql)
+    return [
+        ContactSummary(
+            id=r["Id"],
+            name=r.get("Name") or "",
+            email=r.get("Email"),
+            is_active=coerce_is_active(r.get(active_field)),
+            last_modified_at=parse_sf_datetime(r.get("LastModifiedDate")),
+        )
+        for r in result.get("records", [])
+    ]
+
+
+async def contact_activity_summary(
+    client: CrmSalesforceClient,
+) -> ContactActivitySummary:
+    """Org-wide analytics dashboard.
+
+    Returns total, active/inactive split, GDPR consent count, paid count,
+    per-role breakdown across all `VALID_USER_ROLES` plus an `UNKNOWN`
+    bucket for legacy or null Role__c values, new contacts in the last
+    7 days, and contacts modified in the last 24 hours. All counts are
+    computed in a single parallel batch of SOQL queries.
+    """
+    active_field = await client.get_contact_active_field()
+    now = datetime.now(timezone.utc)
+    threshold_7d = format_soql_datetime(now - timedelta(days=7))
+    threshold_24h = format_soql_datetime(now - timedelta(hours=24))
+
+    sorted_roles = sorted(_VALID_USER_ROLES)
+    base_queries = [
+        client.query_count("SELECT COUNT() FROM Contact"),
+        client.query_count(f"SELECT COUNT() FROM Contact WHERE {active_field} = true"),
+        client.query_count("SELECT COUNT() FROM Contact WHERE GDPR_Consent__c = true"),
+        client.query_count("SELECT COUNT() FROM Contact WHERE Paid_At__c != null"),
+        client.query_count(
+            f"SELECT COUNT() FROM Contact WHERE CreatedDate >= {threshold_7d}"
+        ),
+        client.query_count(
+            f"SELECT COUNT() FROM Contact WHERE LastModifiedDate >= {threshold_24h}"
+        ),
+    ]
+    role_queries = [
+        client.query_count(f"SELECT COUNT() FROM Contact WHERE Role__c = '{role}'")
+        for role in sorted_roles
+    ]
+    results = await asyncio.gather(*base_queries, *role_queries)
+    total, active_count, gdpr_count, paid_count, new_7d, modified_24h = results[: len(base_queries)]
+    role_counts = dict(zip(sorted_roles, results[len(base_queries) :]))
+
+    inactive_count = max(total - active_count, 0)
+    unknown_role_count = max(total - sum(role_counts.values()), 0)
+    by_role: dict[str, int] = {**role_counts, "UNKNOWN": unknown_role_count}
+
+    return ContactActivitySummary(
+        total=total,
+        active=active_count,
+        inactive=inactive_count,
+        gdpr_consent=gdpr_count,
+        paid=paid_count,
+        by_role=by_role,
+        new_last_7_days=new_7d,
+        modified_last_24h=modified_24h,
+    )
+
+
+async def get_contact_by_email(
+    client: CrmSalesforceClient,
+    email: str,
+) -> ContactDetails | None:
+    """Fetch full contact details by exact email address.
+
+    Returns None when no contact has that email. Use `search_contact` for
+    fuzzy matching; this function requires an exact address.
+    """
+    stripped = email.strip()
+    if not stripped:
+        raise ValueError("email must not be empty")
+
+    active_field = await client.get_contact_active_field()
+    soql = (
+        f"SELECT {_contact_detail_fields(active_field)} "
+        f"FROM Contact WHERE Email = '{escape_soql(stripped)}' LIMIT 1"
+    )
+    result = await client.query(soql)
+    records = result.get("records", [])
+    if not records:
+        return None
+    return _map_contact_record(records[0], active_field)
+
+
+_MAX_LIMIT_LIST_CONTACTS = 100
+
+
+async def list_contacts(
+    client: CrmSalesforceClient,
+    role: str | None = None,
+    is_active: bool | None = True,
+    gdpr_consent: bool | None = None,
+    has_paid: bool | None = None,
+    company_id: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[ContactSummary]:
+    """Browse contacts with optional filters and pagination.
+
+    `company_id` accepts a Salesforce AccountId (001-prefix) to filter contacts
+    linked to a specific company. Results are ordered by LastModifiedDate DESC.
+    """
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+    if offset < 0:
+        raise ValueError("offset must be non-negative")
+    if role is not None and role not in _VALID_USER_ROLES:
+        raise ValueError(f"role must be one of {sorted(_VALID_USER_ROLES)}")
+
+    safe_limit = min(limit, _MAX_LIMIT_LIST_CONTACTS)
+    active_field = await client.get_contact_active_field()
+
+    clauses: list[str] = []
+    if role is not None:
+        clauses.append(f"Role__c = '{escape_soql(role)}'")
+    if is_active is True:
+        clauses.append(f"{active_field} = true")
+    elif is_active is False:
+        clauses.append(f"{active_field} = false")
+    if gdpr_consent is True:
+        clauses.append("GDPR_Consent__c = true")
+    elif gdpr_consent is False:
+        clauses.append("GDPR_Consent__c = false")
+    if has_paid is True:
+        clauses.append("Paid_At__c != null")
+    elif has_paid is False:
+        clauses.append("Paid_At__c = null")
+    if company_id is not None:
+        if not is_valid_sf_id(company_id, prefix="001"):
+            raise ValueError(
+                "company_id must be a 15- or 18-char Salesforce AccountId "
+                "starting with '001'"
+            )
+        clauses.append(f"AccountId = '{escape_soql(company_id)}'")
+
+    where_clause = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+    soql = (
+        f"SELECT Id, Name, Email, {active_field}, LastModifiedDate "
+        f"FROM Contact "
+        f"{where_clause}"
+        f"ORDER BY LastModifiedDate DESC "
+        f"LIMIT {safe_limit} OFFSET {offset}"
+    )
+    result = await client.query(soql)
+    return [
+        ContactSummary(
+            id=r["Id"],
+            name=r.get("Name") or "",
+            email=r.get("Email"),
+            is_active=coerce_is_active(r.get(active_field)),
+            last_modified_at=parse_sf_datetime(r.get("LastModifiedDate")),
+        )
+        for r in result.get("records", [])
+    ]
+
+
+async def get_contact_by_badge(
+    client: CrmSalesforceClient,
+    badge_code: str,
+) -> ContactDetails | None:
+    """Fetch full contact details by badge code (Badge_Code__c).
+
+    Designed for event gate scanning: given a scanned badge code, returns who
+    the badge belongs to. Returns None when the badge code is not found.
+    """
+    stripped = badge_code.strip()
+    if not stripped:
+        raise ValueError("badge_code must not be empty")
+
+    active_field = await client.get_contact_active_field()
+    soql = (
+        f"SELECT {_contact_detail_fields(active_field)} "
+        f"FROM Contact WHERE Badge_Code__c = '{escape_soql(stripped)}' LIMIT 1"
+    )
+    result = await client.query(soql)
+    records = result.get("records", [])
+    if not records:
+        return None
+    return _map_contact_record(records[0], active_field)
