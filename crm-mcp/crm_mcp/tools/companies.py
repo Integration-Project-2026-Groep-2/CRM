@@ -373,34 +373,18 @@ async def get_company_profile(
             f"WHERE VAT_Number__c = '{escape_soql(vat_number)}' LIMIT 1"
         )
     else:
-        if company_id is None or not (
-            is_valid_sf_id(company_id, prefix="001")
-            or len(company_id) == 36  # UUID format check (rough)
-        ):
-            # Accept either UUID or 001-prefix SF Id via _resolve helper
-            pass
-        # Use the existing resolve helper to support both UUID and SF Id
         record = await _resolve_account_record(client, company_id)  # type: ignore[arg-type]
         if record is None:
             return None
         sf_id = str(record["Id"])
-        # Re-fetch with full field list
         soql = f"SELECT {fields} FROM Account WHERE Id = '{escape_soql(sf_id)}' LIMIT 1"
 
-    if vat_number is not None:
-        result = await client.query(soql)
-        records = result.get("records", [])
-        if not records:
-            return None
-        r = records[0]
-        sf_id = str(r["Id"])
-    else:
-        result = await client.query(soql)
-        records = result.get("records", [])
-        if not records:
-            return None
-        r = records[0]
-        sf_id = str(r["Id"])
+    result = await client.query(soql)
+    records = result.get("records", [])
+    if not records:
+        return None
+    r = records[0]
+    sf_id = str(r["Id"])
 
     contact_count = await client.query_count(
         f"SELECT COUNT() FROM Contact WHERE AccountId = '{escape_soql(sf_id)}'"
