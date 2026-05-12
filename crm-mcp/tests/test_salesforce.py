@@ -257,3 +257,122 @@ def test_resolve_timeout_seconds_falls_back_on_garbage(monkeypatch) -> None:
 
     monkeypatch.setenv("CRM_MCP_SF_TIMEOUT_SECONDS", "not-a-number")
     assert _resolve_timeout_seconds() == _DEFAULT_SF_HTTP_TIMEOUT_SECONDS
+
+
+# ---- A3: per-call retry on transient errors ----
+
+
+@pytest.mark.asyncio
+async def test_query_retries_on_rate_limit_then_succeeds(monkeypatch) -> None:
+    """A3 — REQUEST_LIMIT_EXCEEDED gets retried; eventual success returns the
+    data so the LLM never sees the transient SF blip.
+    """
+    from simple_salesforce.exceptions import SalesforceGeneralError
+
+    client = CrmSalesforceClient(_make_config())
+    sf_mock = MagicMock()
+    rate_limit_exc = SalesforceGeneralError(
+        "url", 403, "Contact",
+        [{"errorCode": "REQUEST_LIMIT_EXCEEDED", "message": "TotalRequests Limit exceeded."}],
+    )
+    expected = {"records": [{"Id": "003zzz"}], "totalSize": 1}
+    sf_mock.query.side_effect = [rate_limit_exc, rate_limit_exc, expected]
+
+    monkeypatch.setattr("asyncio.sleep", _instant_sleep)
+    with patch.object(client, "_safe_connect", return_value=sf_mock):
+        result = await client.query("SELECT Id FROM Contact LIMIT 1")
+
+    assert result is expected
+    assert sf_mock.query.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_query_retries_on_connection_error(monkeypatch) -> None:
+    """A3 — `requests.ConnectionError` is treated as transient."""
+    import requests
+
+    client = CrmSalesforceClient(_make_config())
+    sf_mock = MagicMock()
+    expected = {"records": [], "totalSize": 0}
+    sf_mock.query.side_effect = [
+        requests.exceptions.ConnectionError("peer reset"),
+        expected,
+    ]
+
+    monkeypatch.setattr("asyncio.sleep", _instant_sleep)
+    with patch.object(client, "_safe_connect", return_value=sf_mock):
+        result = await client.query("SELECT Id FROM Contact LIMIT 1")
+
+    assert result is expected
+    assert sf_mock.query.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_query_gives_up_after_max_attempts(monkeypatch) -> None:
+    """A3 — after _CALL_RETRY_ATTEMPTS failures, the last error propagates."""
+    import requests
+
+    client = CrmSalesforceClient(_make_config())
+    sf_mock = MagicMock()
+    sf_mock.query.side_effect = requests.exceptions.ConnectionError("permanent")
+
+    monkeypatch.setattr("asyncio.sleep", _instant_sleep)
+    with patch.object(client, "_safe_connect", return_value=sf_mock):
+        with pytest.raises(requests.exceptions.ConnectionError, match="permanent"):
+            await client.query("SELECT Id FROM Contact LIMIT 1")
+
+    from crm_mcp.salesforce import _CALL_RETRY_ATTEMPTS
+    assert sf_mock.query.call_count == _CALL_RETRY_ATTEMPTS
+
+
+@pytest.mark.asyncio
+async def test_query_does_not_retry_on_validation_error(monkeypatch) -> None:
+    """A3 — deterministic errors (malformed SOQL etc.) propagate on first try.
+    Retrying them wastes API quota and delays the real failure.
+    """
+    from simple_salesforce.exceptions import SalesforceMalformedRequest
+
+    client = CrmSalesforceClient(_make_config())
+    sf_mock = MagicMock()
+    sf_mock.query.side_effect = SalesforceMalformedRequest(
+        "url", 400, "Contact",
+        [{"errorCode": "INVALID_FIELD", "message": "No such column 'BadField'"}],
+    )
+
+    monkeypatch.setattr("asyncio.sleep", _instant_sleep)
+    with patch.object(client, "_safe_connect", return_value=sf_mock):
+        with pytest.raises(SalesforceMalformedRequest):
+            await client.query("SELECT BadField FROM Contact")
+
+    assert sf_mock.query.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_create_contact_retry_preserves_duplicate_value_error_mapping(
+    monkeypatch,
+) -> None:
+    """A3 — the SELECT-then-INSERT race safety-net (duplicate → ValueError)
+    must still fire after the retry-wrapper. DUPLICATE_VALUE is not transient.
+    """
+    from simple_salesforce.exceptions import SalesforceMalformedRequest
+
+    client = CrmSalesforceClient(_make_config())
+    sf_mock = MagicMock()
+    sf_mock.Contact.create.side_effect = SalesforceMalformedRequest(
+        "url", 400, "Contact",
+        [{"errorCode": "DUPLICATE_VALUE", "message": "duplicate value"}],
+    )
+
+    monkeypatch.setattr("asyncio.sleep", _instant_sleep)
+    with (
+        patch.object(client, "_safe_connect", return_value=sf_mock),
+        pytest.raises(ValueError, match="duplicate"),
+    ):
+        await client.create_contact({"Email": "x@y.z"})
+
+    assert sf_mock.Contact.create.call_count == 1
+
+
+async def _instant_sleep(seconds: float) -> None:
+    """Test helper: replace asyncio.sleep with no-op to keep retry-tests fast."""
+    return None
