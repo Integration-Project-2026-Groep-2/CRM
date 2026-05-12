@@ -50,7 +50,31 @@ class ContactCount(BaseModel):
     by_active: dict[str, int] = Field(description="Counts split into 'active' and 'inactive'")
 
 
+class ContactActivitySummary(BaseModel):
+    """Org-wide analytics dashboard for all contacts."""
+
+    total: int
+    active: int
+    inactive: int
+    gdpr_consent: int = Field(description="Contacts with GDPR_Consent__c = true")
+    paid: int = Field(description="Contacts with Paid_At__c != null")
+    by_role: dict[str, int] = Field(description="Counts per Role__c value plus 'UNKNOWN'")
+    new_last_7_days: int = Field(description="Contacts created in the last 7 days")
+    modified_last_24h: int = Field(description="Contacts modified in the last 24 hours")
+
+
 # ---- Company-related (Salesforce Account) ----
+
+
+class CompanyContactSummary(BaseModel):
+    """A contact linked to a specific company, with role and payment info."""
+
+    id: str = Field(description="Salesforce 18-character Contact Id")
+    name: str
+    email: str | None = None
+    role: str | None = Field(default=None, description="Role__c picklist value")
+    is_active: bool
+    paid_at: datetime | None = None
 
 
 class CompanySummary(BaseModel):
@@ -58,6 +82,7 @@ class CompanySummary(BaseModel):
     name: str
     vat_number: str | None = None
     country: str | None = Field(default=None, description="ISO 3166-1 alpha-2")
+    last_modified_at: datetime | None = None
 
 
 class CompanyDetails(BaseModel):
@@ -71,6 +96,30 @@ class CompanyDetails(BaseModel):
     is_active: bool = True
     created_at: datetime
     last_modified_at: datetime
+
+
+class CompanyCount(BaseModel):
+    """Aggregated company counts with active/inactive breakdown."""
+
+    total: int
+    active: int
+    inactive: int
+
+
+class CompanyProfile(BaseModel):
+    """Full company details with linked contact count."""
+
+    id: str
+    name: str
+    vat_number: str | None = None
+    street: str | None = None
+    city: str | None = None
+    postal_code: str | None = None
+    country: str | None = Field(default=None, description="ISO 3166-1 alpha-2")
+    is_active: bool = True
+    created_at: datetime
+    last_modified_at: datetime
+    contact_count: int = Field(description="Number of contacts linked via AccountId")
 
 
 # ---- Registration-related (Session_Registration__c) ----
