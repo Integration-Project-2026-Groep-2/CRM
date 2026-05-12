@@ -9,6 +9,7 @@ so all consumer teams stay in sync — see `R2_PLANNING_AGENTIC_GATEWAY.md` and
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -669,27 +670,18 @@ async def contact_activity_summary(
     """Org-wide analytics dashboard.
 
     Returns total, active/inactive split, GDPR consent count, paid count,
-    per-role breakdown, new contacts in the last 7 days, and contacts
-    modified in the last 24 hours. All counts are computed in a single
-    parallel batch of SOQL queries.
+    per-role breakdown across all `VALID_USER_ROLES` plus an `UNKNOWN`
+    bucket for legacy or null Role__c values, new contacts in the last
+    7 days, and contacts modified in the last 24 hours. All counts are
+    computed in a single parallel batch of SOQL queries.
     """
-    import asyncio
-
     active_field = await client.get_contact_active_field()
     now = datetime.now(timezone.utc)
     threshold_7d = format_soql_datetime(now - timedelta(days=7))
     threshold_24h = format_soql_datetime(now - timedelta(hours=24))
 
-    (
-        total,
-        active_count,
-        gdpr_count,
-        paid_count,
-        new_7d,
-        modified_24h,
-        visitor_count,
-        company_contact_count,
-    ) = await asyncio.gather(
+    sorted_roles = sorted(_VALID_USER_ROLES)
+    base_queries = [
         client.query_count("SELECT COUNT() FROM Contact"),
         client.query_count(f"SELECT COUNT() FROM Contact WHERE {active_field} = true"),
         client.query_count("SELECT COUNT() FROM Contact WHERE GDPR_Consent__c = true"),
@@ -700,14 +692,18 @@ async def contact_activity_summary(
         client.query_count(
             f"SELECT COUNT() FROM Contact WHERE LastModifiedDate >= {threshold_24h}"
         ),
-        client.query_count("SELECT COUNT() FROM Contact WHERE Role__c = 'VISITOR'"),
-        client.query_count(
-            "SELECT COUNT() FROM Contact WHERE Role__c = 'COMPANY_CONTACT'"
-        ),
-    )
+    ]
+    role_queries = [
+        client.query_count(f"SELECT COUNT() FROM Contact WHERE Role__c = '{role}'")
+        for role in sorted_roles
+    ]
+    results = await asyncio.gather(*base_queries, *role_queries)
+    total, active_count, gdpr_count, paid_count, new_7d, modified_24h = results[: len(base_queries)]
+    role_counts = dict(zip(sorted_roles, results[len(base_queries) :]))
 
     inactive_count = max(total - active_count, 0)
-    unknown_role_count = max(total - visitor_count - company_contact_count, 0)
+    unknown_role_count = max(total - sum(role_counts.values()), 0)
+    by_role: dict[str, int] = {**role_counts, "UNKNOWN": unknown_role_count}
 
     return ContactActivitySummary(
         total=total,
@@ -715,11 +711,7 @@ async def contact_activity_summary(
         inactive=inactive_count,
         gdpr_consent=gdpr_count,
         paid=paid_count,
-        by_role={
-            "VISITOR": visitor_count,
-            "COMPANY_CONTACT": company_contact_count,
-            "UNKNOWN": unknown_role_count,
-        },
+        by_role=by_role,
         new_last_7_days=new_7d,
         modified_last_24h=modified_24h,
     )
