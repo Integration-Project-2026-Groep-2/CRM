@@ -47,15 +47,53 @@ _receiver_alive_event: threading.Event = threading.Event()
 async def _supervised_task(
     name: str,
     task_factory: Callable[[], Awaitable[None]],
+    *,
+    restartable: bool = False,
+    max_restarts: int = 10,
+    base_delay: float = 1.0,
+    max_delay: float = 60.0,
 ) -> None:
-    """Run a task with crash isolation — log errors, never propagate."""
-    try:
-        await task_factory()
-    except Exception:
-        logger.exception("Task '%s' crashed", name)
-    finally:
-        if name == "receiver":
-            _receiver_alive_event.clear()
+    """Run a task with crash isolation — log errors, never propagate.
+
+    When `restartable=True` the task is retried on failure with exponential
+    backoff (1, 2, 4, ..., capped at `max_delay`) up to `max_restarts` times.
+    `asyncio.CancelledError` is always re-raised so graceful shutdown still
+    works. Use restartable=True only for tasks without their own outer loop —
+    heartbeat/status_check already retry internally.
+    """
+    if not restartable:
+        try:
+            await task_factory()
+        except Exception:
+            logger.exception("Task '%s' crashed", name)
+        finally:
+            if name == "receiver":
+                _receiver_alive_event.clear()
+        return
+
+    delay = base_delay
+    attempt = 0
+    while True:
+        try:
+            await task_factory()
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if name == "receiver":
+                _receiver_alive_event.clear()
+            logger.exception(
+                "Task '%s' crashed (attempt %d/%d)", name, attempt + 1, max_restarts + 1,
+            )
+            if attempt >= max_restarts:
+                logger.error(
+                    "Task '%s' exceeded max_restarts=%d; giving up — operator must restart container",
+                    name, max_restarts,
+                )
+                return
+            attempt += 1
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, max_delay)
 
 
 def _install_signal_handlers(loop: asyncio.AbstractEventLoop, shutdown_event: asyncio.Event) -> None:
@@ -109,8 +147,8 @@ async def main() -> None:
     tasks = [
         asyncio.create_task(_supervised_task("heartbeat", lambda: run_heartbeat(connection, config))),
         asyncio.create_task(_supervised_task("status_check", lambda: run_status_check(connection, config))),
-        asyncio.create_task(_supervised_task("receiver", lambda: run_receiver(connection, config, shutdown_event, started_event=_receiver_alive_event))),
-        asyncio.create_task(_supervised_task("polling", lambda: run_polling(config, shutdown_event))),
+        asyncio.create_task(_supervised_task("receiver", lambda: run_receiver(connection, config, shutdown_event, started_event=_receiver_alive_event), restartable=True)),
+        asyncio.create_task(_supervised_task("polling", lambda: run_polling(config, shutdown_event), restartable=True)),
         asyncio.create_task(_supervised_task("log_publisher", lambda: run_log_publisher(connection, config.log_service_name))),
     ]
     try:

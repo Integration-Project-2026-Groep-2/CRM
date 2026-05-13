@@ -128,3 +128,109 @@ async def test_supervised_task_does_not_touch_event_for_non_receiver() -> None:
     # Heartbeat crashes must not flip receiver-aliveness.
     assert _receiver_alive_event.is_set()
     _receiver_alive_event.clear()
+
+
+@pytest.mark.asyncio
+async def test_supervised_task_retries_on_crash_when_restartable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src import main as main_module
+    from src.main import _supervised_task
+
+    calls = {"n": 0}
+
+    async def flaky_factory() -> None:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("transient")
+
+    # Skip the real exponential sleep so the test is fast.
+    monkeypatch.setattr(main_module.asyncio, "sleep", AsyncMock())
+
+    await _supervised_task(
+        "polling", flaky_factory, restartable=True, max_restarts=5,
+    )
+
+    assert calls["n"] == 3
+
+
+@pytest.mark.asyncio
+async def test_supervised_task_gives_up_after_max_restarts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src import main as main_module
+    from src.main import _supervised_task
+
+    calls = {"n": 0}
+
+    async def always_fails() -> None:
+        calls["n"] += 1
+        raise RuntimeError("permanent")
+
+    monkeypatch.setattr(main_module.asyncio, "sleep", AsyncMock())
+
+    await _supervised_task(
+        "polling", always_fails, restartable=True, max_restarts=3,
+    )
+
+    # Initial attempt + max_restarts retries = max_restarts + 1 attempts total.
+    assert calls["n"] == 4
+
+
+@pytest.mark.asyncio
+async def test_supervised_task_propagates_cancelled_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src import main as main_module
+    from src.main import _supervised_task
+
+    async def cancelled_factory() -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(main_module.asyncio, "sleep", AsyncMock())
+
+    with pytest.raises(asyncio.CancelledError):
+        await _supervised_task(
+            "polling", cancelled_factory, restartable=True, max_restarts=3,
+        )
+
+
+@pytest.mark.asyncio
+async def test_supervised_task_returns_when_factory_completes() -> None:
+    from src.main import _supervised_task
+
+    calls = {"n": 0}
+
+    async def one_shot() -> None:
+        calls["n"] += 1
+
+    await _supervised_task("log_publisher", one_shot, restartable=True, max_restarts=5)
+
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_supervised_task_clears_event_each_crash_when_restartable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src import main as main_module
+    from src.main import _receiver_alive_event, _supervised_task
+
+    monkeypatch.setattr(main_module.asyncio, "sleep", AsyncMock())
+
+    crash_count = {"n": 0}
+
+    async def factory_that_sets_then_crashes() -> None:
+        _receiver_alive_event.set()
+        crash_count["n"] += 1
+        if crash_count["n"] < 2:
+            raise RuntimeError("transient")
+
+    await _supervised_task(
+        "receiver", factory_that_sets_then_crashes,
+        restartable=True, max_restarts=5,
+    )
+
+    assert crash_count["n"] == 2
+    assert _receiver_alive_event.is_set()
+    _receiver_alive_event.clear()
