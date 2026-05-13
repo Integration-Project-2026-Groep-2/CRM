@@ -5509,6 +5509,56 @@ class TestRunReceiver:
 
         channel.set_qos.assert_awaited_once_with(prefetch_count=10)
 
+    @pytest.mark.asyncio
+    async def test_run_receiver_sets_started_event_after_consume(self):
+        """Liveness signal must flip once queue.consume has been wired."""
+        import threading as _threading
+
+        sf_client = MagicMock()
+        channel = AsyncMock(name="channel")
+        connection = AsyncMock(name="connection")
+        connection.channel = AsyncMock(return_value=channel)
+
+        async def _declare_queue(*_args, **_kwargs):  # noqa: ARG001
+            return AsyncMock()
+
+        started = _threading.Event()
+
+        with (
+            patch("src.receiver.get_salesforce_client", return_value=sf_client),
+            patch("src.receiver._declare_and_bind", AsyncMock(side_effect=_declare_queue)),
+            patch("src.receiver._ensure_dlq_topology", AsyncMock()),
+            patch("src.receiver.asyncio.Future", side_effect=RuntimeError("stop receiver loop")),
+        ):
+            from src.receiver import run_receiver
+
+            with pytest.raises(RuntimeError, match="stop receiver loop"):
+                await run_receiver(connection, MagicMock(), started_event=started)
+
+        assert started.is_set()
+
+    @pytest.mark.asyncio
+    async def test_run_receiver_does_not_set_event_if_none(self):
+        """Passing started_event=None must not raise even though we don't set."""
+        sf_client = MagicMock()
+        channel = AsyncMock(name="channel")
+        connection = AsyncMock(name="connection")
+        connection.channel = AsyncMock(return_value=channel)
+
+        async def _declare_queue(*_args, **_kwargs):  # noqa: ARG001
+            return AsyncMock()
+
+        with (
+            patch("src.receiver.get_salesforce_client", return_value=sf_client),
+            patch("src.receiver._declare_and_bind", AsyncMock(side_effect=_declare_queue)),
+            patch("src.receiver._ensure_dlq_topology", AsyncMock()),
+            patch("src.receiver.asyncio.Future", side_effect=RuntimeError("stop receiver loop")),
+        ):
+            from src.receiver import run_receiver
+
+            with pytest.raises(RuntimeError, match="stop receiver loop"):
+                await run_receiver(connection, MagicMock())
+
 
 class TestWrapHandler:
     """Safety guarantees of the receiver's centralized failure-routing wrapper."""

@@ -39,13 +39,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def start_mcp_thread() -> tuple[threading.Thread, MessagePublisher] | None:
+def start_mcp_thread(
+    receiver_alive_event: threading.Event | None = None,
+) -> tuple[threading.Thread, MessagePublisher] | None:
     """Start the CRM MCP server in a daemon thread.
 
     Returns (thread, publisher) on success, or None if the package is not
     installed or if `CRM_MCP_ENABLED=false`. The caller must call
     `publisher.bind(loop, sender_module)` after `sender.init(channel)` succeeds
     on the main loop, or write-tools will raise `PublisherNotReadyError`.
+
+    `receiver_alive_event` is forwarded to `build_server` so `/health` flips
+    to 503 when the asyncio receiver task dies.
 
     Errors during MCP startup or runtime are logged but never propagate -- the
     main asyncio loop keeps running even if MCP fails (defense-in-depth: a
@@ -73,7 +78,11 @@ def start_mcp_thread() -> tuple[threading.Thread, MessagePublisher] | None:
     client = CrmSalesforceClient(sf_config)
     publisher = MessagePublisher()
     mcp = build_server(
-        client, publisher, host=server_config.host, port=server_config.port
+        client,
+        publisher,
+        host=server_config.host,
+        port=server_config.port,
+        receiver_alive_event=receiver_alive_event,
     )
 
     def _run() -> None:

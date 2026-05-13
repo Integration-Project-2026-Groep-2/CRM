@@ -71,7 +71,11 @@ async def test_health_endpoint_returns_200_when_all_ok(
     assert response.status_code == 200
     body = json.loads(bytes(response.body).decode())
     assert body["status"] == "ok"
-    assert body["checks"] == {"sf_connected": True, "publisher_bound": True}
+    assert body["checks"] == {
+        "sf_connected": True,
+        "publisher_bound": True,
+        "receiver_alive": True,
+    }
     assert "uptime_seconds" in body
 
 
@@ -91,6 +95,7 @@ async def test_health_endpoint_returns_503_when_sf_down(
     assert body["status"] == "degraded"
     assert body["checks"]["sf_connected"] is False
     assert body["checks"]["publisher_bound"] is True
+    assert body["checks"]["receiver_alive"] is True
 
 
 @pytest.mark.asyncio
@@ -109,6 +114,51 @@ async def test_health_endpoint_returns_503_when_publisher_unbound(
     assert body["status"] == "degraded"
     assert body["checks"]["sf_connected"] is True
     assert body["checks"]["publisher_bound"] is False
+    assert body["checks"]["receiver_alive"] is True
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_returns_503_when_receiver_dead(
+    fake_sf_client, fake_publisher, make_query_response
+) -> None:
+    """Cleared receiver_alive_event flips /health to 503 with `receiver_alive: false`."""
+    import threading as _threading
+
+    fake_sf_client.query.return_value = make_query_response([])
+    fake_publisher.is_ready.return_value = True
+
+    event = _threading.Event()  # explicitly NOT set
+    mcp = build_server(fake_sf_client, fake_publisher, receiver_alive_event=event)
+    handler = _find_health_handler(mcp)
+    response = await handler(_StubRequest())
+
+    assert response.status_code == 503
+    body = json.loads(bytes(response.body).decode())
+    assert body["checks"]["sf_connected"] is True
+    assert body["checks"]["publisher_bound"] is True
+    assert body["checks"]["receiver_alive"] is False
+
+
+def test_health_state_check_receiver_returns_true_when_no_event(
+    fake_sf_client, fake_publisher
+) -> None:
+    """Back-compat: no event passed → probe is disabled → reports alive."""
+    state = _HealthState(fake_sf_client, fake_publisher)
+
+    assert state.check_receiver() is True
+
+
+def test_health_state_check_receiver_reflects_event_state(
+    fake_sf_client, fake_publisher
+) -> None:
+    import threading as _threading
+
+    event = _threading.Event()
+    state = _HealthState(fake_sf_client, fake_publisher, receiver_alive_event=event)
+
+    assert state.check_receiver() is False
+    event.set()
+    assert state.check_receiver() is True
 
 
 def _uvicorn_access_record(request_line: str) -> logging.LogRecord:
