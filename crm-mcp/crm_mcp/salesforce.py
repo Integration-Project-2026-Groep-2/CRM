@@ -6,15 +6,38 @@ import asyncio
 import logging
 import os
 import random
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 import requests
 from simple_salesforce import Salesforce
-from simple_salesforce.exceptions import SalesforceMalformedRequest
+from simple_salesforce.exceptions import (
+    SalesforceExpiredSession,
+    SalesforceMalformedRequest,
+)
 
 from .config import SalesforceConfig
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+
+def _is_expired_session_error(exc: Exception) -> bool:
+    """Detect an expired Salesforce session — mirrors `src/salesforce/client.py`.
+
+    Replicated (not imported) so the crm-mcp package stays free of `src.*` deps.
+    Native 401 surfaces as `SalesforceExpiredSession`; 404 on /query carries
+    `INVALID_SESSION_ID` in the error-content list. Empty-body /query 404s
+    (transient SF edge) are not matched here — they propagate to the caller.
+    """
+    if isinstance(exc, SalesforceExpiredSession):
+        return True
+    content = getattr(exc, "content", None)
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("errorCode") == "INVALID_SESSION_ID":
+                return True
+    return "INVALID_SESSION_ID" in str(exc)
 
 
 # Without a default per-request timeout, `requests` blocks forever on stalled
@@ -89,6 +112,16 @@ class CrmSalesforceClient:
         """Lazily establish and cache a Salesforce session."""
         async with self._lock:
             return await self._ensure_sf_locked()
+
+    async def reset_session(self) -> None:
+        """Drop the cached SF instance so the next `connect()` re-authenticates.
+
+        Used by `sf_call` after detecting an expired-session error. Acquires
+        `self._lock` so concurrent retriers serialise — only one fresh login
+        will fire even when a burst of tool-calls all hit the same stale token.
+        """
+        async with self._lock:
+            self._sf = None
 
     async def _ensure_sf_locked(self) -> Salesforce:
         """Caller must already hold `self._lock`."""
@@ -314,3 +347,36 @@ _CONTACT_ACTIVE_NOT_FOUND_MSG = (
     "No supported Contact active field found. "
     "Expected one of: IsActive__c, Active__c, Is_Active__c."
 )
+
+
+async def sf_call(
+    client: "CrmSalesforceClient",
+    fn: Callable[[Salesforce], _T],
+    *,
+    max_reauths: int = 1,
+) -> _T:
+    """Run `fn(sf)` on a worker-thread; reauth + retry on expired session.
+
+    Mirrors `src/salesforce/client.py::sf_call` but works against the MCP's
+    `CrmSalesforceClient` instead of the receiver's `SalesforceSession`. After
+    `max_reauths` consecutive expired-session errors the original exception is
+    re-raised so the MCP tool surfaces it to the caller — the LLM can then
+    plan recovery (e.g. report degraded mode).
+
+    The lambda receives the Salesforce instance freshly on each attempt so a
+    reauth-swapped client is observed by the retry.
+    """
+    attempt = 0
+    while True:
+        sf = await client.connect()
+        try:
+            return await asyncio.to_thread(fn, sf)
+        except Exception as exc:
+            if not _is_expired_session_error(exc) or attempt >= max_reauths:
+                raise
+            attempt += 1
+            logger.warning(
+                "MCP Salesforce session expired; reauthenticating (attempt %d/%d)",
+                attempt, max_reauths,
+            )
+            await client.reset_session()

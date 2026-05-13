@@ -257,3 +257,94 @@ def test_resolve_timeout_seconds_falls_back_on_garbage(monkeypatch) -> None:
 
     monkeypatch.setenv("CRM_MCP_SF_TIMEOUT_SECONDS", "not-a-number")
     assert _resolve_timeout_seconds() == _DEFAULT_SF_HTTP_TIMEOUT_SECONDS
+
+
+class TestSfCall:
+    """sf_call wraps SF calls with one-shot reauth on expired session."""
+
+    @pytest.mark.asyncio
+    async def test_returns_result_on_first_try(self) -> None:
+        from crm_mcp.salesforce import sf_call
+
+        sf = MagicMock()
+        sf.query.return_value = {"records": [{"Id": "001"}]}
+
+        client = CrmSalesforceClient(_make_config())
+        client._sf = sf  # pre-cache to skip the login round-trip
+
+        result = await sf_call(client, lambda s: s.query("SELECT Id FROM Contact"))
+
+        assert result == {"records": [{"Id": "001"}]}
+        sf.query.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_reauths_once_on_expired_session(self) -> None:
+        from simple_salesforce.exceptions import SalesforceResourceNotFound
+
+        from crm_mcp.salesforce import sf_call
+
+        old_sf = MagicMock(name="old")
+        old_sf.query.side_effect = SalesforceResourceNotFound(
+            "https://example/query/", 404, "query",
+            [{"errorCode": "INVALID_SESSION_ID", "message": "Session expired"}],
+        )
+        new_sf = MagicMock(name="new")
+        new_sf.query.return_value = {"records": []}
+
+        client = CrmSalesforceClient(_make_config())
+        client._sf = old_sf
+        with patch.object(
+            CrmSalesforceClient, "_connect_with_retry", return_value=new_sf,
+        ):
+            result = await sf_call(client, lambda s: s.query("SELECT Id"))
+
+        assert result == {"records": []}
+        assert client._sf is new_sf
+        old_sf.query.assert_called_once()
+        new_sf.query.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_propagates_non_session_errors(self) -> None:
+        from crm_mcp.salesforce import sf_call
+
+        sf = MagicMock()
+        sf.query.side_effect = ValueError("not a session issue")
+
+        client = CrmSalesforceClient(_make_config())
+        client._sf = sf
+
+        with pytest.raises(ValueError, match="not a session issue"):
+            await sf_call(client, lambda s: s.query("any"))
+
+    @pytest.mark.asyncio
+    async def test_propagates_after_max_reauths_exhausted(self) -> None:
+        from simple_salesforce.exceptions import SalesforceResourceNotFound
+
+        from crm_mcp.salesforce import sf_call
+
+        expired = SalesforceResourceNotFound(
+            "https://example/query/", 404, "query",
+            [{"errorCode": "INVALID_SESSION_ID", "message": "expired"}],
+        )
+
+        sf_a = MagicMock()
+        sf_a.query.side_effect = expired
+        sf_b = MagicMock()
+        sf_b.query.side_effect = expired
+
+        client = CrmSalesforceClient(_make_config())
+        client._sf = sf_a
+        with patch.object(
+            CrmSalesforceClient, "_connect_with_retry", return_value=sf_b,
+        ):
+            with pytest.raises(SalesforceResourceNotFound):
+                await sf_call(client, lambda s: s.query("any"))
+
+    @pytest.mark.asyncio
+    async def test_reset_session_drops_cached_sf(self) -> None:
+        client = CrmSalesforceClient(_make_config())
+        client._sf = MagicMock()
+
+        await client.reset_session()
+
+        assert client._sf is None
