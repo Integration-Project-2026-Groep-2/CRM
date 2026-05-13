@@ -70,14 +70,10 @@ async def init(
 async def _declare_exchanges(
     channel: AbstractChannel,
 ) -> tuple[AbstractExchange, AbstractExchange, AbstractExchange]:
-    contact = await channel.declare_exchange(
-        "contact.topic", type=ExchangeType.TOPIC, durable=True,
-    )
-    conflict = await channel.declare_exchange(
-        "crm.user.conflict", type=ExchangeType.FANOUT, durable=True,
-    )
-    logs = await channel.declare_exchange(
-        "logs.direct", type=ExchangeType.DIRECT, durable=True,
+    contact, conflict, logs = await asyncio.gather(
+        channel.declare_exchange("contact.topic", type=ExchangeType.TOPIC, durable=True),
+        channel.declare_exchange("crm.user.conflict", type=ExchangeType.FANOUT, durable=True),
+        channel.declare_exchange("logs.direct", type=ExchangeType.DIRECT, durable=True),
     )
     return contact, conflict, logs
 
