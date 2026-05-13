@@ -27,6 +27,7 @@ _T = TypeVar("_T")
 def _is_expired_session_error(exc: Exception) -> bool:
     """Detect an expired Salesforce session — mirrors `src/salesforce/client.py`.
 
+    Keep in sync with src/salesforce/client.py::is_expired_session_error.
     Replicated (not imported) so the crm-mcp package stays free of `src.*` deps.
     Native 401 surfaces as `SalesforceExpiredSession`; 404 on /query carries
     `INVALID_SESSION_ID` in the error-content list. Empty-body /query 404s
@@ -53,6 +54,7 @@ _LOGIN_RETRY_MAX_DELAY = 8.0
 
 
 def _build_retry_adapter() -> HTTPAdapter:
+    # Keep in sync with src/salesforce/client.py::_build_retry_adapter.
     # 401 NOT in status_forcelist — expired-session must surface to sf_call
     # so reauth fires, not be swallowed by transparent retries. 502/503/504
     # are server-side errors (request not processed), safe to retry for POST.

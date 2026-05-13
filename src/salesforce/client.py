@@ -69,6 +69,7 @@ _SF_HTTP_TIMEOUT_SECONDS: float = 30.0
 
 
 def _build_retry_adapter() -> HTTPAdapter:
+    # Keep in sync with crm-mcp/crm_mcp/salesforce.py::_build_retry_adapter.
     # 401 is deliberately NOT in `status_forcelist` — expired-session must
     # surface to `sf_call` so reauth fires, not get swallowed by transparent
     # retries. 502/503/504 are server-errors where the server did not process
@@ -164,6 +165,8 @@ def is_rate_limit_error(exc: Exception) -> bool:
 
 def is_expired_session_error(exc: Exception) -> bool:
     """Detect an expired Salesforce session from the exception shape.
+
+    Keep in sync with crm-mcp/crm_mcp/salesforce.py::_is_expired_session_error.
 
     Catches two documented patterns:
     1. Native 401 → `SalesforceExpiredSession`.
