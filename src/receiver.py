@@ -224,10 +224,8 @@ async def run_receiver(
     graceful shutdown during a transient Salesforce outage does not hang the
     container.
 
-    `started_event` (threading.Event so it can be read from the MCP daemon
-    thread without a queue) is set once every queue.consume(...) is wired —
-    the MCP /health endpoint flips to 503 when this event is clear, so the
-    operator can distinguish "container up but receiver dead" from "healthy".
+    `started_event` is set after every queue.consume(...) is wired so the MCP
+    /health endpoint (in a daemon thread) can flip to 503 if this task dies.
     """
     channel = await connection.channel()
     # Bound per-consumer prefetch so one hung handler-task can't drain the

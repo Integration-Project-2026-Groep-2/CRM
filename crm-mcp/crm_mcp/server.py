@@ -80,10 +80,7 @@ class _HealthState:
     Salesforce API calls. Cache TTL is short on success (30s) and shorter on
     failure (5s) so recovery is detected quickly.
 
-    `receiver_alive_event` is a `threading.Event` shared with the main asyncio
-    loop's receiver task — it flips when the receiver dies so Docker's HTTP
-    healthcheck can detect "container up but processing nothing". `None`
-    disables the probe (back-compat with tests + the local dev path).
+    `receiver_alive_event=None` disables the receiver-aliveness probe.
     """
 
     def __init__(
@@ -124,7 +121,6 @@ class _HealthState:
         return self._publisher.is_ready()
 
     def check_receiver(self) -> bool:
-        # `None` => probe disabled (tests, dev) => report alive.
         if self._receiver_alive_event is None:
             return True
         return self._receiver_alive_event.is_set()

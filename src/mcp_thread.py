@@ -50,7 +50,7 @@ def start_mcp_thread(
     on the main loop, or write-tools will raise `PublisherNotReadyError`.
 
     `receiver_alive_event` is forwarded to `build_server` so `/health` flips
-    to 503 when the asyncio receiver task dies (`src/main.py` sets/clears it).
+    to 503 when the asyncio receiver task dies.
 
     Errors during MCP startup or runtime are logged but never propagate -- the
     main asyncio loop keeps running even if MCP fails (defense-in-depth: a

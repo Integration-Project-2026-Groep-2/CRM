@@ -47,16 +47,8 @@ async def init(
 ) -> None:
     """Initialize the sender with a RabbitMQ channel and declare outbound exchanges.
 
-    Must be called once at startup before any publish function is used.
-    Most CRM outbound messages are published via the contact.topic exchange.
-    Contract 15 uses a dedicated fanout exchange. The LogEvent contract uses
-    a dedicated direct exchange (logs.direct).
-
-    When `connection` is supplied, subsequent publishes detect a closed channel
-    and lazily re-open + re-declare the three exchanges. Without it, recovery
-    is disabled — fine for integration tests with controlled channel lifetimes,
-    but production callers (main.py) must pass the connection so a broker blip
-    does not require a container restart.
+    `connection` enables lazy re-open of the channel on publish if it has been
+    closed by the broker; omit it to disable recovery (integration tests).
     """
     global _channel, _exchange, _conflict_exchange, _logs_exchange, _connection  # noqa: PLW0603
     _channel = channel
@@ -80,7 +72,7 @@ async def _declare_exchanges(
 
 async def _ensure_channel() -> None:
     # `is_closed is True` (not just truthy) so MagicMock-based unit tests that
-    # don't explicitly set the attribute do not trip the recovery path.
+    # leave the attribute unset do not trip the recovery path.
     global _channel, _exchange, _conflict_exchange, _logs_exchange  # noqa: PLW0603
     if _channel is not None and getattr(_channel, "is_closed", False) is not True:
         return

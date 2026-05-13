@@ -25,14 +25,7 @@ _T = TypeVar("_T")
 
 
 def _is_expired_session_error(exc: Exception) -> bool:
-    """Detect an expired Salesforce session — mirrors `src/salesforce/client.py`.
-
-    Keep in sync with src/salesforce/client.py::is_expired_session_error.
-    Replicated (not imported) so the crm-mcp package stays free of `src.*` deps.
-    Native 401 surfaces as `SalesforceExpiredSession`; 404 on /query carries
-    `INVALID_SESSION_ID` in the error-content list. Empty-body /query 404s
-    (transient SF edge) are not matched here — they propagate to the caller.
-    """
+    """Keep in sync with src/salesforce/client.py::is_expired_session_error."""
     if isinstance(exc, SalesforceExpiredSession):
         return True
     content = getattr(exc, "content", None)
@@ -55,9 +48,7 @@ _LOGIN_RETRY_MAX_DELAY = 8.0
 
 def _build_retry_adapter() -> HTTPAdapter:
     # Keep in sync with src/salesforce/client.py::_build_retry_adapter.
-    # 401 NOT in status_forcelist — expired-session must surface to sf_call
-    # so reauth fires, not be swallowed by transparent retries. 502/503/504
-    # are server-side errors (request not processed), safe to retry for POST.
+    # 401 stays out of status_forcelist so sf_call reauth fires instead.
     retry = Retry(
         total=3,
         connect=3,
@@ -133,21 +124,13 @@ class CrmSalesforceClient:
 
     async def connect(self) -> Salesforce:
         """Lazily establish and cache a Salesforce session."""
-        # Fast-path: warm sessions skip the lock so parallel MCP tool calls
-        # don't serialise through it. `_ensure_sf_locked` re-checks under the
-        # lock for the cold-start race.
         if self._sf is not None:
             return self._sf
         async with self._lock:
             return await self._ensure_sf_locked()
 
     async def reset_session(self) -> None:
-        """Drop the cached SF instance so the next `connect()` re-authenticates.
-
-        Used by `sf_call` after detecting an expired-session error. Acquires
-        `self._lock` so concurrent retriers serialise — only one fresh login
-        will fire even when a burst of tool-calls all hit the same stale token.
-        """
+        """Drop the cached SF instance so the next `connect()` re-authenticates."""
         async with self._lock:
             self._sf = None
 
@@ -378,17 +361,7 @@ async def sf_call(
     *,
     max_reauths: int = 1,
 ) -> _T:
-    """Run `fn(sf)` on a worker-thread; reauth + retry on expired session.
-
-    Mirrors `src/salesforce/client.py::sf_call` but works against the MCP's
-    `CrmSalesforceClient` instead of the receiver's `SalesforceSession`. After
-    `max_reauths` consecutive expired-session errors the original exception is
-    re-raised so the MCP tool surfaces it to the caller — the LLM can then
-    plan recovery (e.g. report degraded mode).
-
-    The lambda receives the Salesforce instance freshly on each attempt so a
-    reauth-swapped client is observed by the retry.
-    """
+    """Run `fn(sf)` on a worker-thread; reauth + retry on expired session."""
     attempt = 0
     while True:
         sf = await client.connect()

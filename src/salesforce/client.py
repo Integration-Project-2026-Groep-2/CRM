@@ -70,10 +70,7 @@ _SF_HTTP_TIMEOUT_SECONDS: float = 30.0
 
 def _build_retry_adapter() -> HTTPAdapter:
     # Keep in sync with crm-mcp/crm_mcp/salesforce.py::_build_retry_adapter.
-    # 401 is deliberately NOT in `status_forcelist` — expired-session must
-    # surface to `sf_call` so reauth fires, not get swallowed by transparent
-    # retries. 502/503/504 are server-errors where the server did not process
-    # the request, so retrying them is safe even for POST.
+    # 401 stays out of status_forcelist so sf_call reauth fires instead.
     retry = Retry(
         total=3,
         connect=3,

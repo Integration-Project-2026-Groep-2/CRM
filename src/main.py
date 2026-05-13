@@ -37,10 +37,7 @@ from src.status import run_status_check
 
 logger = logging.getLogger(__name__)
 
-# Set inside run_receiver once consumer-tags are wired for every queue, cleared
-# in _supervised_task when the receiver task ends. The MCP /health endpoint
-# (which runs in a daemon thread) reads it so an external monitor sees 503 when
-# the asyncio receiver dies silently.
+# threading.Event (not asyncio.Event) so the MCP daemon thread can read it.
 _receiver_alive_event: threading.Event = threading.Event()
 
 
@@ -55,11 +52,8 @@ async def _supervised_task(
 ) -> None:
     """Run a task with crash isolation — log errors, never propagate.
 
-    When `restartable=True` the task is retried on failure with exponential
-    backoff (1, 2, 4, ..., capped at `max_delay`) up to `max_restarts` times.
-    `asyncio.CancelledError` is always re-raised so graceful shutdown still
-    works. Use restartable=True only for tasks without their own outer loop —
-    heartbeat/status_check already retry internally.
+    `restartable=True` retries on failure with exponential backoff; use only
+    for tasks without their own outer loop (heartbeat/status_check already do).
     """
     if not restartable:
         try:
