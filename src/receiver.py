@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import threading
 from functools import partial
 from typing import Any
 
@@ -210,6 +211,8 @@ async def run_receiver(
     connection: AbstractRobustConnection,
     config: Config,
     shutdown_event: asyncio.Event | None = None,
+    *,
+    started_event: threading.Event | None = None,
 ) -> None:
     """Consume configured inbound messages, validate XML, process in Salesforce.
 
@@ -220,6 +223,11 @@ async def run_receiver(
     `shutdown_event` is forwarded to the Salesforce login retry loop so a
     graceful shutdown during a transient Salesforce outage does not hang the
     container.
+
+    `started_event` (threading.Event so it can be read from the MCP daemon
+    thread without a queue) is set once every queue.consume(...) is wired —
+    the MCP /health endpoint flips to 503 when this event is clear, so the
+    operator can distinguish "container up but receiver dead" from "healthy".
     """
     channel = await connection.channel()
     # Bound per-consumer prefetch so one hung handler-task can't drain the
@@ -246,6 +254,8 @@ async def run_receiver(
         await queue.consume(consumer)
 
     logger.info("Receiver started. Listening on all configured queues.")
+    if started_event is not None:
+        started_event.set()
     await asyncio.Future()  # run forever
 
 

@@ -97,3 +97,34 @@ async def test_main_starts_five_tasks_concurrently(monkeypatch: pytest.MonkeyPat
         main_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await main_task
+
+
+@pytest.mark.asyncio
+async def test_supervised_task_clears_receiver_alive_on_crash() -> None:
+    """When the receiver factory raises, _supervised_task must clear the event."""
+    from src.main import _receiver_alive_event, _supervised_task
+
+    _receiver_alive_event.set()
+
+    async def crashing_factory() -> None:
+        raise RuntimeError("boom")
+
+    await _supervised_task("receiver", crashing_factory)
+
+    assert not _receiver_alive_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_supervised_task_does_not_touch_event_for_non_receiver() -> None:
+    from src.main import _receiver_alive_event, _supervised_task
+
+    _receiver_alive_event.set()
+
+    async def crashing_factory() -> None:
+        raise RuntimeError("boom")
+
+    await _supervised_task("heartbeat", crashing_factory)
+
+    # Heartbeat crashes must not flip receiver-aliveness.
+    assert _receiver_alive_event.is_set()
+    _receiver_alive_event.clear()

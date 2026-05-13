@@ -20,6 +20,7 @@ because FastMCP starts uvicorn with its own event loop.
 import asyncio
 import logging
 import signal
+import threading
 from collections.abc import Awaitable, Callable
 
 from dotenv import load_dotenv
@@ -36,6 +37,12 @@ from src.status import run_status_check
 
 logger = logging.getLogger(__name__)
 
+# Set inside run_receiver once consumer-tags are wired for every queue, cleared
+# in _supervised_task when the receiver task ends. The MCP /health endpoint
+# (which runs in a daemon thread) reads it so an external monitor sees 503 when
+# the asyncio receiver dies silently.
+_receiver_alive_event: threading.Event = threading.Event()
+
 
 async def _supervised_task(
     name: str,
@@ -46,6 +53,9 @@ async def _supervised_task(
         await task_factory()
     except Exception:
         logger.exception("Task '%s' crashed", name)
+    finally:
+        if name == "receiver":
+            _receiver_alive_event.clear()
 
 
 def _install_signal_handlers(loop: asyncio.AbstractEventLoop, shutdown_event: asyncio.Event) -> None:
@@ -99,7 +109,7 @@ async def main() -> None:
     tasks = [
         asyncio.create_task(_supervised_task("heartbeat", lambda: run_heartbeat(connection, config))),
         asyncio.create_task(_supervised_task("status_check", lambda: run_status_check(connection, config))),
-        asyncio.create_task(_supervised_task("receiver", lambda: run_receiver(connection, config, shutdown_event))),
+        asyncio.create_task(_supervised_task("receiver", lambda: run_receiver(connection, config, shutdown_event, started_event=_receiver_alive_event))),
         asyncio.create_task(_supervised_task("polling", lambda: run_polling(config, shutdown_event))),
         asyncio.create_task(_supervised_task("log_publisher", lambda: run_log_publisher(connection, config.log_service_name))),
     ]
