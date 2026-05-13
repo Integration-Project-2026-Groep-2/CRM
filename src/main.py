@@ -124,7 +124,7 @@ async def main() -> None:
     # connect-with-retry so that MCP is reachable even if RabbitMQ is briefly
     # unavailable. MCP only needs Salesforce REST (independent of RMQ).
     # Failures inside the MCP thread are logged but never crash main.
-    mcp_handle = start_mcp_thread()
+    mcp_handle = start_mcp_thread(receiver_alive_event=_receiver_alive_event)
 
     connection = await get_rabbitmq_connection(config.rabbitmq_url, shutdown_event)
     channel = await connection.channel()
