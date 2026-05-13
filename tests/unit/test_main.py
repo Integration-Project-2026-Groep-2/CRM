@@ -234,3 +234,41 @@ async def test_supervised_task_clears_event_each_crash_when_restartable(
     assert crash_count["n"] == 2
     assert _receiver_alive_event.is_set()
     _receiver_alive_event.clear()
+
+
+@pytest.mark.asyncio
+async def test_supervised_task_event_cleared_during_backoff_sleep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression guard: the event must be False between crash N and attempt N+1.
+
+    Without this assertion, a regression where `clear()` only fires on the first
+    crash would still pass `test_supervised_task_clears_event_each_crash_...`.
+    """
+    from src import main as main_module
+    from src.main import _receiver_alive_event, _supervised_task
+
+    states_during_sleep: list[bool] = []
+
+    async def capture_sleep(_delay: float) -> None:
+        states_during_sleep.append(_receiver_alive_event.is_set())
+
+    monkeypatch.setattr(main_module.asyncio, "sleep", capture_sleep)
+
+    crash_count = {"n": 0}
+
+    async def factory_that_sets_then_crashes_thrice() -> None:
+        _receiver_alive_event.set()
+        crash_count["n"] += 1
+        if crash_count["n"] < 4:
+            raise RuntimeError("transient")
+
+    await _supervised_task(
+        "receiver", factory_that_sets_then_crashes_thrice,
+        restartable=True, max_restarts=5,
+    )
+
+    assert crash_count["n"] == 4
+    assert len(states_during_sleep) == 3
+    assert states_during_sleep == [False, False, False]
+    _receiver_alive_event.clear()
