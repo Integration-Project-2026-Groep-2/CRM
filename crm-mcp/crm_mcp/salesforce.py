@@ -9,11 +9,13 @@ import random
 from typing import Any, Callable, TypeVar
 
 import requests
+from requests.adapters import HTTPAdapter
 from simple_salesforce import Salesforce
 from simple_salesforce.exceptions import (
     SalesforceExpiredSession,
     SalesforceMalformedRequest,
 )
+from urllib3.util.retry import Retry
 
 from .config import SalesforceConfig
 
@@ -50,12 +52,31 @@ _LOGIN_RETRY_BASE_DELAY = 1.0
 _LOGIN_RETRY_MAX_DELAY = 8.0
 
 
+def _build_retry_adapter() -> HTTPAdapter:
+    # 401 NOT in status_forcelist — expired-session must surface to sf_call
+    # so reauth fires, not be swallowed by transparent retries. 502/503/504
+    # are server-side errors (request not processed), safe to retry for POST.
+    retry = Retry(
+        total=3,
+        connect=3,
+        backoff_factor=0.5,
+        status_forcelist=(502, 503, 504),
+        allowed_methods=frozenset(["GET", "POST", "PATCH", "DELETE"]),
+        respect_retry_after_header=True,
+        raise_on_status=False,
+    )
+    return HTTPAdapter(max_retries=retry)
+
+
 class _TimeoutSession(requests.Session):
     """`requests.Session` that injects a default timeout on every call."""
 
     def __init__(self, timeout: float = _DEFAULT_SF_HTTP_TIMEOUT_SECONDS) -> None:
         super().__init__()
         self._default_timeout = timeout
+        adapter = _build_retry_adapter()
+        self.mount("https://", adapter)
+        self.mount("http://", adapter)
 
     def request(self, method, url, **kwargs):  # type: ignore[override]
         kwargs.setdefault("timeout", self._default_timeout)

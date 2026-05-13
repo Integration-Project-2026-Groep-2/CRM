@@ -400,3 +400,29 @@ class TestClientCallSitesReauth:
         result = await client.update_contact("003x", {"Phone": "+32 1"})
 
         assert result == 204
+
+
+class TestTimeoutSessionRetryConfig:
+    """MCP-side `_TimeoutSession` matches the receiver-side urllib3 Retry config."""
+
+    def test_mounts_retry_adapter_on_https(self) -> None:
+        from crm_mcp.salesforce import _TimeoutSession
+
+        sess = _TimeoutSession()
+        adapter = sess.get_adapter("https://example.salesforce.com")
+        assert adapter.max_retries.total == 3
+        assert adapter.max_retries.connect == 3
+
+    def test_401_not_in_status_forcelist(self) -> None:
+        """Expired-session (401) must surface so sf_call reauth fires."""
+        from crm_mcp.salesforce import _TimeoutSession
+
+        sess = _TimeoutSession()
+        adapter = sess.get_adapter("https://example.salesforce.com")
+        assert 401 not in adapter.max_retries.status_forcelist
+
+    def test_default_timeout_preserved(self) -> None:
+        from crm_mcp.salesforce import _DEFAULT_SF_HTTP_TIMEOUT_SECONDS, _TimeoutSession
+
+        sess = _TimeoutSession()
+        assert sess._default_timeout == _DEFAULT_SF_HTTP_TIMEOUT_SECONDS

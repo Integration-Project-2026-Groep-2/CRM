@@ -36,12 +36,14 @@ from datetime import datetime, timezone
 from typing import Any, Callable, TypeVar
 
 import requests
+from requests.adapters import HTTPAdapter
 from simple_salesforce import Salesforce
 from simple_salesforce.exceptions import (
     SalesforceAuthenticationFailed,
     SalesforceExpiredSession,
     SalesforceResourceNotFound,
 )
+from urllib3.util.retry import Retry
 
 from src.config import Config
 
@@ -66,12 +68,32 @@ _TRANSIENT_SF_AUTH_CODES = frozenset({"SERVER_UNAVAILABLE", "SERVICE_UNAVAILABLE
 _SF_HTTP_TIMEOUT_SECONDS: float = 30.0
 
 
+def _build_retry_adapter() -> HTTPAdapter:
+    # 401 is deliberately NOT in `status_forcelist` — expired-session must
+    # surface to `sf_call` so reauth fires, not get swallowed by transparent
+    # retries. 502/503/504 are server-errors where the server did not process
+    # the request, so retrying them is safe even for POST.
+    retry = Retry(
+        total=3,
+        connect=3,
+        backoff_factor=0.5,
+        status_forcelist=(502, 503, 504),
+        allowed_methods=frozenset(["GET", "POST", "PATCH", "DELETE"]),
+        respect_retry_after_header=True,
+        raise_on_status=False,
+    )
+    return HTTPAdapter(max_retries=retry)
+
+
 class _TimeoutSession(requests.Session):
     """`requests.Session` that injects a default timeout on every call."""
 
     def __init__(self, timeout: float = _SF_HTTP_TIMEOUT_SECONDS) -> None:
         super().__init__()
         self._default_timeout = timeout
+        adapter = _build_retry_adapter()
+        self.mount("https://", adapter)
+        self.mount("http://", adapter)
 
     def request(self, method, url, **kwargs):  # type: ignore[override]
         kwargs.setdefault("timeout", self._default_timeout)

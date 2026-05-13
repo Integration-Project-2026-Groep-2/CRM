@@ -3281,6 +3281,39 @@ class TestSfCall:
             await sf_call(session, lambda sf: sf.query("soql"))
 
 
+class TestTimeoutSessionRetryConfig:
+    """`_TimeoutSession` mounts a urllib3 Retry adapter for stalled-socket recovery."""
+
+    def test_mounts_retry_adapter_on_https(self):
+        from src.salesforce.client import _TimeoutSession
+
+        sess = _TimeoutSession()
+        adapter = sess.get_adapter("https://example.salesforce.com")
+        assert adapter.max_retries.total == 3
+        assert adapter.max_retries.connect == 3
+
+    def test_mounts_retry_adapter_on_http(self):
+        from src.salesforce.client import _TimeoutSession
+
+        sess = _TimeoutSession()
+        adapter = sess.get_adapter("http://example.salesforce.com")
+        assert adapter.max_retries.total == 3
+
+    def test_401_not_in_status_forcelist(self):
+        """Expired-session (401) must surface so sf_call reauth fires."""
+        from src.salesforce.client import _TimeoutSession
+
+        sess = _TimeoutSession()
+        adapter = sess.get_adapter("https://example.salesforce.com")
+        assert 401 not in adapter.max_retries.status_forcelist
+
+    def test_default_timeout_preserved(self):
+        from src.salesforce.client import _SF_HTTP_TIMEOUT_SECONDS, _TimeoutSession
+
+        sess = _TimeoutSession()
+        assert sess._default_timeout == _SF_HTTP_TIMEOUT_SECONDS
+
+
 class TestIsExpiredSessionErrorContentGuard:
     """Ensure 404s on /query with non-session content do not trigger reauth."""
 
