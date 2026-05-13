@@ -133,6 +133,11 @@ class CrmSalesforceClient:
 
     async def connect(self) -> Salesforce:
         """Lazily establish and cache a Salesforce session."""
+        # Fast-path: warm sessions skip the lock so parallel MCP tool calls
+        # don't serialise through it. `_ensure_sf_locked` re-checks under the
+        # lock for the cold-start race.
+        if self._sf is not None:
+            return self._sf
         async with self._lock:
             return await self._ensure_sf_locked()
 
