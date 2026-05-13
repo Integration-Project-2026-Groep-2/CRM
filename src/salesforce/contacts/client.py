@@ -74,12 +74,14 @@ async def create_contact(sf: Salesforce, data: dict[str, Any]) -> dict[str, Any]
         data = await _ensure_contact_active(sf, data)
 
         # Create Contact
+        logger.debug("Creating Contact in Salesforce with data: %s", data)
         result = await asyncio.to_thread(sf.Contact.create, data)
         contact_id = result["id"]
         logger.info("Created Contact with ID %s (CRM_ID: %s)", contact_id, crm_id)
 
         # Retrieve and return complete record for XML serialization
         contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        logger.debug("Retrieved Contact record from Salesforce: %s", contact_record)
         return contact_record
     except SalesforceError as e:
         logger.error("Failed to create contact: %s", str(e))
