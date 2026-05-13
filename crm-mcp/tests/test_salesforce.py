@@ -348,3 +348,55 @@ class TestSfCall:
         await client.reset_session()
 
         assert client._sf is None
+
+
+class TestClientCallSitesReauth:
+    """Verify the public methods route through sf_call so reauth actually fires."""
+
+    @pytest.mark.asyncio
+    async def test_query_reauths_on_expired_session(self) -> None:
+        from simple_salesforce.exceptions import SalesforceResourceNotFound
+
+        old_sf = MagicMock(name="old")
+        old_sf.query.side_effect = SalesforceResourceNotFound(
+            "https://example/query/", 404, "query",
+            [{"errorCode": "INVALID_SESSION_ID", "message": "expired"}],
+        )
+        new_sf = MagicMock(name="new")
+        new_sf.query.return_value = {"records": [{"Id": "001"}], "totalSize": 1}
+
+        client = CrmSalesforceClient(_make_config())
+        client._sf = old_sf
+        with patch.object(
+            CrmSalesforceClient, "_connect_with_retry", return_value=new_sf,
+        ):
+            result = await client.query("SELECT Id FROM Contact")
+
+        assert result["records"] == [{"Id": "001"}]
+        assert client._sf is new_sf
+
+    @pytest.mark.asyncio
+    async def test_create_account_preserves_duplicate_value_error(self) -> None:
+        from simple_salesforce.exceptions import SalesforceMalformedRequest
+
+        sf = MagicMock()
+        sf.Account.create.side_effect = SalesforceMalformedRequest(
+            "https://example/Account/", 400, "Account",
+            [{"errorCode": "DUPLICATE_VALUE", "message": "duplicate"}],
+        )
+        client = CrmSalesforceClient(_make_config())
+        client._sf = sf
+
+        with pytest.raises(ValueError, match="duplicate"):
+            await client.create_account({"Name": "Acme"})
+
+    @pytest.mark.asyncio
+    async def test_update_contact_returns_status_through_sf_call(self) -> None:
+        sf = MagicMock()
+        sf.Contact.update.return_value = 204
+        client = CrmSalesforceClient(_make_config())
+        client._sf = sf
+
+        result = await client.update_contact("003x", {"Phone": "+32 1"})
+
+        assert result == 204

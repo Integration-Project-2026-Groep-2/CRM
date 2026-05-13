@@ -184,8 +184,7 @@ class CrmSalesforceClient:
             raise RuntimeError(f"Salesforce login failed: {type(exc).__name__}") from None
 
     async def query(self, soql: str) -> dict[str, Any]:
-        sf = await self.connect()
-        return await asyncio.to_thread(sf.query, soql)
+        return await sf_call(self, lambda sf: sf.query(soql))
 
     async def query_count(self, soql_count: str) -> int:
         result = await self.query(soql_count)
@@ -200,9 +199,8 @@ class CrmSalesforceClient:
         (atomic safety-net for the SELECT-then-INSERT race) — re-raises other
         SF errors unchanged.
         """
-        sf = await self.connect()
         try:
-            return await asyncio.to_thread(sf.Account.create, data)
+            return await sf_call(self, lambda sf: sf.Account.create(data))
         except SalesforceMalformedRequest as exc:
             if _is_duplicate_error(exc):
                 raise ValueError(f"Account create rejected as duplicate: {exc}") from None
@@ -210,14 +208,12 @@ class CrmSalesforceClient:
 
     async def update_account(self, account_id: str, data: dict[str, Any]) -> int:
         """Patch an existing Account by Salesforce Id. Returns HTTP status (204)."""
-        sf = await self.connect()
-        return await asyncio.to_thread(sf.Account.update, account_id, data)
+        return await sf_call(self, lambda sf: sf.Account.update(account_id, data))
 
     async def create_contact(self, data: dict[str, Any]) -> dict[str, Any]:
         """Insert a new Contact; map SF duplicate-errors to ValueError. See `create_account`."""
-        sf = await self.connect()
         try:
-            return await asyncio.to_thread(sf.Contact.create, data)
+            return await sf_call(self, lambda sf: sf.Contact.create(data))
         except SalesforceMalformedRequest as exc:
             if _is_duplicate_error(exc):
                 raise ValueError(f"Contact create rejected as duplicate: {exc}") from None
@@ -225,8 +221,7 @@ class CrmSalesforceClient:
 
     async def update_contact(self, contact_id: str, data: dict[str, Any]) -> int:
         """Patch an existing Contact by Salesforce Id. Returns HTTP status (204)."""
-        sf = await self.connect()
-        return await asyncio.to_thread(sf.Contact.update, contact_id, data)
+        return await sf_call(self, lambda sf: sf.Contact.update(contact_id, data))
 
     async def get_contact_active_field(self) -> str:
         """Return the Contact active-flag field; cached after first describe."""
