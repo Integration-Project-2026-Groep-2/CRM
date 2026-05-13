@@ -73,6 +73,32 @@ class _HealthCheckAccessLogFilter(logging.Filter):
         return True
 
 
+_UVICORN_FILTER_NAME = "no_health_access"
+
+
+def _install_health_filter_into_uvicorn_logging_config() -> None:
+    """Register the access-log filter declaratively in uvicorn's LOGGING_CONFIG.
+
+    Imperative ``getLogger("uvicorn.access").addFilter(...)`` races with
+    uvicorn's ``logging.config.dictConfig`` call inside ``Server.run()``:
+    because the config explicitly redeclares the ``uvicorn.access`` logger,
+    runtime-added filters are not reliably preserved across uvicorn versions.
+    Declaring the filter in the canonical config means dictConfig installs it
+    itself, which is version-stable. Idempotent — safe to call repeatedly.
+    """
+    import uvicorn.config
+
+    cfg = uvicorn.config.LOGGING_CONFIG
+    filters = cfg.setdefault("filters", {})
+    if _UVICORN_FILTER_NAME in filters:
+        return
+    filters[_UVICORN_FILTER_NAME] = {
+        "()": f"{__name__}._HealthCheckAccessLogFilter",
+    }
+    access_logger = cfg["loggers"]["uvicorn.access"]
+    access_logger.setdefault("filters", []).append(_UVICORN_FILTER_NAME)
+
+
 class _HealthState:
     """Probe-state for the /health endpoint.
 
@@ -162,7 +188,7 @@ def build_server(
 
     health_state = _HealthState(client, publisher, receiver_alive_event)
 
-    logging.getLogger("uvicorn.access").addFilter(_HealthCheckAccessLogFilter())
+    _install_health_filter_into_uvicorn_logging_config()
 
     @mcp.custom_route("/health", methods=["GET"])
     async def health(request: Request) -> JSONResponse:
