@@ -17,6 +17,7 @@ from src import sender
 @pytest.fixture(autouse=True)
 def setup_sender():
     mock_channel = MagicMock()
+    mock_channel.is_closed = False
     mock_exchange = MagicMock()
     mock_exchange.publish = AsyncMock()
     mock_conflict_exchange = MagicMock()
@@ -24,6 +25,7 @@ def setup_sender():
     mock_logs_exchange = MagicMock()
     mock_logs_exchange.publish = AsyncMock()
     sender._channel = mock_channel
+    sender._connection = None
     sender._exchange = mock_exchange
     sender._conflict_exchange = mock_conflict_exchange
     sender._logs_exchange = mock_logs_exchange
@@ -1048,3 +1050,130 @@ class TestPublishLogEventRaw:
         await sender.publish_log_event_raw(self.SAMPLE_XML)
         xml = _get_logs_published_xml(setup_sender)
         xml_validator.validate(etree.tostring(xml))
+
+
+class TestChannelRecovery:
+    """Recovery when the sender's channel is closed by the broker."""
+
+    @staticmethod
+    def _wire_connection_returning_new_channel():
+        new_exchange = MagicMock()
+        new_exchange.publish = AsyncMock()
+        new_conflict = MagicMock()
+        new_conflict.publish = AsyncMock()
+        new_logs = MagicMock()
+        new_logs.publish = AsyncMock()
+
+        new_channel = MagicMock()
+        new_channel.is_closed = False
+
+        async def declare_exchange(name, **_kw):
+            return {
+                "contact.topic": new_exchange,
+                "crm.user.conflict": new_conflict,
+                "logs.direct": new_logs,
+            }[name]
+
+        new_channel.declare_exchange = declare_exchange
+
+        connection = MagicMock()
+        connection.channel = AsyncMock(return_value=new_channel)
+        return connection, new_channel, new_exchange, new_conflict, new_logs
+
+    @pytest.mark.asyncio
+    async def test_publish_recreates_channel_when_closed(self, setup_sender):
+        conn, new_channel, new_exchange, *_ = self._wire_connection_returning_new_channel()
+        sender._channel.is_closed = True
+        sender._connection = conn
+
+        with patch("src.xml_validator.validate"):
+            await sender._publish("crm.user.confirmed", b"<UserConfirmed/>", persistent=True)
+
+        conn.channel.assert_awaited_once()
+        new_exchange.publish.assert_awaited_once()
+        assert sender._channel is new_channel
+        assert sender._exchange is new_exchange
+
+    @pytest.mark.asyncio
+    async def test_publish_skips_recovery_when_no_connection(self, setup_sender):
+        sender._channel.is_closed = True
+        sender._connection = None
+
+        # Existing _exchange is the fixture mock; publish must still go through it
+        # because recovery is disabled when init() did not receive a connection.
+        with patch("src.xml_validator.validate"):
+            await sender._publish("crm.user.confirmed", b"<UserConfirmed/>", persistent=True)
+
+        setup_sender.publish.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_concurrent_publishes_share_single_channel_recreation(self, setup_sender):
+        import asyncio as _asyncio
+
+        conn, _new_channel, new_exchange, *_ = self._wire_connection_returning_new_channel()
+        sender._channel.is_closed = True
+        sender._connection = conn
+
+        with patch("src.xml_validator.validate"):
+            await _asyncio.gather(
+                sender._publish("a", b"<X/>"),
+                sender._publish("b", b"<X/>"),
+                sender._publish("c", b"<X/>"),
+            )
+
+        conn.channel.assert_awaited_once()
+        assert new_exchange.publish.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_conflict_publish_also_recovers(self, setup_sender):
+        conn, _new_channel, _new_exchange, new_conflict, *_ = (
+            self._wire_connection_returning_new_channel()
+        )
+        sender._channel.is_closed = True
+        sender._connection = conn
+
+        with patch("src.xml_validator.validate"):
+            await sender._publish_conflict(b"<UserConflict/>", persistent=True)
+
+        conn.channel.assert_awaited_once()
+        new_conflict.publish.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_log_event_publish_also_recovers(self, setup_sender):
+        conn, _new_channel, _new_exchange, _new_conflict, new_logs = (
+            self._wire_connection_returning_new_channel()
+        )
+        sender._channel.is_closed = True
+        sender._connection = conn
+
+        await sender.publish_log_event_raw(b"<LogEvent/>")
+
+        conn.channel.assert_awaited_once()
+        new_logs.publish.assert_awaited_once()
+
+
+class TestInitSignature:
+    """Back-compat: init still accepts a bare channel; connection is optional."""
+
+    @pytest.mark.asyncio
+    async def test_init_without_connection_disables_recovery(self):
+        channel = MagicMock()
+        channel.is_closed = False
+        channel.declare_exchange = AsyncMock(return_value=MagicMock())
+
+        await sender.init(channel)
+
+        assert sender._channel is channel
+        assert sender._connection is None
+
+    @pytest.mark.asyncio
+    async def test_init_with_connection_stores_it_for_recovery(self):
+        channel = MagicMock()
+        channel.is_closed = False
+        channel.declare_exchange = AsyncMock(return_value=MagicMock())
+        connection = MagicMock()
+
+        await sender.init(channel, connection=connection)
+
+        assert sender._channel is channel
+        assert sender._connection is connection

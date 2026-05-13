@@ -6,15 +6,34 @@ import asyncio
 import logging
 import os
 import random
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 import requests
+from requests.adapters import HTTPAdapter
 from simple_salesforce import Salesforce
-from simple_salesforce.exceptions import SalesforceMalformedRequest
+from simple_salesforce.exceptions import (
+    SalesforceExpiredSession,
+    SalesforceMalformedRequest,
+)
+from urllib3.util.retry import Retry
 
 from .config import SalesforceConfig
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+
+def _is_expired_session_error(exc: Exception) -> bool:
+    """Keep in sync with src/salesforce/client.py::is_expired_session_error."""
+    if isinstance(exc, SalesforceExpiredSession):
+        return True
+    content = getattr(exc, "content", None)
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("errorCode") == "INVALID_SESSION_ID":
+                return True
+    return "INVALID_SESSION_ID" in str(exc)
 
 
 # Without a default per-request timeout, `requests` blocks forever on stalled
@@ -27,12 +46,30 @@ _LOGIN_RETRY_BASE_DELAY = 1.0
 _LOGIN_RETRY_MAX_DELAY = 8.0
 
 
+def _build_retry_adapter() -> HTTPAdapter:
+    # Keep in sync with src/salesforce/client.py::_build_retry_adapter.
+    # 401 stays out of status_forcelist so sf_call reauth fires instead.
+    retry = Retry(
+        total=3,
+        connect=3,
+        backoff_factor=0.5,
+        status_forcelist=(502, 503, 504),
+        allowed_methods=frozenset(["GET", "POST", "PATCH", "DELETE"]),
+        respect_retry_after_header=True,
+        raise_on_status=False,
+    )
+    return HTTPAdapter(max_retries=retry)
+
+
 class _TimeoutSession(requests.Session):
     """`requests.Session` that injects a default timeout on every call."""
 
     def __init__(self, timeout: float = _DEFAULT_SF_HTTP_TIMEOUT_SECONDS) -> None:
         super().__init__()
         self._default_timeout = timeout
+        adapter = _build_retry_adapter()
+        self.mount("https://", adapter)
+        self.mount("http://", adapter)
 
     def request(self, method, url, **kwargs):  # type: ignore[override]
         kwargs.setdefault("timeout", self._default_timeout)
@@ -87,8 +124,15 @@ class CrmSalesforceClient:
 
     async def connect(self) -> Salesforce:
         """Lazily establish and cache a Salesforce session."""
+        if self._sf is not None:
+            return self._sf
         async with self._lock:
             return await self._ensure_sf_locked()
+
+    async def reset_session(self) -> None:
+        """Drop the cached SF instance so the next `connect()` re-authenticates."""
+        async with self._lock:
+            self._sf = None
 
     async def _ensure_sf_locked(self) -> Salesforce:
         """Caller must already hold `self._lock`."""
@@ -151,8 +195,7 @@ class CrmSalesforceClient:
             raise RuntimeError(f"Salesforce login failed: {type(exc).__name__}") from None
 
     async def query(self, soql: str) -> dict[str, Any]:
-        sf = await self.connect()
-        return await asyncio.to_thread(sf.query, soql)
+        return await sf_call(self, lambda sf: sf.query(soql))
 
     async def query_count(self, soql_count: str) -> int:
         result = await self.query(soql_count)
@@ -167,9 +210,8 @@ class CrmSalesforceClient:
         (atomic safety-net for the SELECT-then-INSERT race) — re-raises other
         SF errors unchanged.
         """
-        sf = await self.connect()
         try:
-            return await asyncio.to_thread(sf.Account.create, data)
+            return await sf_call(self, lambda sf: sf.Account.create(data))
         except SalesforceMalformedRequest as exc:
             if _is_duplicate_error(exc):
                 raise ValueError(f"Account create rejected as duplicate: {exc}") from None
@@ -177,14 +219,12 @@ class CrmSalesforceClient:
 
     async def update_account(self, account_id: str, data: dict[str, Any]) -> int:
         """Patch an existing Account by Salesforce Id. Returns HTTP status (204)."""
-        sf = await self.connect()
-        return await asyncio.to_thread(sf.Account.update, account_id, data)
+        return await sf_call(self, lambda sf: sf.Account.update(account_id, data))
 
     async def create_contact(self, data: dict[str, Any]) -> dict[str, Any]:
         """Insert a new Contact; map SF duplicate-errors to ValueError. See `create_account`."""
-        sf = await self.connect()
         try:
-            return await asyncio.to_thread(sf.Contact.create, data)
+            return await sf_call(self, lambda sf: sf.Contact.create(data))
         except SalesforceMalformedRequest as exc:
             if _is_duplicate_error(exc):
                 raise ValueError(f"Contact create rejected as duplicate: {exc}") from None
@@ -192,8 +232,7 @@ class CrmSalesforceClient:
 
     async def update_contact(self, contact_id: str, data: dict[str, Any]) -> int:
         """Patch an existing Contact by Salesforce Id. Returns HTTP status (204)."""
-        sf = await self.connect()
-        return await asyncio.to_thread(sf.Contact.update, contact_id, data)
+        return await sf_call(self, lambda sf: sf.Contact.update(contact_id, data))
 
     async def get_contact_active_field(self) -> str:
         """Return the Contact active-flag field; cached after first describe."""
@@ -314,3 +353,26 @@ _CONTACT_ACTIVE_NOT_FOUND_MSG = (
     "No supported Contact active field found. "
     "Expected one of: IsActive__c, Active__c, Is_Active__c."
 )
+
+
+async def sf_call(
+    client: "CrmSalesforceClient",
+    fn: Callable[[Salesforce], _T],
+    *,
+    max_reauths: int = 1,
+) -> _T:
+    """Run `fn(sf)` on a worker-thread; reauth + retry on expired session."""
+    attempt = 0
+    while True:
+        sf = await client.connect()
+        try:
+            return await asyncio.to_thread(fn, sf)
+        except Exception as exc:
+            if not _is_expired_session_error(exc) or attempt >= max_reauths:
+                raise
+            attempt += 1
+            logger.warning(
+                "MCP Salesforce session expired; reauthenticating (attempt %d/%d)",
+                attempt, max_reauths,
+            )
+            await client.reset_session()

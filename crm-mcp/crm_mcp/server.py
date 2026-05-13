@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from datetime import datetime
 from typing import Literal
@@ -78,11 +79,19 @@ class _HealthState:
     Caches the SF reachability check so healthcheck-burst doesn't multiply
     Salesforce API calls. Cache TTL is short on success (30s) and shorter on
     failure (5s) so recovery is detected quickly.
+
+    `receiver_alive_event=None` disables the receiver-aliveness probe.
     """
 
-    def __init__(self, client: CrmSalesforceClient, publisher: MessagePublisher) -> None:
+    def __init__(
+        self,
+        client: CrmSalesforceClient,
+        publisher: MessagePublisher,
+        receiver_alive_event: threading.Event | None = None,
+    ) -> None:
         self._client = client
         self._publisher = publisher
+        self._receiver_alive_event = receiver_alive_event
         self._start_time = time.monotonic()
         self._sf_cache: tuple[bool, float] | None = None
         self._sf_lock = asyncio.Lock()
@@ -111,6 +120,11 @@ class _HealthState:
     def check_publisher(self) -> bool:
         return self._publisher.is_ready()
 
+    def check_receiver(self) -> bool:
+        if self._receiver_alive_event is None:
+            return True
+        return self._receiver_alive_event.is_set()
+
 
 def build_server(
     client: CrmSalesforceClient,
@@ -118,6 +132,7 @@ def build_server(
     *,
     host: str = "0.0.0.0",
     port: int = 7001,
+    receiver_alive_event: threading.Event | None = None,
 ) -> FastMCP:
     """Build the FastMCP server with all CRM tools registered.
 
@@ -145,7 +160,7 @@ def build_server(
         port=port,
     )
 
-    health_state = _HealthState(client, publisher)
+    health_state = _HealthState(client, publisher, receiver_alive_event)
 
     logging.getLogger("uvicorn.access").addFilter(_HealthCheckAccessLogFilter())
 
@@ -153,13 +168,15 @@ def build_server(
     async def health(request: Request) -> JSONResponse:
         sf_connected = await health_state.check_sf()
         publisher_bound = health_state.check_publisher()
-        all_ok = sf_connected and publisher_bound
+        receiver_alive = health_state.check_receiver()
+        all_ok = sf_connected and publisher_bound and receiver_alive
         body = {
             "status": "ok" if all_ok else "degraded",
             "uptime_seconds": round(health_state.uptime_seconds, 1),
             "checks": {
                 "sf_connected": sf_connected,
                 "publisher_bound": publisher_bound,
+                "receiver_alive": receiver_alive,
             },
         }
         return JSONResponse(body, status_code=200 if all_ok else 503)

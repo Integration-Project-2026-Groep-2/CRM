@@ -20,6 +20,7 @@ because FastMCP starts uvicorn with its own event loop.
 import asyncio
 import logging
 import signal
+import threading
 from collections.abc import Awaitable, Callable
 
 from dotenv import load_dotenv
@@ -36,16 +37,57 @@ from src.status import run_status_check
 
 logger = logging.getLogger(__name__)
 
+# threading.Event (not asyncio.Event) so the MCP daemon thread can read it.
+_receiver_alive_event: threading.Event = threading.Event()
+
 
 async def _supervised_task(
     name: str,
     task_factory: Callable[[], Awaitable[None]],
+    *,
+    restartable: bool = False,
+    max_restarts: int = 10,
+    base_delay: float = 1.0,
+    max_delay: float = 60.0,
 ) -> None:
-    """Run a task with crash isolation — log errors, never propagate."""
-    try:
-        await task_factory()
-    except Exception:
-        logger.exception("Task '%s' crashed", name)
+    """Run a task with crash isolation — log errors, never propagate.
+
+    `restartable=True` retries on failure with exponential backoff; use only
+    for tasks without their own outer loop (heartbeat/status_check already do).
+    """
+    if not restartable:
+        try:
+            await task_factory()
+        except Exception:
+            logger.exception("Task '%s' crashed", name)
+        finally:
+            if name == "receiver":
+                _receiver_alive_event.clear()
+        return
+
+    delay = base_delay
+    attempt = 0
+    while True:
+        try:
+            await task_factory()
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if name == "receiver":
+                _receiver_alive_event.clear()
+            logger.exception(
+                "Task '%s' crashed (attempt %d/%d)", name, attempt + 1, max_restarts + 1,
+            )
+            if attempt >= max_restarts:
+                logger.error(
+                    "Task '%s' exceeded max_restarts=%d; giving up — operator must restart container",
+                    name, max_restarts,
+                )
+                return
+            attempt += 1
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, max_delay)
 
 
 def _install_signal_handlers(loop: asyncio.AbstractEventLoop, shutdown_event: asyncio.Event) -> None:
@@ -76,11 +118,11 @@ async def main() -> None:
     # connect-with-retry so that MCP is reachable even if RabbitMQ is briefly
     # unavailable. MCP only needs Salesforce REST (independent of RMQ).
     # Failures inside the MCP thread are logged but never crash main.
-    mcp_handle = start_mcp_thread()
+    mcp_handle = start_mcp_thread(receiver_alive_event=_receiver_alive_event)
 
     connection = await get_rabbitmq_connection(config.rabbitmq_url, shutdown_event)
     channel = await connection.channel()
-    await sender.init(channel)
+    await sender.init(channel, connection=connection)
 
     if mcp_handle is not None:
         _, mcp_publisher = mcp_handle
@@ -99,8 +141,8 @@ async def main() -> None:
     tasks = [
         asyncio.create_task(_supervised_task("heartbeat", lambda: run_heartbeat(connection, config))),
         asyncio.create_task(_supervised_task("status_check", lambda: run_status_check(connection, config))),
-        asyncio.create_task(_supervised_task("receiver", lambda: run_receiver(connection, config, shutdown_event))),
-        asyncio.create_task(_supervised_task("polling", lambda: run_polling(config, shutdown_event))),
+        asyncio.create_task(_supervised_task("receiver", lambda: run_receiver(connection, config, shutdown_event, started_event=_receiver_alive_event), restartable=True)),
+        asyncio.create_task(_supervised_task("polling", lambda: run_polling(config, shutdown_event), restartable=True)),
         asyncio.create_task(_supervised_task("log_publisher", lambda: run_log_publisher(connection, config.log_service_name))),
     ]
     try:
