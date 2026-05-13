@@ -19,13 +19,14 @@ Implemented contracts:
   LogEvent     — logs.direct                 (direct exchange, rk routing.log)
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
 
 import aio_pika
 from aio_pika import DeliveryMode, ExchangeType
-from aio_pika.abc import AbstractChannel, AbstractExchange
+from aio_pika.abc import AbstractChannel, AbstractExchange, AbstractRobustConnection
 from lxml import etree
 
 from src import xml_validator
@@ -36,30 +37,69 @@ _channel: AbstractChannel | None = None
 _exchange: AbstractExchange | None = None
 _conflict_exchange: AbstractExchange | None = None
 _logs_exchange: AbstractExchange | None = None
+_connection: AbstractRobustConnection | None = None
+_ensure_lock: asyncio.Lock = asyncio.Lock()
 
 
-async def init(channel: AbstractChannel) -> None:
+async def init(
+    channel: AbstractChannel,
+    connection: AbstractRobustConnection | None = None,
+) -> None:
     """Initialize the sender with a RabbitMQ channel and declare outbound exchanges.
 
     Must be called once at startup before any publish function is used.
     Most CRM outbound messages are published via the contact.topic exchange.
     Contract 15 uses a dedicated fanout exchange. The LogEvent contract uses
     a dedicated direct exchange (logs.direct).
+
+    When `connection` is supplied, subsequent publishes detect a closed channel
+    and lazily re-open + re-declare the three exchanges. Without it, recovery
+    is disabled — fine for integration tests with controlled channel lifetimes,
+    but production callers (main.py) must pass the connection so a broker blip
+    does not require a container restart.
     """
-    global _channel, _exchange, _conflict_exchange, _logs_exchange  # noqa: PLW0603
+    global _channel, _exchange, _conflict_exchange, _logs_exchange, _connection  # noqa: PLW0603
     _channel = channel
-    _exchange = await channel.declare_exchange(
-        "contact.topic", type=ExchangeType.TOPIC, durable=True,
-    )
-    _conflict_exchange = await channel.declare_exchange(
-        "crm.user.conflict", type=ExchangeType.FANOUT, durable=True,
-    )
-    _logs_exchange = await channel.declare_exchange(
-        "logs.direct", type=ExchangeType.DIRECT, durable=True,
-    )
+    _connection = connection
+    _exchange, _conflict_exchange, _logs_exchange = await _declare_exchanges(channel)
     logger.info(
         "Sender initialized (exchanges: contact.topic, crm.user.conflict, logs.direct)."
     )
+
+
+async def _declare_exchanges(
+    channel: AbstractChannel,
+) -> tuple[AbstractExchange, AbstractExchange, AbstractExchange]:
+    contact = await channel.declare_exchange(
+        "contact.topic", type=ExchangeType.TOPIC, durable=True,
+    )
+    conflict = await channel.declare_exchange(
+        "crm.user.conflict", type=ExchangeType.FANOUT, durable=True,
+    )
+    logs = await channel.declare_exchange(
+        "logs.direct", type=ExchangeType.DIRECT, durable=True,
+    )
+    return contact, conflict, logs
+
+
+async def _ensure_channel() -> None:
+    # `is_closed is True` (not just truthy) so MagicMock-based unit tests that
+    # don't explicitly set the attribute do not trip the recovery path.
+    global _channel, _exchange, _conflict_exchange, _logs_exchange  # noqa: PLW0603
+    if _channel is not None and getattr(_channel, "is_closed", False) is not True:
+        return
+    if _connection is None:
+        return
+    async with _ensure_lock:
+        if _channel is not None and getattr(_channel, "is_closed", False) is not True:
+            return
+        logger.warning("Sender channel closed; re-opening channel + re-declaring exchanges")
+        new_channel = await _connection.channel()
+        new_exchange, new_conflict, new_logs = await _declare_exchanges(new_channel)
+        _channel = new_channel
+        _exchange = new_exchange
+        _conflict_exchange = new_conflict
+        _logs_exchange = new_logs
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +117,7 @@ async def _publish(queue_name: str, xml_bytes: bytes, persistent: bool = False) 
 
     The sender never declares queues — the consuming team creates their own.
     """
+    await _ensure_channel()
     delivery_mode = DeliveryMode.PERSISTENT if persistent else DeliveryMode.NOT_PERSISTENT
     await _exchange.publish(
         aio_pika.Message(body=xml_bytes, delivery_mode=delivery_mode),
@@ -87,6 +128,7 @@ async def _publish(queue_name: str, xml_bytes: bytes, persistent: bool = False) 
 
 async def _publish_conflict(xml_bytes: bytes, persistent: bool = False) -> None:
     """Publish a fanout conflict message to crm.user.conflict."""
+    await _ensure_channel()
     delivery_mode = DeliveryMode.PERSISTENT if persistent else DeliveryMode.NOT_PERSISTENT
     await _conflict_exchange.publish(
         aio_pika.Message(body=xml_bytes, delivery_mode=delivery_mode),
@@ -117,6 +159,7 @@ async def publish_log_event_raw(xml_bytes: bytes) -> None:
     """
     if _logs_exchange is None:
         return
+    await _ensure_channel()
     await _logs_exchange.publish(
         aio_pika.Message(body=xml_bytes, delivery_mode=DeliveryMode.PERSISTENT),
         routing_key="routing.log",

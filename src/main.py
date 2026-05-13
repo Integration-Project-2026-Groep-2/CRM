@@ -80,7 +80,7 @@ async def main() -> None:
 
     connection = await get_rabbitmq_connection(config.rabbitmq_url, shutdown_event)
     channel = await connection.channel()
-    await sender.init(channel)
+    await sender.init(channel, connection=connection)
 
     if mcp_handle is not None:
         _, mcp_publisher = mcp_handle
