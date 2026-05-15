@@ -41,15 +41,10 @@ def _normalize_registration_role(value: str | None) -> str | None:
     if normalized is None:
         return None
 
-    role_map = {
-        "visitor": "VISITOR",
-        "company_contact": "COMPANY_CONTACT",
-        "spreker": "SPEAKER",
-        "kassamedewerker": "CASHIER",
-        "sysadmin": "ADMIN",
-        "eventbeheerder": "EVENT_MANAGER",
-    }
-    return role_map.get(normalized.casefold(), normalized)
+    if normalized.casefold() == "company_contact":
+        return "COMPANY_CONTACT"
+        
+    return "VISITOR"
 
 
 # ---------------------------------------------------------------------------
