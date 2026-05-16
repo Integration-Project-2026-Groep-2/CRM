@@ -39,6 +39,7 @@ from src.salesforce.contacts.updates import (  # noqa: F401
     deactivate_contact,
     deactivate_contact_record,
     ensure_contact_identifiers,
+    update_contact_badge_code_by_email,
     update_facturatie_contact,
     update_kassa_contact,
     update_mailing_contact,

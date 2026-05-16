@@ -68,6 +68,7 @@ from src.salesforce.contacts import (  # noqa: F401
     get_contact_match_by_kassa_id,
     get_contact_match_by_mailing_id,
     get_contact_match_by_planning_id,
+    update_contact_badge_code_by_email,
     update_facturatie_contact,
     update_kassa_contact,
     update_mailing_contact,

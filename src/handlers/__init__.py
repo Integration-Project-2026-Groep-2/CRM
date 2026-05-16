@@ -18,6 +18,7 @@ from src.handlers import (
     frontend_company_created,  # noqa: F401
     frontend_registration_created,  # noqa: F401
     frontend_registration_updated,  # noqa: F401
+    iot_badge_linked,  # noqa: F401
     kassa_payment_confirmed,  # noqa: F401
     kassa_person_lookup_requested,  # noqa: F401
     kassa_unpaid_requested,  # noqa: F401

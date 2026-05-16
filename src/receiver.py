@@ -290,6 +290,7 @@ from src.handlers.facturatie_user_updated import handle as handle_facturatie_use
 from src.handlers.frontend_company_created import handle as handle_company_created  # noqa: E402, F401
 from src.handlers.frontend_registration_created import handle as handle_registration  # noqa: E402, F401
 from src.handlers.frontend_registration_updated import handle as handle_registration_updated  # noqa: E402, F401
+from src.handlers.iot_badge_linked import handle as handle_iot_badge_linked  # noqa: E402, F401
 from src.handlers.kassa_payment_confirmed import handle as handle_payment_confirmed  # noqa: E402, F401
 from src.handlers.kassa_person_lookup_requested import handle as handle_person_lookup  # noqa: E402, F401
 from src.handlers.kassa_unpaid_requested import handle as handle_unpaid_requested  # noqa: E402, F401
@@ -341,6 +342,7 @@ from src.salesforce_client import (  # noqa: E402, F401
     has_contact_mailing_id_field,
     has_contact_planning_id_field,
     has_session_registration_object,
+    update_contact_badge_code_by_email,
     update_facturatie_account,
     update_facturatie_contact,
     update_mailing_contact,
