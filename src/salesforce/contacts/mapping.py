@@ -7,10 +7,13 @@ keep the wire-format consistent across inbound-triggered and out-of-band
 changes.
 """
 
+import logging
 from datetime import datetime, timezone
 
 from src.country_code import to_iso_alpha2
 from src.salesforce.client import coerce_is_active
+
+logger = logging.getLogger(__name__)
 
 _SPECIALIZED_ROLES = frozenset(
     {"ADMIN", "SPEAKER", "EVENT_MANAGER", "CASHIER", "BAR_STAFF"}
