@@ -16,6 +16,7 @@ from src.salesforce.client import (
     _escape_soql,
     _resolve_contact_active_field_optional,
 )
+from src.salesforce.contacts.utils import get_full_contact_record
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +80,7 @@ async def create_contact(sf: Salesforce, data: dict[str, Any]) -> dict[str, Any]
         contact_id = result["id"]
         logger.info("Created Contact with ID %s (CRM_ID: %s)", contact_id, crm_id)
 
-        # Retrieve and return complete record for XML serialization
-        contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        contact_record = await get_full_contact_record(sf, contact_id)
         logger.debug("Retrieved Contact record from Salesforce: %s", contact_record)
         return contact_record
     except SalesforceError as e:

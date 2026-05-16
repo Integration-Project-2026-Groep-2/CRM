@@ -54,6 +54,8 @@ from src.salesforce_client import (
 
 @pytest.fixture
 def sf(monkeypatch):
+    import src.salesforce.contacts.utils as contacts_utils_module
+
     salesforce_client_module._active_field_cache = None
     salesforce_client_module._mailing_id_field_supported_cache = None
     salesforce_client_module._kassa_id_field_supported_cache = None
@@ -63,12 +65,18 @@ def sf(monkeypatch):
     salesforce_client_module._account_email_field_cache = None
     salesforce_client_module._account_country_field_cache = None
     salesforce_client_module._account_house_number_field_supported_cache = None
+    contacts_utils_module._describe_cache.clear()
 
     async def immediate_to_thread(func, /, *args, **kwargs):
         return func(*args, **kwargs)
 
     monkeypatch.setattr(
         salesforce_client_module.asyncio,
+        "to_thread",
+        immediate_to_thread,
+    )
+    monkeypatch.setattr(
+        contacts_utils_module.asyncio,
         "to_thread",
         immediate_to_thread,
     )
@@ -81,7 +89,14 @@ def sf(monkeypatch):
     sf.query_all = MagicMock()
     sf.describe = MagicMock(return_value={"sobjects": [{"name": "Session_Registration__c"}]})
     sf.Contact.describe.return_value = {
-        "fields": [{"name": "IsActive__c"}]
+        "fields": [
+            {"name": "Id"},
+            {"name": "CRM_ID__c"},
+            {"name": "FirstName"},
+            {"name": "LastName"},
+            {"name": "Email"},
+            {"name": "IsActive__c"},
+        ]
     }
     return sf
 
@@ -89,21 +104,27 @@ def sf(monkeypatch):
 @pytest.mark.asyncio
 async def test_create_contact_success(sf):
     sf.Contact.create.return_value = {"id": "003000000000001"}
-    sf.Contact.get.return_value = {"Id": "003000000000001", "FirstName": "Alice", "Email": "a@a.com"}
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{"Id": "003000000000001", "FirstName": "Alice", "Email": "a@a.com"}],
+    }
 
     payload = {"FirstName": "Alice", "LastName": "Test", "Email": "a@a.com"}
     result = await create_contact(sf, payload)
 
     assert result == {"Id": "003000000000001", "FirstName": "Alice", "Email": "a@a.com"}
     sf.Contact.create.assert_called_once()
-    sf.Contact.get.assert_called_once_with("003000000000001")
-    # CRM_ID__c wordt niet meer toegevoegd aan input dict (kopie gebruikt)
+    soql = sf.query.call_args[0][0]
+    assert "WHERE Id = '003000000000001'" in soql
 
 
 @pytest.mark.asyncio
 async def test_create_contact_sets_active_field_true(sf):
     sf.Contact.create.return_value = {"id": "003000000000012"}
-    sf.Contact.get.return_value = {"Id": "003000000000012", "Email": "active@example.com"}
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{"Id": "003000000000012", "Email": "active@example.com"}],
+    }
 
     await create_contact(sf, {"FirstName": "Active", "LastName": "User", "Email": "active@example.com"})
 
@@ -113,9 +134,20 @@ async def test_create_contact_sets_active_field_true(sf):
 
 @pytest.mark.asyncio
 async def test_create_contact_does_not_require_active_field_migration(sf):
-    sf.Contact.describe.return_value = {"fields": []}
+    sf.Contact.describe.return_value = {
+        "fields": [
+            {"name": "Id"},
+            {"name": "CRM_ID__c"},
+            {"name": "FirstName"},
+            {"name": "LastName"},
+            {"name": "Email"},
+        ]
+    }
     sf.Contact.create.return_value = {"id": "003000000000014"}
-    sf.Contact.get.return_value = {"Id": "003000000000014", "Email": "no-active@example.com"}
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{"Id": "003000000000014", "Email": "no-active@example.com"}],
+    }
 
     await create_contact(sf, {"FirstName": "No", "LastName": "ActiveField", "Email": "no-active@example.com"})
 
