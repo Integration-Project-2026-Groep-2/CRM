@@ -34,7 +34,7 @@ def _get_contact_is_active(contact: dict) -> bool:
 
 def _build_user_data(contact: dict) -> dict:
     """Build user_data payload dict from a Salesforce contact record."""
-    logger.debug("_build_user_data received contact: %s", contact)
+    logger.debug("_build_user_data received fields: %s", sorted(contact.keys()))
     # Intentionally permissive: Role__c may be absent on legacy Contacts —
     # default to VISITOR instead of crashing, so out-of-band edits in the
     # Salesforce UI never drop the C13 publish.
