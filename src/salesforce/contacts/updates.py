@@ -19,6 +19,7 @@ from src.salesforce.client import (
 )
 from src.salesforce.contacts.mapping import _SPECIALIZED_ROLES
 from src.salesforce.contacts.matching import get_contact_by_email
+from src.salesforce.contacts.utils import get_full_contact_record
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ async def ensure_contact_identifiers(
         contact_id,
         ", ".join(sorted(updates.keys())),
     )
-    return await asyncio.to_thread(sf.Contact.get, contact_id)
+    return await get_full_contact_record(sf, contact_id)
 
 
 async def backfill_mailing_contact_fields(
@@ -127,7 +128,7 @@ async def backfill_mailing_contact_fields(
         contact_id,
         ", ".join(sorted(updates.keys())),
     )
-    return await asyncio.to_thread(sf.Contact.get, contact_id)
+    return await get_full_contact_record(sf, contact_id)
 
 
 async def backfill_planning_contact_fields(
@@ -173,7 +174,7 @@ async def backfill_planning_contact_fields(
         contact_id,
         ", ".join(sorted(updates.keys())),
     )
-    return await asyncio.to_thread(sf.Contact.get, contact_id)
+    return await get_full_contact_record(sf, contact_id)
 
 
 async def backfill_kassa_contact_fields(
@@ -214,7 +215,7 @@ async def backfill_kassa_contact_fields(
         contact_id,
         ", ".join(sorted(updates.keys())),
     )
-    return await asyncio.to_thread(sf.Contact.get, contact_id)
+    return await get_full_contact_record(sf, contact_id)
 
 
 async def update_mailing_contact(
@@ -271,7 +272,7 @@ async def update_mailing_contact(
         contact_id,
         ", ".join(sorted(updates.keys())),
     )
-    return await asyncio.to_thread(sf.Contact.get, contact_id)
+    return await get_full_contact_record(sf, contact_id)
 
 
 async def update_planning_contact(
@@ -320,7 +321,7 @@ async def update_planning_contact(
         contact_id,
         ", ".join(sorted(updates.keys())),
     )
-    return await asyncio.to_thread(sf.Contact.get, contact_id)
+    return await get_full_contact_record(sf, contact_id)
 
 
 async def update_facturatie_contact(
@@ -411,7 +412,7 @@ async def update_facturatie_contact(
         contact_id,
         ", ".join(sorted(updates.keys())),
     )
-    return await asyncio.to_thread(sf.Contact.get, contact_id)
+    return await get_full_contact_record(sf, contact_id)
 
 
 async def update_kassa_contact(
@@ -469,7 +470,7 @@ async def update_kassa_contact(
         contact_id,
         ", ".join(sorted(updates.keys())),
     )
-    return await asyncio.to_thread(sf.Contact.get, contact_id)
+    return await get_full_contact_record(sf, contact_id)
 
 
 async def deactivate_contact(
@@ -528,7 +529,7 @@ async def deactivate_contact_record(
         logger.info("Deactivated Contact %s (%s)", contact_id, log_target)
 
         # Re-fetch to get the complete updated record
-        updated_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        updated_record = await get_full_contact_record(sf, contact_id)
         if active_field != "IsActive__c" and "IsActive__c" not in updated_record:
             # Normalize key so downstream payload builders remain stable.
             updated_record["IsActive__c"] = updated_record.get(active_field, False)

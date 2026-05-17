@@ -685,11 +685,14 @@ async def test_get_contact_match_by_planning_id_returns_none_for_no_match(sf):
 @pytest.mark.asyncio
 async def test_ensure_contact_identifiers_adds_missing_crm_id_and_registration_id(sf, monkeypatch):
     monkeypatch.setattr(salesforce_client_module.uuid, "uuid4", lambda: "generated-crm-id")
-    sf.Contact.get.return_value = {
-        "Id": "003000000000008",
-        "Email": "ensure@example.com",
-        "CRM_ID__c": "generated-crm-id",
-        "Registration_ID__c": "REG-NEW",
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000008",
+            "Email": "ensure@example.com",
+            "CRM_ID__c": "generated-crm-id",
+            "Registration_ID__c": "REG-NEW",
+        }],
     }
 
     result = await ensure_contact_identifiers(
@@ -751,11 +754,14 @@ async def test_ensure_contact_identifiers_preserves_existing_registration_id(sf)
 
 @pytest.mark.asyncio
 async def test_ensure_contact_identifiers_adds_missing_planning_id(sf):
-    sf.Contact.get.return_value = {
-        "Id": "003000000000022",
-        "Email": "planning@example.com",
-        "CRM_ID__c": "existing-crm-id",
-        "Planning_ID__c": "planning-id-30",
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000022",
+            "Email": "planning@example.com",
+            "CRM_ID__c": "existing-crm-id",
+            "Planning_ID__c": "planning-id-30",
+        }],
     }
 
     result = await ensure_contact_identifiers(
@@ -786,13 +792,16 @@ async def test_backfill_planning_contact_fields_updates_only_missing_fields(sf):
         "Role__c": None,
         "Phone": None,
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000023",
-        "Email": "planning@example.com",
-        "FirstName": "Sofie",
-        "LastName": "Declercq",
-        "Role__c": "SPEAKER",
-        "Phone": "+32470123456",
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000023",
+            "Email": "planning@example.com",
+            "FirstName": "Sofie",
+            "LastName": "Declercq",
+            "Role__c": "SPEAKER",
+            "Phone": "+32470123456",
+        }],
     }
 
     result = await backfill_planning_contact_fields(
@@ -828,13 +837,16 @@ async def test_backfill_mailing_contact_fields_updates_only_missing_fields(sf):
         "Company_ID__c": None,
         "Role__c": None,
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000016",
-        "Email": "mia.mail@example.com",
-        "FirstName": "Mia",
-        "LastName": "Mail",
-        "Company_ID__c": "company-id-123",
-        "Role__c": "COMPANY_CONTACT",
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000016",
+            "Email": "mia.mail@example.com",
+            "FirstName": "Mia",
+            "LastName": "Mail",
+            "Company_ID__c": "company-id-123",
+            "Role__c": "COMPANY_CONTACT",
+        }],
     }
 
     result = await backfill_mailing_contact_fields(
@@ -868,12 +880,15 @@ async def test_backfill_mailing_contact_fields_sets_missing_visitor_role(sf):
         "LastName": "Mail",
         "Role__c": None,
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000017",
-        "Email": "mia.mail@example.com",
-        "FirstName": "Mia",
-        "LastName": "Mail",
-        "Role__c": "VISITOR",
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000017",
+            "Email": "mia.mail@example.com",
+            "FirstName": "Mia",
+            "LastName": "Mail",
+            "Role__c": "VISITOR",
+        }],
     }
 
     result = await backfill_mailing_contact_fields(
@@ -943,13 +958,16 @@ async def test_backfill_mailing_contact_fields_promotes_visitor_to_company_conta
         "Company_ID__c": None,
         "Role__c": "VISITOR",
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000020",
-        "Email": "mia.mail@example.com",
-        "FirstName": "Mia",
-        "LastName": "Mail",
-        "Company_ID__c": "company-id-123",
-        "Role__c": "COMPANY_CONTACT",
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000020",
+            "Email": "mia.mail@example.com",
+            "FirstName": "Mia",
+            "LastName": "Mail",
+            "Company_ID__c": "company-id-123",
+            "Role__c": "COMPANY_CONTACT",
+        }],
     }
 
     result = await backfill_mailing_contact_fields(
@@ -977,10 +995,13 @@ async def test_backfill_mailing_contact_fields_sets_gdpr_consent_true_when_missi
         "Email": "mia.mail@example.com",
         "GDPR_Consent__c": None,
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000021",
-        "Email": "mia.mail@example.com",
-        "GDPR_Consent__c": True,
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000021",
+            "Email": "mia.mail@example.com",
+            "GDPR_Consent__c": True,
+        }],
     }
 
     result = await backfill_mailing_contact_fields(
@@ -1043,14 +1064,17 @@ async def test_update_mailing_contact_authoritatively_overwrites_owned_fields(sf
         "Role__c": "COMPANY_CONTACT",
         "GDPR_Consent__c": False,
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000041",
-        "Email": "new@example.com",
-        "FirstName": None,
-        "LastName": "new@example.com",
-        "Company_ID__c": None,
-        "Role__c": "VISITOR",
-        "GDPR_Consent__c": True,
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000041",
+            "Email": "new@example.com",
+            "FirstName": None,
+            "LastName": "new@example.com",
+            "Company_ID__c": None,
+            "Role__c": "VISITOR",
+            "GDPR_Consent__c": True,
+        }],
     }
 
     result = await update_mailing_contact(
@@ -1089,14 +1113,17 @@ async def test_update_mailing_contact_preserves_specialized_role(sf):
         "Role__c": "ADMIN",
         "GDPR_Consent__c": True,
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000042",
-        "Email": "mia.mail@example.com",
-        "FirstName": "Updated",
-        "LastName": "User",
-        "Company_ID__c": "old-company-id",
-        "Role__c": "ADMIN",
-        "GDPR_Consent__c": True,
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000042",
+            "Email": "mia.mail@example.com",
+            "FirstName": "Updated",
+            "LastName": "User",
+            "Company_ID__c": "old-company-id",
+            "Role__c": "ADMIN",
+            "GDPR_Consent__c": True,
+        }],
     }
 
     result = await update_mailing_contact(
@@ -1130,14 +1157,17 @@ async def test_update_mailing_contact_does_not_clear_company_link_for_specialize
         "Role__c": "SPEAKER",
         "GDPR_Consent__c": True,
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000044",
-        "Email": "mia.mail@example.com",
-        "FirstName": "Updated",
-        "LastName": "User",
-        "Company_ID__c": "old-company-id",
-        "Role__c": "SPEAKER",
-        "GDPR_Consent__c": True,
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000044",
+            "Email": "mia.mail@example.com",
+            "FirstName": "Updated",
+            "LastName": "User",
+            "Company_ID__c": "old-company-id",
+            "Role__c": "SPEAKER",
+            "GDPR_Consent__c": True,
+        }],
     }
 
     result = await update_mailing_contact(
@@ -1171,14 +1201,17 @@ async def test_update_planning_contact_authoritatively_overwrites_owned_fields(s
         "Phone": "+32000000000",
         "GDPR_Consent__c": False,
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000051",
-        "Email": "new@example.com",
-        "FirstName": "Sofie",
-        "LastName": "Updated",
-        "Role__c": "SPEAKER",
-        "Phone": "+32470999999",
-        "GDPR_Consent__c": True,
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000051",
+            "Email": "new@example.com",
+            "FirstName": "Sofie",
+            "LastName": "Updated",
+            "Role__c": "SPEAKER",
+            "Phone": "+32470999999",
+            "GDPR_Consent__c": True,
+        }],
     }
 
     result = await update_planning_contact(
@@ -1217,14 +1250,17 @@ async def test_update_planning_contact_clears_phone_when_payload_omits_it(sf):
         "Phone": "+32470123456",
         "GDPR_Consent__c": True,
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000052",
-        "Email": "sofie@example.com",
-        "FirstName": "Sofie",
-        "LastName": "Declercq",
-        "Role__c": "SPEAKER",
-        "Phone": None,
-        "GDPR_Consent__c": True,
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000052",
+            "Email": "sofie@example.com",
+            "FirstName": "Sofie",
+            "LastName": "Declercq",
+            "Role__c": "SPEAKER",
+            "Phone": None,
+            "GDPR_Consent__c": True,
+        }],
     }
 
     result = await update_planning_contact(
@@ -1306,14 +1342,17 @@ async def test_update_kassa_contact_preserves_specialized_role_and_skips_empty_b
         "Role__c": "ADMIN",
         "Company_ID__c": "company-old",
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000090",
-        "Email": "admin.new@example.com",
-        "FirstName": "Admin",
-        "LastName": "User",
-        "Badge_Code__c": "BADGE-OLD",
-        "Role__c": "ADMIN",
-        "Company_ID__c": "company-old",
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000090",
+            "Email": "admin.new@example.com",
+            "FirstName": "Admin",
+            "LastName": "User",
+            "Badge_Code__c": "BADGE-OLD",
+            "Role__c": "ADMIN",
+            "Company_ID__c": "company-old",
+        }],
     }
 
     result = await update_kassa_contact(
@@ -1670,12 +1709,14 @@ async def test_upsert_account_by_vat_strips_external_id_from_body(sf):
 @pytest.mark.asyncio
 async def test_deactivate_contact_success(sf):
     """Happy path: Contact found → IsActive__c set to False → record returned."""
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000020"}]}
-    sf.Contact.get.return_value = {
-        "Id": "003000000000020",
-        "Email": "cancel@example.com",
-        "CRM_ID__c": "uuid-deact",
-        "IsActive__c": False,
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000020",
+            "Email": "cancel@example.com",
+            "CRM_ID__c": "uuid-deact",
+            "IsActive__c": False,
+        }],
     }
     sf.Contact.update.return_value = None
 
