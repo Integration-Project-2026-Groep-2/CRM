@@ -13,6 +13,7 @@ from typing import Any, Literal
 from simple_salesforce import Salesforce, SalesforceError
 
 from src.salesforce.client import _escape_soql
+from src.salesforce.contacts.utils import get_full_contact_record
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ async def get_contact_by_email(
 
         if result["totalSize"] > 0:
             contact_id = result["records"][0]["Id"]
-            contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+            contact_record = await get_full_contact_record(sf, contact_id)
             logger.info("Found Contact by email: %s", email)
             return contact_record
         else:
@@ -73,7 +74,7 @@ async def get_contact_for_person_lookup(
     try:
         escaped_email = _escape_soql(email)
         query = (
-            "SELECT Id, CRM_ID__c, AccountId, Account.Name, Account.CRM_ID__c "
+            "SELECT Id, CRM_ID__c, Company_ID__c, AccountId, Account.Name, Account.CRM_ID__c "
             f"FROM Contact WHERE Email = '{escaped_email}'"
         )
         result = await asyncio.to_thread(sf.query, query)
@@ -103,7 +104,7 @@ async def get_contact_by_crm_id(
             return None
 
         contact_id = result["records"][0]["Id"]
-        contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        contact_record = await get_full_contact_record(sf, contact_id)
         logger.info("Found Contact by CRM_ID__c: %s", crm_id)
         return contact_record
     except SalesforceError as e:
@@ -140,7 +141,7 @@ async def get_contact_match_by_email(
             return "ambiguous", None
 
         contact_id = result["records"][0]["Id"]
-        contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        contact_record = await get_full_contact_record(sf, contact_id)
         logger.info("Found unique Contact by email: %s", email)
         return "unique", contact_record
     except SalesforceError as e:
@@ -163,7 +164,7 @@ async def get_contact_match_by_mailing_id(
             return "ambiguous", None
 
         contact_id = result["records"][0]["Id"]
-        contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        contact_record = await get_full_contact_record(sf, contact_id)
         logger.info("Found unique Contact by Mailing_ID__c: %s", mailing_id)
         return "unique", contact_record
     except SalesforceError as e:
@@ -186,7 +187,7 @@ async def get_contact_match_by_planning_id(
             return "ambiguous", None
 
         contact_id = result["records"][0]["Id"]
-        contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        contact_record = await get_full_contact_record(sf, contact_id)
         logger.info("Found unique Contact by Planning_ID__c: %s", planning_id)
         return "unique", contact_record
     except SalesforceError as e:
@@ -209,7 +210,7 @@ async def get_contact_match_by_kassa_id(
             return "ambiguous", None
 
         contact_id = result["records"][0]["Id"]
-        contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        contact_record = await get_full_contact_record(sf, contact_id)
         logger.info("Found unique Contact by Kassa_ID__c: %s", kassa_id)
         return "unique", contact_record
     except SalesforceError as e:
@@ -236,7 +237,7 @@ async def get_contact_match_by_crm_id(
             return "ambiguous", None
 
         contact_id = result["records"][0]["Id"]
-        contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        contact_record = await get_full_contact_record(sf, contact_id)
         logger.info("Found unique Contact by CRM_ID__c: %s", crm_id)
         return "unique", contact_record
     except SalesforceError as e:

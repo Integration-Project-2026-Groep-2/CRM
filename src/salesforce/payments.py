@@ -22,6 +22,7 @@ from src.salesforce.contacts import (
     find_unique_contact_by_email,
     get_contact_by_crm_id,
 )
+from src.salesforce.contacts.utils import get_full_contact_record
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +181,7 @@ async def update_payment_status(
             paid_at,
             contact.get(_PAYMENT_TIMESTAMP_FIELD),
         )
-        return await asyncio.to_thread(sf.Contact.get, contact["Id"])
+        return await get_full_contact_record(sf, contact["Id"])
 
     await asyncio.to_thread(
         sf.Contact.update,
@@ -194,4 +195,4 @@ async def update_payment_status(
         registration_id,
     )
 
-    return await asyncio.to_thread(sf.Contact.get, contact["Id"])
+    return await get_full_contact_record(sf, contact["Id"])

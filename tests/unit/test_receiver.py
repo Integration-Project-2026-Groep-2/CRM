@@ -3633,7 +3633,6 @@ class TestHandlePlanningUserUpdated:
         reactivated_contact = {**updated_contact, "IsActive__c": True}
         sf_mock.Contact = MagicMock()
         sf_mock.Contact.update = MagicMock()
-        sf_mock.Contact.get = MagicMock(return_value=reactivated_contact)
         with (
             patch("src.xml_validator.validate", return_value=parsed_xml),
             patch("src.handlers.planning_user_updated.has_contact_planning_id_field", return_value=True),
@@ -3643,6 +3642,7 @@ class TestHandlePlanningUserUpdated:
             patch("src.handlers.planning_user_updated.update_planning_contact", return_value=updated_contact),
             patch("src.handlers.planning_user_updated._get_contact_is_active", return_value=False),
             patch("src.handlers.planning_user_updated.apply_is_active", return_value={"IsActive__c": True}),
+            patch("src.handlers.planning_user_updated.get_full_contact_record", return_value=reactivated_contact),
             patch("src.sender.publish_user_updated") as mock_updated_publish,
             caplog.at_level(logging.INFO),
         ):

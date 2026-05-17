@@ -21,6 +21,7 @@ from src.salesforce.contacts import (
     _build_updated_user_data,
     _get_contact_is_active,
 )
+from src.salesforce.contacts.utils import get_full_contact_record
 from src.salesforce_client import (
     apply_is_active,
     get_contact_match_by_crm_id,
@@ -136,7 +137,7 @@ async def handle(message: aio_pika.IncomingMessage, sf: "Salesforce") -> None:
         if reactivation_update:
             contact_id = contact["Id"]
             await asyncio.to_thread(sf.Contact.update, contact_id, reactivation_update)
-            contact = await asyncio.to_thread(sf.Contact.get, contact_id)
+            contact = await get_full_contact_record(sf, contact_id)
             logger.warning(
                 "Reactivated Contact %s for Kassa user %s (update) after previous soft delete/inactive state",
                 contact_id,

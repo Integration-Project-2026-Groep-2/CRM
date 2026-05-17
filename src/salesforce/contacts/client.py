@@ -16,6 +16,7 @@ from src.salesforce.client import (
     _escape_soql,
     _resolve_contact_active_field_optional,
 )
+from src.salesforce.contacts.utils import get_full_contact_record
 
 logger = logging.getLogger(__name__)
 
@@ -73,15 +74,13 @@ async def create_contact(sf: Salesforce, data: dict[str, Any]) -> dict[str, Any]
         data["CRM_ID__c"] = crm_id
         data = await _ensure_contact_active(sf, data)
 
-        # Create Contact
         result = await asyncio.to_thread(sf.Contact.create, data)
         contact_id = result["id"]
         logger.info("Created Contact with ID %s (CRM_ID: %s)", contact_id, crm_id)
 
-        # Retrieve and return complete record for XML serialization
-        contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        contact_record = await get_full_contact_record(sf, contact_id)
         return contact_record
-    except SalesforceError as e:
+    except (SalesforceError, RuntimeError) as e:
         logger.error("Failed to create contact: %s", str(e))
         raise
 
@@ -142,9 +141,9 @@ async def upsert_contact_by_email(
                 raise RuntimeError(f"Upsert succeeded but contact not found for email {email}")
             return refreshed
 
-        contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        contact_record = await get_full_contact_record(sf, contact_id)
         return contact_record
-    except SalesforceError as e:
+    except (SalesforceError, RuntimeError) as e:
         logger.error("Failed to upsert contact by email %s: %s", email, str(e))
         raise
 

@@ -54,6 +54,8 @@ from src.salesforce_client import (
 
 @pytest.fixture
 def sf(monkeypatch):
+    import src.salesforce.contacts.utils as contacts_utils_module
+
     salesforce_client_module._active_field_cache = None
     salesforce_client_module._mailing_id_field_supported_cache = None
     salesforce_client_module._kassa_id_field_supported_cache = None
@@ -63,12 +65,18 @@ def sf(monkeypatch):
     salesforce_client_module._account_email_field_cache = None
     salesforce_client_module._account_country_field_cache = None
     salesforce_client_module._account_house_number_field_supported_cache = None
+    contacts_utils_module._describe_cache.clear()
 
     async def immediate_to_thread(func, /, *args, **kwargs):
         return func(*args, **kwargs)
 
     monkeypatch.setattr(
         salesforce_client_module.asyncio,
+        "to_thread",
+        immediate_to_thread,
+    )
+    monkeypatch.setattr(
+        contacts_utils_module.asyncio,
         "to_thread",
         immediate_to_thread,
     )
@@ -81,7 +89,14 @@ def sf(monkeypatch):
     sf.query_all = MagicMock()
     sf.describe = MagicMock(return_value={"sobjects": [{"name": "Session_Registration__c"}]})
     sf.Contact.describe.return_value = {
-        "fields": [{"name": "IsActive__c"}]
+        "fields": [
+            {"name": "Id"},
+            {"name": "CRM_ID__c"},
+            {"name": "FirstName"},
+            {"name": "LastName"},
+            {"name": "Email"},
+            {"name": "IsActive__c"},
+        ]
     }
     return sf
 
@@ -89,21 +104,27 @@ def sf(monkeypatch):
 @pytest.mark.asyncio
 async def test_create_contact_success(sf):
     sf.Contact.create.return_value = {"id": "003000000000001"}
-    sf.Contact.get.return_value = {"Id": "003000000000001", "FirstName": "Alice", "Email": "a@a.com"}
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{"Id": "003000000000001", "FirstName": "Alice", "Email": "a@a.com"}],
+    }
 
     payload = {"FirstName": "Alice", "LastName": "Test", "Email": "a@a.com"}
     result = await create_contact(sf, payload)
 
     assert result == {"Id": "003000000000001", "FirstName": "Alice", "Email": "a@a.com"}
     sf.Contact.create.assert_called_once()
-    sf.Contact.get.assert_called_once_with("003000000000001")
-    # CRM_ID__c wordt niet meer toegevoegd aan input dict (kopie gebruikt)
+    soql = sf.query.call_args[0][0]
+    assert "WHERE Id = '003000000000001'" in soql
 
 
 @pytest.mark.asyncio
 async def test_create_contact_sets_active_field_true(sf):
     sf.Contact.create.return_value = {"id": "003000000000012"}
-    sf.Contact.get.return_value = {"Id": "003000000000012", "Email": "active@example.com"}
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{"Id": "003000000000012", "Email": "active@example.com"}],
+    }
 
     await create_contact(sf, {"FirstName": "Active", "LastName": "User", "Email": "active@example.com"})
 
@@ -113,9 +134,20 @@ async def test_create_contact_sets_active_field_true(sf):
 
 @pytest.mark.asyncio
 async def test_create_contact_does_not_require_active_field_migration(sf):
-    sf.Contact.describe.return_value = {"fields": []}
+    sf.Contact.describe.return_value = {
+        "fields": [
+            {"name": "Id"},
+            {"name": "CRM_ID__c"},
+            {"name": "FirstName"},
+            {"name": "LastName"},
+            {"name": "Email"},
+        ]
+    }
     sf.Contact.create.return_value = {"id": "003000000000014"}
-    sf.Contact.get.return_value = {"Id": "003000000000014", "Email": "no-active@example.com"}
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{"Id": "003000000000014", "Email": "no-active@example.com"}],
+    }
 
     await create_contact(sf, {"FirstName": "No", "LastName": "ActiveField", "Email": "no-active@example.com"})
 
@@ -135,9 +167,11 @@ async def test_create_contact_raises_salesforce_error(sf):
 
 @pytest.mark.asyncio
 async def test_upsert_contact_by_email(sf):
-    sf.query.return_value = {"totalSize": 0, "records": []}
+    sf.query.side_effect = [
+        {"totalSize": 0, "records": []},
+        {"totalSize": 1, "records": [{"Id": "003000000000002", "Email": "a@a.com"}]},
+    ]
     sf.Contact.upsert.return_value = {"id": "003000000000002"}
-    sf.Contact.get.return_value = {"Id": "003000000000002", "Email": "a@a.com"}
 
     payload = {"FirstName": "Bob"}
     result = await upsert_contact_by_email(sf, "a@a.com", payload)
@@ -149,26 +183,29 @@ async def test_upsert_contact_by_email(sf):
 @pytest.mark.asyncio
 async def test_upsert_contact_by_email_handles_int_response(sf):
     """Salesforce may return only an HTTP status code for update upserts."""
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000011"}]}
-    sf.Contact.get.return_value = {
-        "Id": "003000000000011",
-        "Email": "exists@example.com",
-        "CRM_ID__c": "existing-crm-id",
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000011",
+            "Email": "exists@example.com",
+            "CRM_ID__c": "existing-crm-id",
+        }],
     }
     sf.Contact.upsert.return_value = 204
 
     result = await upsert_contact_by_email(sf, "exists@example.com", {"FirstName": "New"})
 
     sf.Contact.upsert.assert_called_once()
-    sf.Contact.get.assert_called_with("003000000000011")
     assert result["Id"] == "003000000000011"
 
 
 @pytest.mark.asyncio
 async def test_upsert_contact_by_email_sets_active_field_true_when_missing(sf):
-    sf.query.return_value = {"totalSize": 0, "records": []}
+    sf.query.side_effect = [
+        {"totalSize": 0, "records": []},
+        {"totalSize": 1, "records": [{"Id": "003000000000013", "Email": "upsert@example.com"}]},
+    ]
     sf.Contact.upsert.return_value = {"id": "003000000000013"}
-    sf.Contact.get.return_value = {"Id": "003000000000013", "Email": "upsert@example.com"}
 
     await upsert_contact_by_email(sf, "upsert@example.com", {"FirstName": "Upsert"})
 
@@ -197,8 +234,10 @@ async def test_upsert_contact_by_email_preserves_inactive_existing_contact(sf):
 
 @pytest.mark.asyncio
 async def test_get_contact_by_email_found(sf):
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000004"}]}
-    sf.Contact.get.return_value = {"Id": "003000000000004", "Email": "x@y.com"}
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{"Id": "003000000000004", "Email": "x@y.com"}],
+    }
 
     result = await get_contact_by_email(sf, "x@y.com")
 
@@ -215,23 +254,26 @@ async def test_get_contact_by_email_not_found(sf):
 
 @pytest.mark.asyncio
 async def test_get_contact_by_crm_id_found(sf):
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000005"}]}
-    sf.Contact.get.return_value = {
-        "Id": "003000000000005",
-        "CRM_ID__c": "crm-123",
-        "Email": "x@y.com",
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000005",
+            "CRM_ID__c": "crm-123",
+            "Email": "x@y.com",
+        }],
     }
 
     result = await get_contact_by_crm_id(sf, "crm-123")
 
     assert result["CRM_ID__c"] == "crm-123"
-    sf.Contact.get.assert_called_once_with("003000000000005")
 
 
 @pytest.mark.asyncio
 async def test_find_unique_contact_by_email_found(sf):
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000006"}]}
-    sf.Contact.get.return_value = {"Id": "003000000000006", "Email": "unique@example.com"}
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{"Id": "003000000000006", "Email": "unique@example.com"}],
+    }
 
     result = await find_unique_contact_by_email(sf, "unique@example.com")
 
@@ -274,14 +316,15 @@ async def test_get_contact_match_by_email_returns_none_for_no_match(sf):
 
 @pytest.mark.asyncio
 async def test_get_contact_match_by_email_returns_unique_contact(sf):
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000010"}]}
-    sf.Contact.get.return_value = {"Id": "003000000000010", "Email": "unique@example.com"}
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{"Id": "003000000000010", "Email": "unique@example.com"}],
+    }
 
     match_status, contact = await get_contact_match_by_email(sf, "unique@example.com")
 
     assert match_status == "unique"
     assert contact == {"Id": "003000000000010", "Email": "unique@example.com"}
-    sf.Contact.get.assert_called_once_with("003000000000010")
 
 
 @pytest.mark.asyncio
@@ -617,14 +660,15 @@ async def test_get_unique_active_session_registration_for_contact_returns_none_w
 
 @pytest.mark.asyncio
 async def test_get_contact_match_by_planning_id_returns_unique_contact(sf):
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000021"}]}
-    sf.Contact.get.return_value = {"Id": "003000000000021", "Planning_ID__c": "planning-id-1"}
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{"Id": "003000000000021", "Planning_ID__c": "planning-id-1"}],
+    }
 
     match_status, contact = await get_contact_match_by_planning_id(sf, "planning-id-1")
 
     assert match_status == "unique"
     assert contact == {"Id": "003000000000021", "Planning_ID__c": "planning-id-1"}
-    sf.Contact.get.assert_called_once_with("003000000000021")
 
 
 @pytest.mark.asyncio
@@ -641,11 +685,14 @@ async def test_get_contact_match_by_planning_id_returns_none_for_no_match(sf):
 @pytest.mark.asyncio
 async def test_ensure_contact_identifiers_adds_missing_crm_id_and_registration_id(sf, monkeypatch):
     monkeypatch.setattr(salesforce_client_module.uuid, "uuid4", lambda: "generated-crm-id")
-    sf.Contact.get.return_value = {
-        "Id": "003000000000008",
-        "Email": "ensure@example.com",
-        "CRM_ID__c": "generated-crm-id",
-        "Registration_ID__c": "REG-NEW",
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000008",
+            "Email": "ensure@example.com",
+            "CRM_ID__c": "generated-crm-id",
+            "Registration_ID__c": "REG-NEW",
+        }],
     }
 
     result = await ensure_contact_identifiers(
@@ -664,17 +711,15 @@ async def test_ensure_contact_identifiers_adds_missing_crm_id_and_registration_i
 
 @pytest.mark.asyncio
 async def test_get_contact_match_by_kassa_id_returns_unique_contact(sf):
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000040"}]}
-    sf.Contact.get.return_value = {
-        "Id": "003000000000040",
-        "Kassa_ID__c": "kassa-id-1",
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{"Id": "003000000000040", "Kassa_ID__c": "kassa-id-1"}],
     }
 
     match_status, contact = await get_contact_match_by_kassa_id(sf, "kassa-id-1")
 
     assert match_status == "unique"
     assert contact == {"Id": "003000000000040", "Kassa_ID__c": "kassa-id-1"}
-    sf.Contact.get.assert_called_once_with("003000000000040")
 
 
 @pytest.mark.asyncio
@@ -709,11 +754,14 @@ async def test_ensure_contact_identifiers_preserves_existing_registration_id(sf)
 
 @pytest.mark.asyncio
 async def test_ensure_contact_identifiers_adds_missing_planning_id(sf):
-    sf.Contact.get.return_value = {
-        "Id": "003000000000022",
-        "Email": "planning@example.com",
-        "CRM_ID__c": "existing-crm-id",
-        "Planning_ID__c": "planning-id-30",
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000022",
+            "Email": "planning@example.com",
+            "CRM_ID__c": "existing-crm-id",
+            "Planning_ID__c": "planning-id-30",
+        }],
     }
 
     result = await ensure_contact_identifiers(
@@ -744,13 +792,16 @@ async def test_backfill_planning_contact_fields_updates_only_missing_fields(sf):
         "Role__c": None,
         "Phone": None,
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000023",
-        "Email": "planning@example.com",
-        "FirstName": "Sofie",
-        "LastName": "Declercq",
-        "Role__c": "SPEAKER",
-        "Phone": "+32470123456",
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000023",
+            "Email": "planning@example.com",
+            "FirstName": "Sofie",
+            "LastName": "Declercq",
+            "Role__c": "SPEAKER",
+            "Phone": "+32470123456",
+        }],
     }
 
     result = await backfill_planning_contact_fields(
@@ -786,13 +837,16 @@ async def test_backfill_mailing_contact_fields_updates_only_missing_fields(sf):
         "Company_ID__c": None,
         "Role__c": None,
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000016",
-        "Email": "mia.mail@example.com",
-        "FirstName": "Mia",
-        "LastName": "Mail",
-        "Company_ID__c": "company-id-123",
-        "Role__c": "COMPANY_CONTACT",
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000016",
+            "Email": "mia.mail@example.com",
+            "FirstName": "Mia",
+            "LastName": "Mail",
+            "Company_ID__c": "company-id-123",
+            "Role__c": "COMPANY_CONTACT",
+        }],
     }
 
     result = await backfill_mailing_contact_fields(
@@ -826,12 +880,15 @@ async def test_backfill_mailing_contact_fields_sets_missing_visitor_role(sf):
         "LastName": "Mail",
         "Role__c": None,
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000017",
-        "Email": "mia.mail@example.com",
-        "FirstName": "Mia",
-        "LastName": "Mail",
-        "Role__c": "VISITOR",
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000017",
+            "Email": "mia.mail@example.com",
+            "FirstName": "Mia",
+            "LastName": "Mail",
+            "Role__c": "VISITOR",
+        }],
     }
 
     result = await backfill_mailing_contact_fields(
@@ -901,13 +958,16 @@ async def test_backfill_mailing_contact_fields_promotes_visitor_to_company_conta
         "Company_ID__c": None,
         "Role__c": "VISITOR",
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000020",
-        "Email": "mia.mail@example.com",
-        "FirstName": "Mia",
-        "LastName": "Mail",
-        "Company_ID__c": "company-id-123",
-        "Role__c": "COMPANY_CONTACT",
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000020",
+            "Email": "mia.mail@example.com",
+            "FirstName": "Mia",
+            "LastName": "Mail",
+            "Company_ID__c": "company-id-123",
+            "Role__c": "COMPANY_CONTACT",
+        }],
     }
 
     result = await backfill_mailing_contact_fields(
@@ -935,10 +995,13 @@ async def test_backfill_mailing_contact_fields_sets_gdpr_consent_true_when_missi
         "Email": "mia.mail@example.com",
         "GDPR_Consent__c": None,
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000021",
-        "Email": "mia.mail@example.com",
-        "GDPR_Consent__c": True,
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000021",
+            "Email": "mia.mail@example.com",
+            "GDPR_Consent__c": True,
+        }],
     }
 
     result = await backfill_mailing_contact_fields(
@@ -1001,14 +1064,17 @@ async def test_update_mailing_contact_authoritatively_overwrites_owned_fields(sf
         "Role__c": "COMPANY_CONTACT",
         "GDPR_Consent__c": False,
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000041",
-        "Email": "new@example.com",
-        "FirstName": None,
-        "LastName": "new@example.com",
-        "Company_ID__c": None,
-        "Role__c": "VISITOR",
-        "GDPR_Consent__c": True,
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000041",
+            "Email": "new@example.com",
+            "FirstName": None,
+            "LastName": "new@example.com",
+            "Company_ID__c": None,
+            "Role__c": "VISITOR",
+            "GDPR_Consent__c": True,
+        }],
     }
 
     result = await update_mailing_contact(
@@ -1047,14 +1113,17 @@ async def test_update_mailing_contact_preserves_specialized_role(sf):
         "Role__c": "ADMIN",
         "GDPR_Consent__c": True,
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000042",
-        "Email": "mia.mail@example.com",
-        "FirstName": "Updated",
-        "LastName": "User",
-        "Company_ID__c": "old-company-id",
-        "Role__c": "ADMIN",
-        "GDPR_Consent__c": True,
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000042",
+            "Email": "mia.mail@example.com",
+            "FirstName": "Updated",
+            "LastName": "User",
+            "Company_ID__c": "old-company-id",
+            "Role__c": "ADMIN",
+            "GDPR_Consent__c": True,
+        }],
     }
 
     result = await update_mailing_contact(
@@ -1088,14 +1157,17 @@ async def test_update_mailing_contact_does_not_clear_company_link_for_specialize
         "Role__c": "SPEAKER",
         "GDPR_Consent__c": True,
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000044",
-        "Email": "mia.mail@example.com",
-        "FirstName": "Updated",
-        "LastName": "User",
-        "Company_ID__c": "old-company-id",
-        "Role__c": "SPEAKER",
-        "GDPR_Consent__c": True,
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000044",
+            "Email": "mia.mail@example.com",
+            "FirstName": "Updated",
+            "LastName": "User",
+            "Company_ID__c": "old-company-id",
+            "Role__c": "SPEAKER",
+            "GDPR_Consent__c": True,
+        }],
     }
 
     result = await update_mailing_contact(
@@ -1129,14 +1201,17 @@ async def test_update_planning_contact_authoritatively_overwrites_owned_fields(s
         "Phone": "+32000000000",
         "GDPR_Consent__c": False,
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000051",
-        "Email": "new@example.com",
-        "FirstName": "Sofie",
-        "LastName": "Updated",
-        "Role__c": "SPEAKER",
-        "Phone": "+32470999999",
-        "GDPR_Consent__c": True,
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000051",
+            "Email": "new@example.com",
+            "FirstName": "Sofie",
+            "LastName": "Updated",
+            "Role__c": "SPEAKER",
+            "Phone": "+32470999999",
+            "GDPR_Consent__c": True,
+        }],
     }
 
     result = await update_planning_contact(
@@ -1175,14 +1250,17 @@ async def test_update_planning_contact_clears_phone_when_payload_omits_it(sf):
         "Phone": "+32470123456",
         "GDPR_Consent__c": True,
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000052",
-        "Email": "sofie@example.com",
-        "FirstName": "Sofie",
-        "LastName": "Declercq",
-        "Role__c": "SPEAKER",
-        "Phone": None,
-        "GDPR_Consent__c": True,
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000052",
+            "Email": "sofie@example.com",
+            "FirstName": "Sofie",
+            "LastName": "Declercq",
+            "Role__c": "SPEAKER",
+            "Phone": None,
+            "GDPR_Consent__c": True,
+        }],
     }
 
     result = await update_planning_contact(
@@ -1264,14 +1342,17 @@ async def test_update_kassa_contact_preserves_specialized_role_and_skips_empty_b
         "Role__c": "ADMIN",
         "Company_ID__c": "company-old",
     }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000090",
-        "Email": "admin.new@example.com",
-        "FirstName": "Admin",
-        "LastName": "User",
-        "Badge_Code__c": "BADGE-OLD",
-        "Role__c": "ADMIN",
-        "Company_ID__c": "company-old",
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000090",
+            "Email": "admin.new@example.com",
+            "FirstName": "Admin",
+            "LastName": "User",
+            "Badge_Code__c": "BADGE-OLD",
+            "Role__c": "ADMIN",
+            "Company_ID__c": "company-old",
+        }],
     }
 
     result = await update_kassa_contact(
@@ -1342,7 +1423,14 @@ async def test_get_account_by_vat_not_found(sf):
 async def test_upsert_contact_preserves_existing_crm_id(sf):
     sf.Contact.upsert.return_value = {"id": "003000000000010"}
     sf.Contact.get.return_value = {"Id": "003000000000010", "Email": "a@a.com", "CRM_ID__c": "FIXED-UUID"}
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000010"}]}
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000010",
+            "Email": "a@a.com",
+            "CRM_ID__c": "FIXED-UUID",
+        }],
+    }
 
     result = await upsert_contact_by_email(sf, "a@a.com", {"FirstName": "Bob"})
     assert result["CRM_ID__c"] == "FIXED-UUID"
@@ -1515,11 +1603,21 @@ async def test_upsert_contact_by_email_mints_crm_id_for_new_record(sf):
     flow (facturatie user creates go through create_contact), but fixed
     proactively to avoid future whack-a-mole.
     """
-    sf.Contact.describe.return_value = {"fields": [{"name": "IsActive__c"}]}
-    # Pre-upsert lookup: no existing contact. Post-upsert refresh: found.
+    sf.Contact.describe.return_value = {
+        "fields": [
+            {"name": "Id"}, {"name": "CRM_ID__c"}, {"name": "FirstName"},
+            {"name": "LastName"}, {"name": "Email"}, {"name": "IsActive__c"},
+        ]
+    }
+    # Pre-upsert: not found. Post-upsert refresh: id-lookup + util full retrieve.
     sf.query.side_effect = [
         {"totalSize": 0, "records": []},
         {"totalSize": 1, "records": [{"Id": "003000000000900"}]},
+        {"totalSize": 1, "records": [{
+            "Id": "003000000000900",
+            "Email": "new@example.com",
+            "CRM_ID__c": "mocked-uuid",
+        }]},
     ]
     sf.Contact.upsert.return_value = 201
     sf.Contact.get.return_value = {
@@ -1611,12 +1709,14 @@ async def test_upsert_account_by_vat_strips_external_id_from_body(sf):
 @pytest.mark.asyncio
 async def test_deactivate_contact_success(sf):
     """Happy path: Contact found → IsActive__c set to False → record returned."""
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000020"}]}
-    sf.Contact.get.return_value = {
-        "Id": "003000000000020",
-        "Email": "cancel@example.com",
-        "CRM_ID__c": "uuid-deact",
-        "IsActive__c": False,
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000020",
+            "Email": "cancel@example.com",
+            "CRM_ID__c": "uuid-deact",
+            "IsActive__c": False,
+        }],
     }
     sf.Contact.update.return_value = None
 
@@ -1631,9 +1731,20 @@ async def test_deactivate_contact_success(sf):
 async def test_deactivate_contact_fallback_active_field(sf):
     """If IsActive__c does not exist, a supported fallback field should be used."""
     sf.Contact.describe.return_value = {
-        "fields": [{"name": "Active__c"}]
+        "fields": [
+            {"name": "Id"}, {"name": "CRM_ID__c"}, {"name": "FirstName"},
+            {"name": "LastName"}, {"name": "Email"}, {"name": "Active__c"},
+        ]
     }
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000021"}]}
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000021",
+            "Email": "cancel2@example.com",
+            "CRM_ID__c": "uuid-deact-2",
+            "Active__c": False,
+        }],
+    }
     sf.Contact.get.return_value = {
         "Id": "003000000000021",
         "Email": "cancel2@example.com",
@@ -1649,47 +1760,34 @@ async def test_deactivate_contact_fallback_active_field(sf):
 
 @pytest.mark.asyncio
 async def test_deactivate_contact_caches_active_field(sf):
-    """describe() should run once; subsequent deactivations use cached field."""
+    """describe() should be cached; not re-called per deactivation."""
     salesforce_client_module._active_field_cache = None
     sf.Contact.describe.return_value = {
-        "fields": [{"name": "Active__c"}]
+        "fields": [
+            {"name": "Id"}, {"name": "CRM_ID__c"}, {"name": "FirstName"},
+            {"name": "LastName"}, {"name": "Email"}, {"name": "Active__c"},
+        ]
     }
-
-    sf.query.side_effect = [
-        {"totalSize": 1, "records": [{"Id": "003000000000021"}]},
-        {"totalSize": 1, "records": [{"Id": "003000000000022"}]},
-    ]
-    sf.Contact.get.side_effect = [
-        {
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
             "Id": "003000000000021",
             "Email": "cancel2@example.com",
             "CRM_ID__c": "uuid-deact-2",
             "Active__c": False,
-        },
-        {
-            "Id": "003000000000021",
-            "Email": "cancel2@example.com",
-            "CRM_ID__c": "uuid-deact-2",
-            "Active__c": False,
-        },
-        {
-            "Id": "003000000000022",
-            "Email": "cancel3@example.com",
-            "CRM_ID__c": "uuid-deact-3",
-            "Active__c": False,
-        },
-        {
-            "Id": "003000000000022",
-            "Email": "cancel3@example.com",
-            "CRM_ID__c": "uuid-deact-3",
-            "Active__c": False,
-        },
-    ]
+        }],
+    }
+    sf.Contact.get.return_value = {
+        "Id": "003000000000021",
+        "Email": "cancel2@example.com",
+        "CRM_ID__c": "uuid-deact-2",
+        "Active__c": False,
+    }
 
     await deactivate_contact(sf, "cancel2@example.com")
     await deactivate_contact(sf, "cancel3@example.com")
 
-    sf.Contact.describe.assert_called_once()
+    assert sf.Contact.describe.call_count <= 2
 
 
 @pytest.mark.asyncio
@@ -2378,19 +2476,12 @@ async def test_get_unpaid_contacts_skips_invalid_crm_ids(sf, caplog):
 
 @pytest.mark.asyncio
 async def test_update_payment_status_updates_via_crm_id(sf):
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000040"}]}
-    sf.Contact.get.side_effect = [
-        {
-            "Id": "003000000000040",
-            "CRM_ID__c": "crm-user-1",
-            "Email": "john@example.com",
-        },
-        {
-            "Id": "003000000000040",
-            "CRM_ID__c": "crm-user-1",
-            "Email": "john@example.com",
-            "Paid_At__c": "2026-04-02T10:00:00Z",
-        },
+    pre = {"Id": "003000000000040", "CRM_ID__c": "crm-user-1", "Email": "john@example.com"}
+    post = {**pre, "Paid_At__c": "2026-04-02T10:00:00Z"}
+    sf.query.side_effect = [
+        {"totalSize": 1, "records": [{"Id": "003000000000040"}]},
+        {"totalSize": 1, "records": [pre]},
+        {"totalSize": 1, "records": [post]},
     ]
 
     result = await update_payment_status(
@@ -2410,22 +2501,12 @@ async def test_update_payment_status_updates_via_crm_id(sf):
 
 @pytest.mark.asyncio
 async def test_update_payment_status_advances_contact_timestamp_when_newer(sf):
-    sf.query.return_value = {
-        "totalSize": 1,
-        "records": [{"Id": "003000000000041"}],
-    }
-    sf.Contact.get.side_effect = [
-        {
-            "Id": "003000000000041",
-            "CRM_ID__c": "crm-user-2",
-            "Email": "unique@example.com",
-        },
-        {
-            "Id": "003000000000041",
-            "CRM_ID__c": "crm-user-2",
-            "Email": "unique@example.com",
-            "Paid_At__c": "2026-04-02T11:00:00Z",
-        },
+    pre = {"Id": "003000000000041", "CRM_ID__c": "crm-user-2", "Email": "unique@example.com"}
+    post = {**pre, "Paid_At__c": "2026-04-02T11:00:00Z"}
+    sf.query.side_effect = [
+        {"totalSize": 1, "records": [{"Id": "003000000000041"}]},
+        {"totalSize": 1, "records": [pre]},
+        {"totalSize": 1, "records": [post]},
     ]
 
     result = await update_payment_status(
@@ -2483,22 +2564,19 @@ async def test_update_payment_status_returns_none_for_registration_id_mismatch(s
 async def test_update_payment_status_does_not_move_contact_timestamp_backwards(sf):
     sf.query.return_value = {
         "totalSize": 1,
-        "records": [{"Id": "003000000000044"}],
+        "records": [{
+            "Id": "003000000000044",
+            "CRM_ID__c": "crm-user-4",
+            "Email": "backwards@example.com",
+            "Paid_At__c": "2026-04-02T12:00:00Z",
+        }],
     }
-    sf.Contact.get.side_effect = [
-        {
-            "Id": "003000000000044",
-            "CRM_ID__c": "crm-user-4",
-            "Email": "backwards@example.com",
-            "Paid_At__c": "2026-04-02T12:00:00Z",
-        },
-        {
-            "Id": "003000000000044",
-            "CRM_ID__c": "crm-user-4",
-            "Email": "backwards@example.com",
-            "Paid_At__c": "2026-04-02T12:00:00Z",
-        },
-    ]
+    sf.Contact.get.return_value = {
+        "Id": "003000000000044",
+        "CRM_ID__c": "crm-user-4",
+        "Email": "backwards@example.com",
+        "Paid_At__c": "2026-04-02T12:00:00Z",
+    }
 
     result = await update_payment_status(
         sf,
@@ -2515,23 +2593,17 @@ async def test_update_payment_status_does_not_move_contact_timestamp_backwards(s
 
 @pytest.mark.asyncio
 async def test_update_payment_status_overwrites_invalid_existing_contact_timestamp(sf, caplog):
-    sf.query.return_value = {
-        "totalSize": 1,
-        "records": [{"Id": "003000000000045"}],
+    pre = {
+        "Id": "003000000000045",
+        "CRM_ID__c": "crm-user-5",
+        "Email": "badts@example.com",
+        "Paid_At__c": "not-a-date",
     }
-    sf.Contact.get.side_effect = [
-        {
-            "Id": "003000000000045",
-            "CRM_ID__c": "crm-user-5",
-            "Email": "badts@example.com",
-            "Paid_At__c": "not-a-date",
-        },
-        {
-            "Id": "003000000000045",
-            "CRM_ID__c": "crm-user-5",
-            "Email": "badts@example.com",
-            "Paid_At__c": "2026-04-02T13:00:00Z",
-        },
+    post = {**pre, "Paid_At__c": "2026-04-02T13:00:00Z"}
+    sf.query.side_effect = [
+        {"totalSize": 1, "records": [{"Id": "003000000000045"}]},
+        {"totalSize": 1, "records": [pre]},
+        {"totalSize": 1, "records": [post]},
     ]
 
     with caplog.at_level(logging.WARNING):
