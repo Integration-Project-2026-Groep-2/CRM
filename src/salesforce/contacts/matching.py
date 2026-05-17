@@ -74,7 +74,7 @@ async def get_contact_for_person_lookup(
     try:
         escaped_email = _escape_soql(email)
         query = (
-            "SELECT Id, CRM_ID__c, AccountId, Account.Name, Account.CRM_ID__c "
+            "SELECT Id, CRM_ID__c, Company_ID__c, AccountId, Account.Name, Account.CRM_ID__c "
             f"FROM Contact WHERE Email = '{escaped_email}'"
         )
         result = await asyncio.to_thread(sf.query, query)
