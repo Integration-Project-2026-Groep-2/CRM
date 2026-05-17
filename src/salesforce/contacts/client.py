@@ -80,7 +80,7 @@ async def create_contact(sf: Salesforce, data: dict[str, Any]) -> dict[str, Any]
 
         contact_record = await get_full_contact_record(sf, contact_id)
         return contact_record
-    except SalesforceError as e:
+    except (SalesforceError, RuntimeError) as e:
         logger.error("Failed to create contact: %s", str(e))
         raise
 
@@ -143,7 +143,7 @@ async def upsert_contact_by_email(
 
         contact_record = await get_full_contact_record(sf, contact_id)
         return contact_record
-    except SalesforceError as e:
+    except (SalesforceError, RuntimeError) as e:
         logger.error("Failed to upsert contact by email %s: %s", email, str(e))
         raise
 
