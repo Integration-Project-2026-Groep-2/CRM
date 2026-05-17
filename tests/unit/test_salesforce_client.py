@@ -2476,20 +2476,13 @@ async def test_get_unpaid_contacts_skips_invalid_crm_ids(sf, caplog):
 
 @pytest.mark.asyncio
 async def test_update_payment_status_updates_via_crm_id(sf):
-    sf.query.return_value = {
-        "totalSize": 1,
-        "records": [{
-            "Id": "003000000000040",
-            "CRM_ID__c": "crm-user-1",
-            "Email": "john@example.com",
-        }],
-    }
-    sf.Contact.get.return_value = {
-        "Id": "003000000000040",
-        "CRM_ID__c": "crm-user-1",
-        "Email": "john@example.com",
-        "Paid_At__c": "2026-04-02T10:00:00Z",
-    }
+    pre = {"Id": "003000000000040", "CRM_ID__c": "crm-user-1", "Email": "john@example.com"}
+    post = {**pre, "Paid_At__c": "2026-04-02T10:00:00Z"}
+    sf.query.side_effect = [
+        {"totalSize": 1, "records": [{"Id": "003000000000040"}]},
+        {"totalSize": 1, "records": [pre]},
+        {"totalSize": 1, "records": [post]},
+    ]
 
     result = await update_payment_status(
         sf,
@@ -2508,22 +2501,12 @@ async def test_update_payment_status_updates_via_crm_id(sf):
 
 @pytest.mark.asyncio
 async def test_update_payment_status_advances_contact_timestamp_when_newer(sf):
-    sf.query.return_value = {
-        "totalSize": 1,
-        "records": [{"Id": "003000000000041"}],
-    }
-    sf.Contact.get.side_effect = [
-        {
-            "Id": "003000000000041",
-            "CRM_ID__c": "crm-user-2",
-            "Email": "unique@example.com",
-        },
-        {
-            "Id": "003000000000041",
-            "CRM_ID__c": "crm-user-2",
-            "Email": "unique@example.com",
-            "Paid_At__c": "2026-04-02T11:00:00Z",
-        },
+    pre = {"Id": "003000000000041", "CRM_ID__c": "crm-user-2", "Email": "unique@example.com"}
+    post = {**pre, "Paid_At__c": "2026-04-02T11:00:00Z"}
+    sf.query.side_effect = [
+        {"totalSize": 1, "records": [{"Id": "003000000000041"}]},
+        {"totalSize": 1, "records": [pre]},
+        {"totalSize": 1, "records": [post]},
     ]
 
     result = await update_payment_status(
@@ -2610,21 +2593,18 @@ async def test_update_payment_status_does_not_move_contact_timestamp_backwards(s
 
 @pytest.mark.asyncio
 async def test_update_payment_status_overwrites_invalid_existing_contact_timestamp(sf, caplog):
-    sf.query.return_value = {
-        "totalSize": 1,
-        "records": [{
-            "Id": "003000000000045",
-            "CRM_ID__c": "crm-user-5",
-            "Email": "badts@example.com",
-            "Paid_At__c": "not-a-date",
-        }],
-    }
-    sf.Contact.get.return_value = {
+    pre = {
         "Id": "003000000000045",
         "CRM_ID__c": "crm-user-5",
         "Email": "badts@example.com",
-        "Paid_At__c": "2026-04-02T13:00:00Z",
+        "Paid_At__c": "not-a-date",
     }
+    post = {**pre, "Paid_At__c": "2026-04-02T13:00:00Z"}
+    sf.query.side_effect = [
+        {"totalSize": 1, "records": [{"Id": "003000000000045"}]},
+        {"totalSize": 1, "records": [pre]},
+        {"totalSize": 1, "records": [post]},
+    ]
 
     with caplog.at_level(logging.WARNING):
         result = await update_payment_status(

@@ -20,6 +20,7 @@ from src.salesforce.contacts import (
     _build_user_deactivation_data,
     _get_contact_is_active,
 )
+from src.salesforce.contacts.utils import get_full_contact_record
 from src.salesforce_client import (
     apply_is_active,
     deactivate_contact_record,
@@ -140,7 +141,7 @@ async def handle(
         if reactivation_update:
             contact_id = contact["Id"]
             await asyncio.to_thread(sf.Contact.update, contact_id, reactivation_update)
-            contact = await asyncio.to_thread(sf.Contact.get, contact_id)
+            contact = await get_full_contact_record(sf, contact_id)
             logger.info(
                 "Reactivated Contact %s for Planning user %s (isActive=true on update)",
                 contact_id,
