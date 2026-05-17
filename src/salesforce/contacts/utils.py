@@ -14,6 +14,8 @@ from typing import Any
 
 from simple_salesforce import Salesforce
 
+from src.salesforce.client import _escape_soql
+
 logger = logging.getLogger(__name__)
 
 _REQUIRED_FIELDS = ["Id", "CRM_ID__c", "FirstName", "LastName", "Email"]
@@ -61,7 +63,7 @@ async def get_full_contact_record(sf: Salesforce, contact_id: str) -> dict[str, 
     if missing:
         raise RuntimeError(f"Contact missing required fields on org: {missing}")
     fields = [f for f in (_REQUIRED_FIELDS + _OPTIONAL_FIELDS) if f in available]
-    soql = f"SELECT {', '.join(fields)} FROM Contact WHERE Id = '{contact_id}'"
+    soql = f"SELECT {', '.join(fields)} FROM Contact WHERE Id = '{_escape_soql(contact_id)}'"
     result = await asyncio.to_thread(sf.query, soql)
     total = result.get("totalSize") if isinstance(result, dict) else None
     if total != 1:
