@@ -167,9 +167,11 @@ async def test_create_contact_raises_salesforce_error(sf):
 
 @pytest.mark.asyncio
 async def test_upsert_contact_by_email(sf):
-    sf.query.return_value = {"totalSize": 0, "records": []}
+    sf.query.side_effect = [
+        {"totalSize": 0, "records": []},
+        {"totalSize": 1, "records": [{"Id": "003000000000002", "Email": "a@a.com"}]},
+    ]
     sf.Contact.upsert.return_value = {"id": "003000000000002"}
-    sf.Contact.get.return_value = {"Id": "003000000000002", "Email": "a@a.com"}
 
     payload = {"FirstName": "Bob"}
     result = await upsert_contact_by_email(sf, "a@a.com", payload)
@@ -181,26 +183,29 @@ async def test_upsert_contact_by_email(sf):
 @pytest.mark.asyncio
 async def test_upsert_contact_by_email_handles_int_response(sf):
     """Salesforce may return only an HTTP status code for update upserts."""
-    sf.query.return_value = {"totalSize": 1, "records": [{"Id": "003000000000011"}]}
-    sf.Contact.get.return_value = {
-        "Id": "003000000000011",
-        "Email": "exists@example.com",
-        "CRM_ID__c": "existing-crm-id",
+    sf.query.return_value = {
+        "totalSize": 1,
+        "records": [{
+            "Id": "003000000000011",
+            "Email": "exists@example.com",
+            "CRM_ID__c": "existing-crm-id",
+        }],
     }
     sf.Contact.upsert.return_value = 204
 
     result = await upsert_contact_by_email(sf, "exists@example.com", {"FirstName": "New"})
 
     sf.Contact.upsert.assert_called_once()
-    sf.Contact.get.assert_called_with("003000000000011")
     assert result["Id"] == "003000000000011"
 
 
 @pytest.mark.asyncio
 async def test_upsert_contact_by_email_sets_active_field_true_when_missing(sf):
-    sf.query.return_value = {"totalSize": 0, "records": []}
+    sf.query.side_effect = [
+        {"totalSize": 0, "records": []},
+        {"totalSize": 1, "records": [{"Id": "003000000000013", "Email": "upsert@example.com"}]},
+    ]
     sf.Contact.upsert.return_value = {"id": "003000000000013"}
-    sf.Contact.get.return_value = {"Id": "003000000000013", "Email": "upsert@example.com"}
 
     await upsert_contact_by_email(sf, "upsert@example.com", {"FirstName": "Upsert"})
 

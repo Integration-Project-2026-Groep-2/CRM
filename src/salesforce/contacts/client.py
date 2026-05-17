@@ -144,7 +144,7 @@ async def upsert_contact_by_email(
                 raise RuntimeError(f"Upsert succeeded but contact not found for email {email}")
             return refreshed
 
-        contact_record = await asyncio.to_thread(sf.Contact.get, contact_id)
+        contact_record = await get_full_contact_record(sf, contact_id)
         return contact_record
     except SalesforceError as e:
         logger.error("Failed to upsert contact by email %s: %s", email, str(e))
