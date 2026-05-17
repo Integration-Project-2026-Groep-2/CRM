@@ -45,14 +45,12 @@ async def handle(
     """
     try:
         xml = xml_validator.validate(message.body)
-        logger.debug("FacturatieUserCreated raw XML: %s", message.body.decode("utf-8"))
     except Exception as exc:  # noqa: BLE001
         logger.error("FacturatieUserCreated — invalid XML, rejecting message: %s", exc)
         await message.reject(requeue=False)
         return
 
     email = xml.findtext("email") or ""
-    logger.debug("FacturatieUserCreated extracted email: %s", email)
     is_active = xml.findtext("isActive") in ("true", "1")
 
     registration_id = xml.findtext("registrationId")
@@ -105,7 +103,6 @@ async def handle(
         contact_data["Phone"] = phone
 
     company_id = xml.findtext("companyId")
-    logger.debug("FacturatieUserCreated extracted companyId: %s", company_id)
     if company_id:
         contact_data["Company_ID__c"] = company_id
 
