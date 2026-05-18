@@ -103,6 +103,11 @@ async def handle(
         contact_data["Phone"] = phone
 
     company_id = xml.findtext("companyId")
+    logger.info(
+        "FacturatieUserCreated inbound for %s: companyId=%s",
+        email,
+        "present" if company_id else f"empty-or-missing(raw={company_id!r})",
+    )
     if company_id:
         contact_data["Company_ID__c"] = company_id
 
@@ -111,8 +116,9 @@ async def handle(
     contact = await create_contact(sf, contact_data)
     await sender.publish_user_confirmed(_build_user_data(contact))
     logger.info(
-        "Published crm.user.confirmed for new Facturatie user %s (isActive=%s)",
+        "Published crm.user.confirmed for new Facturatie user %s (isActive=%s, sf_Company_ID__c=%s)",
         email,
         is_active,
+        contact.get("Company_ID__c") or "MISSING",
     )
     await message.ack()
