@@ -22,11 +22,19 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      image_tag: ${{ steps.image_meta.outputs.image_tag }}
 
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Compute image tag
+        id: image_meta
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: echo "image_tag=sha-${HEAD_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to ghcr.io
         uses: docker/login-action@v3
@@ -36,23 +44,28 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
-        env:
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          SHA=${HEAD_SHA:0:7}
-          docker build -t "$IMAGE:sha-$SHA" -t "$IMAGE:latest-dev" .
-          docker push "$IMAGE:sha-$SHA"
+          docker build -t "$IMAGE:${{ steps.image_meta.outputs.image_tag }}" -t "$IMAGE:latest-dev" .
+          docker push "$IMAGE:${{ steps.image_meta.outputs.image_tag }}"
           docker push "$IMAGE:latest-dev"
 
-  deploy-to-dev:
-    needs: build-and-push
+  trigger-k8s-manifest-update:
+    name: Trigger Manifest Repo Update
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    needs: build-and-push
+
     steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
+      - name: Dispatch to k8s-manifests repo
+        uses: peter-evans/repository-dispatch@v3
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script: crm
+          token: ${{ secrets.MANIFESTS_REPO_PAT }}
+          repository: integration-project-2026-groep-2/k8s-manifests
+          event-type: update-dev-image
+          client-payload: |
+            {
+              "image": "${{ env.IMAGE }}",
+              "tag": "${{ needs.build-and-push.outputs.image_tag }}",
+              "service": "${{ github.event.repository.name }}",
+              "commit": "${{ github.event.workflow_run.head_sha }}",
+              "actor": "${{ github.actor }}"
+            }
