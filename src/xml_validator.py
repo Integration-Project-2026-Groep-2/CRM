@@ -129,8 +129,7 @@ def _normalize_frontend_namespace_if_allowed(root: etree._Element) -> etree._Ele
             f"XML validation failed: unexpected namespace '{root_namespace}' on root '{root_local_name}'"
         )
 
-    normalized = etree.fromstring(etree.tostring(root), _SECURE_PARSER)
-    for element in normalized.iter():
+    for element in root.iter():
         if not isinstance(element.tag, str):
             continue
 
@@ -151,8 +150,8 @@ def _normalize_frontend_namespace_if_allowed(root: etree._Element) -> etree._Ele
                     "XML validation failed: namespaced attributes are not allowed"
                 )
 
-    etree.cleanup_namespaces(normalized)
-    return normalized
+    etree.cleanup_namespaces(root)
+    return root
 
 
 def _reorder_children_if_needed(element: etree._Element) -> None:
