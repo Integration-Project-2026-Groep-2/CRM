@@ -67,4 +67,27 @@
     </xs:complexType>
   </xs:element>
 
+  <!-- ============================================================
+       Frontend → CRM: bestaand bedrijf wijzigen
+       Queue: crm.frontend.company.updated (routing key: frontend.company.updated) | durable: true
+       email verplicht; updatedAt wordt server-side gezet bij de crm.company.updated rebroadcast
+  ============================================================ -->
+  <xs:element name="FrontendCompanyUpdated">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="id"          type="UUIDType"/>
+        <xs:element name="name"        type="xs:string"/>
+        <xs:element name="vatNumber"   type="BelgianVatNumberType"/>
+        <xs:element name="email"       type="EmailType"/>
+        <xs:element name="phone"       type="xs:string"      minOccurs="0"/>
+        <xs:element name="street"      type="xs:string"      minOccurs="0"/>
+        <xs:element name="houseNumber" type="xs:string"      minOccurs="0"/>
+        <xs:element name="postalCode"  type="xs:string"      minOccurs="0"/>
+        <xs:element name="city"        type="xs:string"      minOccurs="0"/>
+        <xs:element name="country"     type="CountryCodeType" minOccurs="0"/>
+        <xs:element name="isActive"    type="xs:boolean"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
 </xs:schema>

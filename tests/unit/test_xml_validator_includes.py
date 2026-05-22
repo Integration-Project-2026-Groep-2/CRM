@@ -18,6 +18,7 @@ EXPECTED_ROOTS: frozenset[str] = frozenset(
         "Registration",
         "RegistrationChange",
         "CompanyCreated",
+        "FrontendCompanyUpdated",
         # facturatie.xsd
         "UserCreated",
         "CompanyRequest",
@@ -105,8 +106,8 @@ class TestIncludeGraph:
         assert isinstance(schema, etree.XMLSchema)
 
     def test_expected_root_count_matches_contract_count(self) -> None:
-        """36 root elements: 35 contracts + LogEvent (CRM → Controlroom logs)."""
-        assert len(EXPECTED_ROOTS) == 36
+        """37 root elements: 36 contracts + LogEvent (CRM → Controlroom logs)."""
+        assert len(EXPECTED_ROOTS) == 37
 
 
 @pytest.mark.parametrize(
