@@ -371,6 +371,36 @@ async def update_facturatie_account(
     return await asyncio.to_thread(sf.Account.get, account_id)
 
 
+async def patch_account_fields(
+    sf: Salesforce, account: dict[str, Any], fields: dict[str, Any]
+) -> dict[str, Any]:
+    """Patch an Account, writing only the given fields that actually changed.
+
+    `fields` is already mapped to org-specific Account field names and holds
+    exactly what the caller wants to set (a value of None clears that column).
+    Fields the caller leaves out of `fields` are never touched — this is what
+    makes a partial update safe: omission means "keep", not "clear". A no-op
+    returns the account unchanged without hitting Salesforce.
+    """
+    updates = {
+        field: value
+        for field, value in fields.items()
+        if _normalize_optional_field_value(account.get(field))
+        != _normalize_optional_field_value(value)
+    }
+    if not updates:
+        return account
+
+    account_id = account["Id"]
+    await asyncio.to_thread(sf.Account.update, account_id, updates)
+    logger.info(
+        "Patched Account %s fields: %s",
+        account_id,
+        ", ".join(sorted(updates.keys())),
+    )
+    return await asyncio.to_thread(sf.Account.get, account_id)
+
+
 async def deactivate_account_record(
     sf: Salesforce, account: dict[str, Any], *, log_value: str | None = None
 ) -> dict[str, Any]:

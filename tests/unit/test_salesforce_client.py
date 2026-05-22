@@ -41,6 +41,7 @@ from src.salesforce_client import (
     has_contact_mailing_id_field,
     has_contact_planning_id_field,
     has_session_registration_object,
+    patch_account_fields,
     update_facturatie_account,
     update_kassa_contact,
     update_mailing_contact,
@@ -2252,6 +2253,69 @@ async def test_update_facturatie_account_writes_house_number_when_field_exists(s
     sf.Account.update.assert_called_once()
     updates = sf.Account.update.call_args[0][1]
     assert updates == {"House_Number__c": "12"}
+
+
+@pytest.mark.asyncio
+async def test_patch_account_fields_writes_only_changed_fields(sf):
+    account = {
+        "Id": "001000000000400",
+        "Name": "Old Name",
+        "BillingCity": "Brussel",
+    }
+    sf.Account.get.return_value = {**account, "Name": "New Name"}
+
+    result = await patch_account_fields(
+        sf, account, {"Name": "New Name", "BillingCity": "Brussel"}
+    )
+
+    sf.Account.update.assert_called_once()
+    account_id, updates = sf.Account.update.call_args[0]
+    assert account_id == "001000000000400"
+    assert updates == {"Name": "New Name"}
+    assert result["Name"] == "New Name"
+
+
+@pytest.mark.asyncio
+async def test_patch_account_fields_leaves_absent_fields_untouched(sf):
+    """Fields not present in `fields` are never written, even when set on the
+    record — this is what stops a partial update from clobbering columns."""
+    account = {
+        "Id": "001000000000401",
+        "Name": "Acme",
+        "BillingStreet": "Hoofdstraat",
+        "Phone": "+32 2 000 00 00",
+    }
+    sf.Account.get.return_value = {**account, "Name": "Acme Renamed"}
+
+    await patch_account_fields(sf, account, {"Name": "Acme Renamed"})
+
+    updates = sf.Account.update.call_args[0][1]
+    assert updates == {"Name": "Acme Renamed"}
+    assert "BillingStreet" not in updates
+    assert "Phone" not in updates
+
+
+@pytest.mark.asyncio
+async def test_patch_account_fields_clears_field_with_none(sf):
+    account = {"Id": "001000000000402", "BillingCity": "Brussel"}
+    sf.Account.get.return_value = {**account, "BillingCity": None}
+
+    await patch_account_fields(sf, account, {"BillingCity": None})
+
+    updates = sf.Account.update.call_args[0][1]
+    assert updates == {"BillingCity": None}
+
+
+@pytest.mark.asyncio
+async def test_patch_account_fields_noop_skips_update(sf):
+    account = {"Id": "001000000000403", "Name": "Acme", "BillingCity": "Brussel"}
+
+    result = await patch_account_fields(
+        sf, account, {"Name": "Acme", "BillingCity": "Brussel"}
+    )
+
+    sf.Account.update.assert_not_called()
+    assert result == account
 
 
 @pytest.mark.asyncio
