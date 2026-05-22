@@ -19,6 +19,7 @@ _ALLOWED_FRONTEND_NAMESPACED_ROOTS = {
     "Registration",
     "RegistrationChange",
     "CompanyCreated",
+    "FrontendCompanyUpdated",
 }
 _ALLOWED_FRONTEND_CHILD_ORDER: dict[str, tuple[str, ...]] = {
     "Registration": (
@@ -55,6 +56,19 @@ _ALLOWED_FRONTEND_CHILD_ORDER: dict[str, tuple[str, ...]] = {
         "postalCode",
         "city",
         "country",
+    ),
+    "FrontendCompanyUpdated": (
+        "id",
+        "name",
+        "vatNumber",
+        "email",
+        "phone",
+        "street",
+        "houseNumber",
+        "postalCode",
+        "city",
+        "country",
+        "isActive",
     ),
 }
 _FRONTEND_ROLE_NORMALIZATION = {

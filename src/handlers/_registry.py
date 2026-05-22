@@ -23,6 +23,7 @@ from src.handlers import (
     facturatie_user_deactivated,
     facturatie_user_updated,
     frontend_company_created,
+    frontend_company_updated,
     frontend_registration_created,
     frontend_registration_updated,
     kassa_payment_confirmed,
@@ -60,6 +61,10 @@ QUEUE_REGISTRY: list[tuple[str, HandlerFn, bool, str | None, bool, str | None]] 
     # Contract 3 — Frontend → CRM: company created
     ("crm.frontend.company.created", frontend_company_created.handle, True,
      "frontend.company.created", True, "user.topic"),
+
+    # Frontend → CRM: company updated
+    ("crm.frontend.company.updated", frontend_company_updated.handle, True,
+     "frontend.company.updated", True, "user.topic"),
 
     # Contracts 24/25/26 — Facturatie → CRM: user sync (consumer-prefixed queues)
     ("crm.facturatie.user.created", facturatie_user_created.handle, True,

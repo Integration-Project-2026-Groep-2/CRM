@@ -21,6 +21,7 @@ from src.salesforce.accounts import (  # noqa: F401
     get_account_by_vat,
     get_account_match_by_crm_id,
     get_account_match_by_email,
+    patch_account_fields,
     update_facturatie_account,
     upsert_account_by_vat,
 )
