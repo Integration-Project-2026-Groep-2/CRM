@@ -16,6 +16,7 @@ from src.handlers import (
     facturatie_user_deactivated,  # noqa: F401
     facturatie_user_updated,  # noqa: F401
     frontend_company_created,  # noqa: F401
+    frontend_company_updated,  # noqa: F401
     frontend_registration_created,  # noqa: F401
     frontend_registration_updated,  # noqa: F401
     kassa_payment_confirmed,  # noqa: F401
