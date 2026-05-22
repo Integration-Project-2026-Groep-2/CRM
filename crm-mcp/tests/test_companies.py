@@ -672,6 +672,39 @@ async def test_delete_company_null_crm_id_raises(
 
 
 @pytest.mark.asyncio
+async def test_update_company_preserves_existing_is_active(
+    fake_sf_client, fake_publisher, make_query_response
+) -> None:
+    """Partial update of a soft-deleted company must not broadcast isActive=True."""
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "001gK00000ExistAA",
+                "CRM_ID__c": "11111111-2222-4333-8444-555555555555",
+                "Name": "Acme",
+                "VAT_Number__c": "BE0123456789",
+                "IsActive__c": False,
+            },
+        ]
+    )
+
+    await company_tools.update_company(
+        fake_sf_client,
+        fake_publisher,
+        crm_id="11111111-2222-4333-8444-555555555555",
+        name="New",
+    )
+
+    # The resolve must SELECT the active flag — the mock returns the record
+    # regardless of SOQL, so without this assertion the missing column hides.
+    assert "IsActive__c" in fake_sf_client.query.await_args.args[0]
+    broadcast = fake_publisher.publish_company_updated.call_args.args[0]
+    assert broadcast["isActive"] is False
+    payload = fake_sf_client.update_account.await_args.args[1]
+    assert "IsActive__c" not in payload
+
+
+@pytest.mark.asyncio
 async def test_update_company_accepts_sf_id(
     fake_sf_client, fake_publisher, make_query_response
 ) -> None:

@@ -75,8 +75,10 @@ async def _resolve_account_record(
         where_clause = f"Id = '{escape_soql(ref)}'"
     else:
         where_clause = f"{_CRM_ID_FIELD} = '{escape_soql(ref)}'"
+    active_field = await client.get_account_active_field()
+    active_select = f", {active_field}" if active_field else ""
     soql = (
-        f"SELECT Id, {_CRM_ID_FIELD}, Name, VAT_Number__c FROM Account "
+        f"SELECT Id, {_CRM_ID_FIELD}, Name, VAT_Number__c{active_select} FROM Account "
         f"WHERE {where_clause} LIMIT 1"
     )
     result = await client.query(soql)
@@ -615,7 +617,9 @@ async def update_company(
     if not final_vat:
         raise ValueError("vat_number missing on existing record — cannot publish C19")
     final_name = name if name is not None else existing_name
-    final_is_active = is_active if is_active is not None else True
+    final_is_active = (
+        is_active if is_active is not None else coerce_is_active(existing.get(active_field))
+    )
     updated_at = _now_iso()
 
     company_data: dict[str, Any] = {
