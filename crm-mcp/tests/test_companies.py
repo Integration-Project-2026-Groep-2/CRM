@@ -623,6 +623,55 @@ async def test_delete_company_rejects_hard(fake_sf_client, fake_publisher) -> No
 
 
 @pytest.mark.asyncio
+async def test_update_company_null_crm_id_raises(
+    fake_sf_client, fake_publisher, make_query_response
+) -> None:
+    """Resolved by SF Id but CRM_ID__c empty → refuse, never broadcast "None"."""
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "001gK00000ExistAA",
+                "CRM_ID__c": None,
+                "Name": "Acme",
+                "VAT_Number__c": "BE0123456789",
+            },
+        ]
+    )
+
+    with pytest.raises(ValueError, match="CRM_ID__c"):
+        await company_tools.update_company(
+            fake_sf_client, fake_publisher, crm_id="001gK00000ExistAA", name="New"
+        )
+
+    fake_sf_client.update_account.assert_not_awaited()
+    fake_publisher.publish_company_updated.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_company_null_crm_id_raises(
+    fake_sf_client, fake_publisher, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "001gK00000ExistAA",
+                "CRM_ID__c": None,
+                "Name": "Acme",
+                "VAT_Number__c": "BE0123456789",
+            },
+        ]
+    )
+
+    with pytest.raises(ValueError, match="CRM_ID__c"):
+        await company_tools.delete_company(
+            fake_sf_client, fake_publisher, crm_id="001gK00000ExistAA"
+        )
+
+    fake_sf_client.update_account.assert_not_awaited()
+    fake_publisher.publish_company_deactivated.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_update_company_accepts_sf_id(
     fake_sf_client, fake_publisher, make_query_response
 ) -> None:

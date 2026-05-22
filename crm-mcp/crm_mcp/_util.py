@@ -65,6 +65,19 @@ def is_uuid_format(value: str | None) -> bool:
         return False
 
 
+def require_crm_id(record: dict[str, Any], field: str, kind: str, ref: str) -> str:
+    """Return the record's CRM_ID__c UUID, or raise when it is empty.
+
+    A record resolved by Salesforce Id can carry an empty CRM_ID__c; echoing that
+    as the canonical id (it stringifies to "None") corrupts every consumer's
+    sync, so refuse loudly instead of broadcasting garbage.
+    """
+    raw = record.get(field)
+    if not raw:
+        raise ValueError(f"{kind} {ref} has no {field}; backfill the UUID before this operation")
+    return str(raw)
+
+
 def validate_vat_number(vat: str) -> None:
     """Validate VAT-number shape; raises ValueError on bad format.
 

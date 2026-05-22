@@ -22,6 +22,7 @@ from .._util import (
     format_soql_datetime,
     is_valid_sf_id,
     parse_sf_datetime,
+    require_crm_id,
 )
 from ..escaping import escape_soql, escape_soql_like
 from ..messaging import MessagePublisher
@@ -383,7 +384,7 @@ async def create_contact(
         company_record = await _resolve_account_record_for_contact(client, company_id)
         if company_record is None:
             raise ValueError(f"no company found with id '{company_id}'")
-        company_uuid = company_record[_CRM_ID_FIELD]
+        company_uuid = require_crm_id(company_record, _CRM_ID_FIELD, "company", company_id)
 
     crm_id = str(uuid.uuid4())
     sf_payload: dict[str, Any] = {
@@ -473,7 +474,7 @@ async def update_contact(
     if existing is None:
         raise ValueError(f"no contact found with id '{crm_id}'")
     sf_id = str(existing["Id"])
-    canonical_crm_id = str(existing[_CRM_ID_FIELD])
+    canonical_crm_id = require_crm_id(existing, _CRM_ID_FIELD, "contact", sf_id)
 
     sf_payload: dict[str, Any] = {}
     if first_name is not None:
@@ -495,7 +496,7 @@ async def update_contact(
         company_record = await _resolve_account_record_for_contact(client, company_id)
         if company_record is None:
             raise ValueError(f"no company found with id '{company_id}'")
-        company_uuid = company_record[_CRM_ID_FIELD]
+        company_uuid = require_crm_id(company_record, _CRM_ID_FIELD, "company", company_id)
         sf_payload["Company_ID__c"] = company_uuid
 
     active_field = await client.get_contact_active_field()
@@ -583,7 +584,7 @@ async def delete_contact(
     if existing is None:
         raise ValueError(f"no contact found with id '{crm_id}'")
     sf_id = str(existing["Id"])
-    canonical_crm_id = str(existing[_CRM_ID_FIELD])
+    canonical_crm_id = require_crm_id(existing, _CRM_ID_FIELD, "contact", sf_id)
     email = existing.get("Email")
     if not email:
         raise ValueError("email missing on existing record — cannot publish C22")

@@ -652,6 +652,81 @@ async def test_update_contact_company_id_accepts_sf_id(
     assert payload["Company_ID__c"] == "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 
 
+@pytest.mark.asyncio
+async def test_update_contact_null_crm_id_raises(
+    fake_sf_client, fake_publisher, make_query_response
+) -> None:
+    """Resolved by SF Id but CRM_ID__c empty → refuse, never broadcast "None"."""
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "003dM00001wmNGXQA2",
+                "CRM_ID__c": None,
+                "Email": "jan@example.com",
+                "FirstName": "Jan",
+                "LastName": "Janssens",
+                "Role__c": "VISITOR",
+            },
+        ]
+    )
+
+    with pytest.raises(ValueError, match="CRM_ID__c"):
+        await contact_tools.update_contact(
+            fake_sf_client, fake_publisher, crm_id="003dM00001wmNGXQA2", phone="+32499000111"
+        )
+
+    fake_sf_client.update_contact.assert_not_awaited()
+    fake_publisher.publish_user_updated.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_contact_null_crm_id_raises(
+    fake_sf_client, fake_publisher, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "003dM00001wmNGXQA2",
+                "CRM_ID__c": None,
+                "Email": "jan@example.com",
+                "FirstName": "Jan",
+                "LastName": "Janssens",
+                "Role__c": "VISITOR",
+            },
+        ]
+    )
+
+    with pytest.raises(ValueError, match="CRM_ID__c"):
+        await contact_tools.delete_contact(
+            fake_sf_client, fake_publisher, crm_id="003dM00001wmNGXQA2"
+        )
+
+    fake_sf_client.update_contact.assert_not_awaited()
+    fake_publisher.publish_user_deactivated.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_contact_company_without_crm_id_raises(
+    fake_sf_client, fake_publisher, make_query_response
+) -> None:
+    """Linked company resolved by SF Id but missing CRM_ID__c → refuse, don't drop link silently."""
+    fake_sf_client.query.side_effect = [
+        make_query_response([]),  # email-uniqueness probe
+        make_query_response([{"Id": "001dM00003kxOrvQAE", "CRM_ID__c": None}]),  # company
+    ]
+
+    with pytest.raises(ValueError, match="CRM_ID__c"):
+        await contact_tools.create_contact(
+            fake_sf_client,
+            fake_publisher,
+            company_id="001dM00003kxOrvQAE",
+            **_VALID_CREATE_CONTACT_KWARGS,
+        )
+
+    fake_sf_client.create_contact.assert_not_awaited()
+    fake_publisher.publish_user_confirmed.assert_not_called()
+
+
 # ---- find_contacts_without_company ----
 
 
