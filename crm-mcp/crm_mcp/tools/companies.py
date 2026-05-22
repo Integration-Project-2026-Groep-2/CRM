@@ -25,6 +25,7 @@ from .._util import (
     format_soql_datetime,
     is_valid_sf_id,
     parse_sf_datetime,
+    require_crm_id,
     validate_vat_number,
 )
 from ..escaping import escape_soql, escape_soql_like
@@ -576,7 +577,7 @@ async def update_company(
     if existing is None:
         raise ValueError(f"no company found with id '{crm_id}'")
     sf_id = str(existing["Id"])
-    canonical_crm_id = str(existing[_CRM_ID_FIELD])
+    canonical_crm_id = require_crm_id(existing, _CRM_ID_FIELD, "company", sf_id)
     existing_vat = existing.get("VAT_Number__c")
     existing_name = existing.get("Name") or ""
 
@@ -675,7 +676,7 @@ async def delete_company(
     if existing is None:
         raise ValueError(f"no company found with id '{crm_id}'")
     sf_id = str(existing["Id"])
-    canonical_crm_id = str(existing[_CRM_ID_FIELD])
+    canonical_crm_id = require_crm_id(existing, _CRM_ID_FIELD, "company", sf_id)
     vat_number = existing.get("VAT_Number__c")
     if not vat_number:
         raise ValueError("vat_number missing on existing record — cannot publish C23")

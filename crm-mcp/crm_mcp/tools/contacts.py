@@ -22,6 +22,7 @@ from .._util import (
     format_soql_datetime,
     is_valid_sf_id,
     parse_sf_datetime,
+    require_crm_id,
 )
 from ..escaping import escape_soql, escape_soql_like
 from ..messaging import MessagePublisher
@@ -123,7 +124,7 @@ async def search_contact(
     active_field = await client.get_contact_active_field()
 
     soql = (
-        f"SELECT Id, Name, Email, {active_field}, LastModifiedDate "
+        f"SELECT Id, {_CRM_ID_FIELD}, Name, Email, {active_field}, LastModifiedDate "
         "FROM Contact "
         f"WHERE (Name LIKE '{pattern}' "
         f"OR Email LIKE '{pattern}' "
@@ -136,6 +137,7 @@ async def search_contact(
     return [
         ContactSummary(
             id=r["Id"],
+            crm_id=r.get(_CRM_ID_FIELD),
             name=r.get("Name") or "",
             email=r.get("Email"),
             is_active=coerce_is_active(r.get(active_field)),
@@ -151,6 +153,7 @@ def _map_contact_record(r: dict[str, Any], active_field: str) -> ContactDetails:
     now = datetime.now(timezone.utc)
     return ContactDetails(
         id=r["Id"],
+        crm_id=r.get(_CRM_ID_FIELD),
         name=r.get("Name") or "",
         first_name=r.get("FirstName"),
         last_name=r.get("LastName"),
@@ -170,7 +173,7 @@ def _map_contact_record(r: dict[str, Any], active_field: str) -> ContactDetails:
 def _contact_detail_fields(active_field: str) -> str:
     """SOQL field list shared by all ContactDetails lookups."""
     return (
-        f"Id, Name, FirstName, LastName, Email, Phone, "
+        f"Id, {_CRM_ID_FIELD}, Name, FirstName, LastName, Email, Phone, "
         f"{active_field}, Role__c, GDPR_Consent__c, Paid_At__c, "
         f"AccountId, Account.Name, CreatedDate, LastModifiedDate"
     )
@@ -240,7 +243,7 @@ async def recent_contacts(
     active_field = await client.get_contact_active_field()
 
     soql = (
-        f"SELECT Id, Name, Email, {active_field}, {date_field} "
+        f"SELECT Id, {_CRM_ID_FIELD}, Name, Email, {active_field}, {date_field} "
         "FROM Contact "
         f"WHERE {date_field} >= {threshold} "
         f"ORDER BY {date_field} DESC "
@@ -250,6 +253,7 @@ async def recent_contacts(
     return [
         ContactSummary(
             id=r["Id"],
+            crm_id=r.get(_CRM_ID_FIELD),
             name=r.get("Name") or "",
             email=r.get("Email"),
             is_active=coerce_is_active(r.get(active_field)),
@@ -380,7 +384,7 @@ async def create_contact(
         company_record = await _resolve_account_record_for_contact(client, company_id)
         if company_record is None:
             raise ValueError(f"no company found with id '{company_id}'")
-        company_uuid = company_record[_CRM_ID_FIELD]
+        company_uuid = require_crm_id(company_record, _CRM_ID_FIELD, "company", company_id)
 
     crm_id = str(uuid.uuid4())
     sf_payload: dict[str, Any] = {
@@ -470,7 +474,7 @@ async def update_contact(
     if existing is None:
         raise ValueError(f"no contact found with id '{crm_id}'")
     sf_id = str(existing["Id"])
-    canonical_crm_id = str(existing[_CRM_ID_FIELD])
+    canonical_crm_id = require_crm_id(existing, _CRM_ID_FIELD, "contact", sf_id)
 
     sf_payload: dict[str, Any] = {}
     if first_name is not None:
@@ -492,7 +496,7 @@ async def update_contact(
         company_record = await _resolve_account_record_for_contact(client, company_id)
         if company_record is None:
             raise ValueError(f"no company found with id '{company_id}'")
-        company_uuid = company_record[_CRM_ID_FIELD]
+        company_uuid = require_crm_id(company_record, _CRM_ID_FIELD, "company", company_id)
         sf_payload["Company_ID__c"] = company_uuid
 
     active_field = await client.get_contact_active_field()
@@ -580,7 +584,7 @@ async def delete_contact(
     if existing is None:
         raise ValueError(f"no contact found with id '{crm_id}'")
     sf_id = str(existing["Id"])
-    canonical_crm_id = str(existing[_CRM_ID_FIELD])
+    canonical_crm_id = require_crm_id(existing, _CRM_ID_FIELD, "contact", sf_id)
     email = existing.get("Email")
     if not email:
         raise ValueError("email missing on existing record — cannot publish C22")
@@ -645,7 +649,7 @@ async def find_contacts_without_company(
 
     where = " AND ".join(clauses)
     soql = (
-        f"SELECT Id, Name, Email, {active_field}, LastModifiedDate "
+        f"SELECT Id, {_CRM_ID_FIELD}, Name, Email, {active_field}, LastModifiedDate "
         f"FROM Contact "
         f"WHERE {where} "
         f"ORDER BY LastModifiedDate DESC "
@@ -655,6 +659,7 @@ async def find_contacts_without_company(
     return [
         ContactSummary(
             id=r["Id"],
+            crm_id=r.get(_CRM_ID_FIELD),
             name=r.get("Name") or "",
             email=r.get("Email"),
             is_active=coerce_is_active(r.get(active_field)),
@@ -795,7 +800,7 @@ async def list_contacts(
 
     where_clause = f"WHERE {' AND '.join(clauses)} " if clauses else ""
     soql = (
-        f"SELECT Id, Name, Email, {active_field}, LastModifiedDate "
+        f"SELECT Id, {_CRM_ID_FIELD}, Name, Email, {active_field}, LastModifiedDate "
         f"FROM Contact "
         f"{where_clause}"
         f"ORDER BY LastModifiedDate DESC "
@@ -805,6 +810,7 @@ async def list_contacts(
     return [
         ContactSummary(
             id=r["Id"],
+            crm_id=r.get(_CRM_ID_FIELD),
             name=r.get("Name") or "",
             email=r.get("Email"),
             is_active=coerce_is_active(r.get(active_field)),
