@@ -69,6 +69,48 @@ async def test_search_contact_escapes_like_wildcards(fake_sf_client, make_query_
 
 
 @pytest.mark.asyncio
+async def test_search_contact_returns_crm_id(fake_sf_client, make_query_response) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "003gK00000XyZAbCAA",
+                "CRM_ID__c": "11111111-2222-4333-8444-555555555555",
+                "Name": "Jan Janssens",
+                "Email": "jan@acme.be",
+                "IsActive__c": True,
+                "LastModifiedDate": "2026-05-04T10:00:00.000+0000",
+            },
+        ]
+    )
+
+    results = await contact_tools.search_contact(fake_sf_client, query="Jan")
+
+    assert results[0].crm_id == "11111111-2222-4333-8444-555555555555"
+    assert "CRM_ID__c" in fake_sf_client.query.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_search_contact_crm_id_none_when_field_absent(
+    fake_sf_client, make_query_response
+) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "003gK00000XyZAbCAA",
+                "Name": "Jan Janssens",
+                "Email": "jan@acme.be",
+                "IsActive__c": True,
+                "LastModifiedDate": "2026-05-04T10:00:00.000+0000",
+            },
+        ]
+    )
+
+    results = await contact_tools.search_contact(fake_sf_client, query="Jan")
+
+    assert results[0].crm_id is None
+
+
+@pytest.mark.asyncio
 async def test_get_contact_rejects_invalid_id(fake_sf_client) -> None:
     with pytest.raises(ValueError, match="003"):
         await contact_tools.get_contact(fake_sf_client, contact_id="bogus")
@@ -150,6 +192,37 @@ async def test_get_contact_coerces_unknown_role_to_none(
 
     assert result is not None
     assert result.role is None  # unknown coerced to None
+
+
+@pytest.mark.asyncio
+async def test_get_contact_returns_crm_id(fake_sf_client, make_query_response) -> None:
+    fake_sf_client.query.return_value = make_query_response(
+        [
+            {
+                "Id": "003gK00000XyZAbCAA",
+                "CRM_ID__c": "11111111-2222-4333-8444-555555555555",
+                "Name": "Jan Janssens",
+                "FirstName": "Jan",
+                "LastName": "Janssens",
+                "Email": "jan@acme.be",
+                "Phone": None,
+                "IsActive__c": True,
+                "Role__c": "VISITOR",
+                "GDPR_Consent__c": True,
+                "Paid_At__c": None,
+                "AccountId": None,
+                "Account": None,
+                "CreatedDate": "2026-04-15T09:23:11.000+0000",
+                "LastModifiedDate": "2026-04-30T14:12:08.000+0000",
+            },
+        ]
+    )
+
+    result = await contact_tools.get_contact(fake_sf_client, contact_id="003gK00000XyZAbCAA")
+
+    assert result is not None
+    assert result.crm_id == "11111111-2222-4333-8444-555555555555"
+    assert "CRM_ID__c" in fake_sf_client.query.await_args.args[0]
 
 
 @pytest.mark.asyncio

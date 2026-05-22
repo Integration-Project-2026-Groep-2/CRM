@@ -15,6 +15,9 @@ class ContactSummary(BaseModel):
     """Lightweight contact info for search results and activity feeds."""
 
     id: str = Field(description="Salesforce 18-character Contact Id")
+    crm_id: str | None = Field(
+        default=None, description="CRM_ID__c UUID v4 (canonical cross-team id)"
+    )
     name: str
     email: str | None = None
     is_active: bool
@@ -25,6 +28,9 @@ class ContactDetails(BaseModel):
     """Complete contact info from Salesforce, with account link and key flags."""
 
     id: str
+    crm_id: str | None = Field(
+        default=None, description="CRM_ID__c UUID v4 (canonical cross-team id)"
+    )
     name: str
     first_name: str | None = None
     last_name: str | None = None
