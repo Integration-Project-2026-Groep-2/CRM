@@ -411,6 +411,53 @@ async def test_create_contact_unknown_company_id_raises(
 
 
 @pytest.mark.asyncio
+async def test_create_contact_with_vat_company_id_resolves(
+    fake_sf_client, fake_publisher, make_query_response
+) -> None:
+    fake_sf_client.query.side_effect = [
+        make_query_response([]),  # email-uniqueness probe
+        make_query_response(
+            [{"Id": "001gK00000VatAcctAA", "CRM_ID__c": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}]
+        ),  # company resolved by VAT
+    ]
+
+    result = await contact_tools.create_contact(
+        fake_sf_client,
+        fake_publisher,
+        company_id="BE0412345073",
+        **_VALID_CREATE_CONTACT_KWARGS,
+    )
+
+    company_soql = fake_sf_client.query.await_args_list[1].args[0]
+    assert "VAT_Number__c = 'BE0412345073'" in company_soql
+    payload = fake_sf_client.create_contact.await_args.args[0]
+    assert payload["Company_ID__c"] == "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    assert result.routing_key == "crm.user.confirmed"
+
+
+@pytest.mark.asyncio
+async def test_create_contact_lowercase_vat_is_uppercased(
+    fake_sf_client, fake_publisher, make_query_response
+) -> None:
+    fake_sf_client.query.side_effect = [
+        make_query_response([]),  # email-uniqueness probe
+        make_query_response(
+            [{"Id": "001gK00000VatAcctAA", "CRM_ID__c": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}]
+        ),  # company resolved by VAT (case-insensitive)
+    ]
+
+    await contact_tools.create_contact(
+        fake_sf_client,
+        fake_publisher,
+        company_id="be0412345073",
+        **_VALID_CREATE_CONTACT_KWARGS,
+    )
+
+    company_soql = fake_sf_client.query.await_args_list[1].args[0]
+    assert "VAT_Number__c = 'BE0412345073'" in company_soql
+
+
+@pytest.mark.asyncio
 async def test_create_contact_rejects_duplicate_email(
     fake_sf_client, fake_publisher, make_query_response
 ) -> None:

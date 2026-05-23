@@ -88,17 +88,21 @@ async def _resolve_contact_record(
 async def _resolve_account_record_for_contact(
     client: CrmSalesforceClient, ref: str
 ) -> dict[str, Any] | None:
-    """Resolve a Company reference (CRM_ID__c UUID or Salesforce Id 001-prefix).
+    """Resolve a Company reference (CRM_ID__c UUID, Salesforce Id 001-prefix, or VAT number).
 
     Returns a dict with `Id` and `CRM_ID__c`, or None when not found. Used by
     create/update_contact when linking a Contact to an Account: the
     Company_ID__c custom field stores the canonical CRM_ID__c UUID regardless
     of which format the caller provided.
     """
+    ref = ref.strip()
+    # CRM_ID is a UUID (has dashes); a bare alphanumeric ref is a VAT number.
     if is_valid_sf_id(ref, prefix="001"):
         where_clause = f"Id = '{escape_soql(ref)}'"
-    else:
+    elif "-" in ref:
         where_clause = f"{_CRM_ID_FIELD} = '{escape_soql(ref)}'"
+    else:
+        where_clause = f"VAT_Number__c = '{escape_soql(ref.upper())}'"
     soql = f"SELECT Id, {_CRM_ID_FIELD} FROM Account WHERE {where_clause} LIMIT 1"
     result = await client.query(soql)
     records = result.get("records", [])
@@ -360,9 +364,9 @@ async def create_contact(
     """Create a Contact in Salesforce and broadcast C13 `<UserConfirmed>`.
 
     `role` is the C13 `UserRoleType` enum (VISITOR, COMPANY_CONTACT, SPEAKER,
-    EVENT_MANAGER, CASHIER, BAR_STAFF, ADMIN). `company_id` accepts either the
-    Account's CRM_ID__c UUID or its Salesforce Id (001-prefix); the canonical
-    UUID is stored in the Contact's `Company_ID__c` custom field (matches the
+    EVENT_MANAGER, CASHIER, BAR_STAFF, ADMIN). `company_id` accepts the
+    Account's CRM_ID__c UUID, its Salesforce Id (001-prefix), or its VAT number;
+    the canonical UUID is stored in the Contact's `Company_ID__c` custom field (matches the
     project's Frontend/Facturatie/Mailing handler convention, not the standard
     `AccountId` foreign-key). Email-uniqueness is pre-checked.
     """
@@ -457,8 +461,8 @@ async def update_contact(
 
     `crm_id` accepts either the CRM_ID__c UUID (canonical, returned by other
     tools as `crm_id`) or the Salesforce Id (003-prefix, returned as `id`).
-    `company_id` accepts the Account's CRM_ID__c UUID or its Salesforce Id
-    (001-prefix). The MutationResult always echoes the canonical UUID
+    `company_id` accepts the Account's CRM_ID__c UUID, its Salesforce Id
+    (001-prefix), or its VAT number. The MutationResult always echoes the canonical UUID
     regardless of input format.
 
     Partial-update friendly: omitted fields are left unchanged in Salesforce.
