@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 
 import aio_pika
@@ -54,6 +55,16 @@ async def run_heartbeat(connection: AbstractRobustConnection, config: Config) ->
     exchange: AbstractExchange | None = None
 
     logger.info("Heartbeat task started (interval=%ds)", config.heartbeat_interval_seconds)
+
+    # R3-CONTROLLED-CRASH — env-gated, intentional fault to exercise the
+    # incident-response pipeline. Inert unless R3_CRASH_TEST=1, so CI/tests stay
+    # green. Raised before the loop so it reaches the task supervisor (which logs
+    # the traceback) and the heartbeat stops (watchdog -> R3). Trigger: set
+    # R3_CRASH_TEST=1 + restart. Restore: unset it + restart (no rebuild).
+    if os.getenv("R3_CRASH_TEST") == "1":
+        raise RuntimeError(
+            "R3-TEST: intentional heartbeat crash to validate incident diagnosis"
+        )
 
     while True:
         try:
