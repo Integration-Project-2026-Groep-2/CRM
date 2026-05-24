@@ -48,7 +48,7 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 | `crm.user.confirmed` | CRM → consumers | 13 | R1 |
 | `crm.user.updated` | CRM → consumers | 18 | R2 |
 | `crm.user.deactivated` | CRM → consumers | 22 | R3 |
-| `crm.company.confirmed` | CRM → consumers | 14 | R1 |
+| `crm.company.confirmed` | CRM → consumers (Facturatie, Kassa, Frontend) | 14 | R1 |
 | `crm.company.responded` | CRM → Facturatie | 5b | R1 |
 | `crm.company.updated` | CRM → consumers | 19 | R2 |
 | `crm.company.deactivated` | CRM → consumers | 23 | R3 |
