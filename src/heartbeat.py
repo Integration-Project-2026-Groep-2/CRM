@@ -55,14 +55,6 @@ async def run_heartbeat(connection: AbstractRobustConnection, config: Config) ->
 
     logger.info("Heartbeat task started (interval=%ds)", config.heartbeat_interval_seconds)
 
-    # R3-CONTROLLED-CRASH — intentional fault to exercise the incident-response
-    # pipeline. Raised before the loop so it reaches the task supervisor (which
-    # logs the traceback -> controlroom-logs) and the heartbeat stops
-    # (watchdog -> R3). Revert commit / PR #203 to restore.
-    raise RuntimeError(
-        "R3-TEST: intentional heartbeat crash to validate incident diagnosis"
-    )
-
     while True:
         try:
             # (Re)create channel if needed — handles first start + recovery
