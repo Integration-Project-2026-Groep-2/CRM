@@ -48,7 +48,7 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 | `crm.user.confirmed` | CRM → consumers | 13 | R1 |
 | `crm.user.updated` | CRM → consumers | 18 | R2 |
 | `crm.user.deactivated` | CRM → consumers | 22 | R3 |
-| `crm.company.confirmed` | CRM → consumers | 14 | R1 |
+| `crm.company.confirmed` | CRM → consumers (Facturatie, Kassa, Frontend¹) | 14 | R1 |
 | `crm.company.responded` | CRM → Facturatie | 5b | R1 |
 | `crm.company.updated` | CRM → consumers | 19 | R2 |
 | `crm.company.deactivated` | CRM → consumers | 23 | R3 |
@@ -82,6 +82,8 @@ Alle CRM outbound berichten gaan via `contact.topic` met `routing_key=queue_name
 | `controlroom.warning.issued` | `planning.topic` | Controlroom | 9 |
 | `iot.badge.linked` | `planning.topic` | IoT | 12 |
 | `mailing.bounce.reported` | `mail.topic` | Mailing | 20 |
+
+**¹ Frontend C14 status:** `CompanyConfirmedConsumer.php` bestaat en bindt correct aan `contact.topic → crm.company.confirmed`, maar `docker-entrypoint.sh` start de consumer niet op (alleen `confirmed | updated | deactivated` voor users). Frontend consumeert C14 dus **nog niet live** — dit is gecodeerde maar slapende intentie. Ping het Frontend-team om `consumer.php companyconfirmed` toe te voegen aan hun entrypoint.
 
 **Contract 24 runtime-gedrag:** Bij een uniek bestaand Contact hergebruikt CRM dat Contact en kent zo nodig eerst een CRM UUID toe. Deze flow publiceert geen `crm.mail.requested`.
 **Contracten 27-28 inbound-vereisten:** Mailing user sync gebruikt verplichte velden `id`, `email` en `gdprConsent`; `firstName`, `lastName` en `companyId` blijven optioneel volgens de Mailing XSD.

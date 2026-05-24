@@ -553,7 +553,8 @@ channels:
       Contract 14 — CRM → alle consumers: Account aangemaakt of bevestigd in
       Salesforce (US-40, US-20 | R1). Bevat het door CRM gegenereerde UUID v4.
       Facturatie slaat dit op naast FOSSBilling-ID. Kassa slaat dit op naast
-      Odoo-ID.
+      Odoo-ID. Frontend slaat dit op zodat de eventbeheerder het CRM UUID kent
+      bij verdere bewerkingen.
     messages:
       companyConfirmed:
         $ref: "#/components/messages/CompanyConfirmed"
@@ -1088,6 +1089,7 @@ operations:
     tags:
       - name: facturatie
       - name: kassa
+      - name: frontend
       - name: release-1
 
   sendUserConflict:
