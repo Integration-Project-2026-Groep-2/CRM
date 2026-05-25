@@ -137,7 +137,7 @@ async def get_company(
 
     active_field = await client.get_account_active_field()
     fields = (
-        "Id, Name, VAT_Number__c, BillingStreet, BillingCity, "
+        "Id, CRM_ID__c, Name, VAT_Number__c, BillingStreet, BillingCity, "
         "BillingPostalCode, BillingCountryCode, CreatedDate, LastModifiedDate"
     )
     if active_field:
@@ -167,6 +167,7 @@ async def get_company(
     now = datetime.now(timezone.utc)
     return CompanyDetails(
         id=r["Id"],
+        crm_id=r.get(_CRM_ID_FIELD),
         name=r.get("Name") or "",
         vat_number=r.get("VAT_Number__c"),
         street=r.get("BillingStreet"),
@@ -363,7 +364,7 @@ async def get_company_profile(
 
     active_field = await client.get_account_active_field()
     fields = (
-        "Id, Name, VAT_Number__c, BillingStreet, BillingCity, "
+        "Id, CRM_ID__c, Name, VAT_Number__c, BillingStreet, BillingCity, "
         "BillingPostalCode, BillingCountryCode, CreatedDate, LastModifiedDate"
     )
     if active_field:
@@ -396,6 +397,7 @@ async def get_company_profile(
     now = datetime.now(timezone.utc)
     return CompanyProfile(
         id=r["Id"],
+        crm_id=r.get(_CRM_ID_FIELD),
         name=r.get("Name") or "",
         vat_number=r.get("VAT_Number__c"),
         street=r.get("BillingStreet"),

@@ -56,6 +56,7 @@ async def test_get_company_by_vat(fake_sf_client, make_query_response) -> None:
         [
             {
                 "Id": "001gK00000PqRStUAA",
+                "CRM_ID__c": "11111111-2222-4333-8444-555555555555",
                 "Name": "Acme NV",
                 "VAT_Number__c": "BE0123456789",
                 "BillingStreet": "Stationsstraat 12",
@@ -73,10 +74,13 @@ async def test_get_company_by_vat(fake_sf_client, make_query_response) -> None:
 
     assert result is not None
     assert result.id == "001gK00000PqRStUAA"
+    assert result.crm_id == "11111111-2222-4333-8444-555555555555"
     assert result.name == "Acme NV"
     assert result.vat_number == "BE0123456789"
     assert result.country == "BE"
     assert result.is_active is True
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "CRM_ID__c" in soql
 
 
 @pytest.mark.asyncio
@@ -921,6 +925,7 @@ async def test_get_company_profile_happy_path(
         [
             {
                 "Id": "001gK00000PqRStUAA",
+                "CRM_ID__c": "11111111-2222-4333-8444-555555555555",
                 "Name": "Acme NV",
                 "VAT_Number__c": "BE0123456789",
                 "BillingStreet": "Stationsstraat 12",
@@ -939,6 +944,7 @@ async def test_get_company_profile_happy_path(
 
     assert result is not None
     assert result.id == "001gK00000PqRStUAA"
+    assert result.crm_id == "11111111-2222-4333-8444-555555555555"
     assert result.name == "Acme NV"
     assert result.city == "Brussel"
     assert result.is_active is True

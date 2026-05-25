@@ -93,6 +93,9 @@ class CompanySummary(BaseModel):
 
 class CompanyDetails(BaseModel):
     id: str
+    crm_id: str | None = Field(
+        default=None, description="CRM_ID__c UUID v4 (canonical cross-team id)"
+    )
     name: str
     vat_number: str | None = None
     street: str | None = None
@@ -116,6 +119,9 @@ class CompanyProfile(BaseModel):
     """Full company details with linked contact count."""
 
     id: str
+    crm_id: str | None = Field(
+        default=None, description="CRM_ID__c UUID v4 (canonical cross-team id)"
+    )
     name: str
     vat_number: str | None = None
     street: str | None = None
