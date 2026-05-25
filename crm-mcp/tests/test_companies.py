@@ -949,6 +949,8 @@ async def test_get_company_profile_happy_path(
     assert result.city == "Brussel"
     assert result.is_active is True
     assert result.contact_count == 5
+    soql = fake_sf_client.query.await_args.args[0]
+    assert "CRM_ID__c" in soql
 
 
 @pytest.mark.asyncio
