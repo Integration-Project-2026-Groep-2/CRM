@@ -529,11 +529,12 @@ def build_server(
         country: str | None = None,
         is_active: bool | None = None,
     ) -> MutationResult:
-        """Patch a Company by CRM_ID__c and broadcast C19 `<CompanyUpdated>`.
+        """Patch a Company and broadcast C19 `<CompanyUpdated>`.
 
-        Partial-update: omitted fields stay as-is in Salesforce. `crm_id` is
-        the UUID v4 stamped on the record at create-time (not the Salesforce
-        Id). `street` and `house_number` must be updated together.
+        Partial-update: omitted fields stay as-is in Salesforce. `crm_id`
+        accepts either the CRM_ID__c UUID v4 or the Salesforce Account Id
+        (001-prefix, returned as `id` by the company read tools). `street` and
+        `house_number` must be updated together.
         """
         return await company_tools.update_company(
             client,
@@ -563,8 +564,10 @@ def build_server(
     async def delete_company(crm_id: str, hard: bool = False) -> MutationResult:
         """Soft-delete a Company (IsActive__c=false) and broadcast C23 `<CompanyDeactivated>`.
 
-        `hard=True` is rejected — XSD has no hard-delete contract and project
-        policy is GDPR soft-delete only.
+        `crm_id` accepts the CRM_ID__c UUID v4 or the Salesforce Account Id
+        (001-prefix, returned as `id` by the company read tools). `hard=True`
+        is rejected — XSD has no hard-delete contract and project policy is
+        GDPR soft-delete only.
         """
         return await company_tools.delete_company(client, publisher, crm_id=crm_id, hard=hard)
 
