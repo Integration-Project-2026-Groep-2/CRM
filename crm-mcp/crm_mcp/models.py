@@ -85,6 +85,9 @@ class CompanyContactSummary(BaseModel):
 
 class CompanySummary(BaseModel):
     id: str = Field(description="Salesforce 18-character Account Id")
+    crm_id: str | None = Field(
+        default=None, description="CRM_ID__c UUID v4 (canonical cross-team id)"
+    )
     name: str
     vat_number: str | None = None
     country: str | None = Field(default=None, description="ISO 3166-1 alpha-2")

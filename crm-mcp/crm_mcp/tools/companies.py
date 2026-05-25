@@ -104,7 +104,7 @@ async def search_company(
     pattern = f"%{escape_soql_like(stripped)}%"
 
     soql = (
-        "SELECT Id, Name, VAT_Number__c, BillingCountryCode "
+        "SELECT Id, CRM_ID__c, Name, VAT_Number__c, BillingCountryCode "
         "FROM Account "
         f"WHERE (Name LIKE '{pattern}' OR VAT_Number__c LIKE '{pattern}') "
         "ORDER BY Name "
@@ -114,6 +114,7 @@ async def search_company(
     return [
         CompanySummary(
             id=r["Id"],
+            crm_id=r.get(_CRM_ID_FIELD),
             name=r.get("Name") or "",
             vat_number=r.get("VAT_Number__c"),
             country=r.get("BillingCountryCode"),
@@ -287,7 +288,7 @@ async def list_companies(
 
     where_clause = f"WHERE {' AND '.join(clauses)} " if clauses else ""
     soql = (
-        f"SELECT Id, Name, VAT_Number__c, BillingCountryCode "
+        f"SELECT Id, CRM_ID__c, Name, VAT_Number__c, BillingCountryCode "
         f"FROM Account "
         f"{where_clause}"
         f"ORDER BY Name "
@@ -297,6 +298,7 @@ async def list_companies(
     return [
         CompanySummary(
             id=r["Id"],
+            crm_id=r.get(_CRM_ID_FIELD),
             name=r.get("Name") or "",
             vat_number=r.get("VAT_Number__c"),
             country=r.get("BillingCountryCode"),
@@ -330,7 +332,7 @@ async def get_recent_companies(
     date_field = "CreatedDate" if mode == "created" else "LastModifiedDate"
 
     soql = (
-        f"SELECT Id, Name, VAT_Number__c, BillingCountryCode, {date_field} "
+        f"SELECT Id, CRM_ID__c, Name, VAT_Number__c, BillingCountryCode, {date_field} "
         f"FROM Account "
         f"WHERE {date_field} >= {threshold} "
         f"ORDER BY {date_field} DESC "
@@ -340,6 +342,7 @@ async def get_recent_companies(
     return [
         CompanySummary(
             id=r["Id"],
+            crm_id=r.get(_CRM_ID_FIELD),
             name=r.get("Name") or "",
             vat_number=r.get("VAT_Number__c"),
             country=r.get("BillingCountryCode"),
