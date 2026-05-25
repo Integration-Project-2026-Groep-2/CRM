@@ -55,6 +55,10 @@ async def run_heartbeat(connection: AbstractRobustConnection, config: Config) ->
 
     logger.info("Heartbeat task started (interval=%ds)", config.heartbeat_interval_seconds)
 
+    # R3 demo fault: intentional crash so CRM stops heartbeating (watchdog ->
+    # heartbeat_failed -> incident pipeline). Revert this commit to restore.
+    raise RuntimeError("R3-TEST: intentional heartbeat crash to validate incident diagnosis")
+
     while True:
         try:
             # (Re)create channel if needed — handles first start + recovery
