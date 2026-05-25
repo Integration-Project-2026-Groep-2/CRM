@@ -24,6 +24,18 @@ jobs:
 
       - uses: ./.github/actions/setup-python-env
 
+      - name: Block intentional-crash strings (R3-TEST / intentional crash)
+        run: |
+          set +e
+          FOUND=$(grep -rn --include="*.py" -iE "R3-TEST|intentional crash" src/)
+          set -e
+          if [ -n "$FOUND" ]; then
+            echo "::error::Crash-test strings detected in src/ — remove before merging to main:"
+            echo "$FOUND"
+            exit 1
+          fi
+          echo "No crash-test strings found."
+
       - name: Lint
         run: ruff check src/ tests/
 
