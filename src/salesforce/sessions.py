@@ -1,9 +1,10 @@
 """Session_Registration__c SObject operations.
 
-Covers the per-participant session registration lifecycle used by Contracts
-1 (registration created), 2 (update/cancel), 11 (session updated), and 16
-(payment confirmed). Session_Registration__c is the canonical per-participant
-record; Contacts aggregate information across multiple registrations.
+DEPRECATED write path: since 2026-04-29 session participation is owned by
+Planning, not CRM. The upsert/activate/deactivate helpers below remain only for
+migration and log a warning when called; payment confirmation now writes the
+timestamp directly on the Contact (see ``payments.py``). The read helpers stay
+for querying historical Session_Registration__c rows.
 """
 
 import asyncio
