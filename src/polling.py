@@ -525,7 +525,8 @@ def _build_company_deactivation_data(account: dict, deactivated_at: str) -> dict
 # within a container lifetime so a transient SF error on the back-write
 # doesn't cause the same record to be published twice with different
 # canonical ids.
-_pending_crm_ids: dict[str, str] = {}
+_PENDING_CRM_IDS_CAP = 5_000
+_pending_crm_ids: collections.OrderedDict[str, str] = collections.OrderedDict()
 
 
 def _assign_local_crm_id(record: dict) -> tuple[dict, bool]:
@@ -552,6 +553,8 @@ def _assign_local_crm_id(record: dict) -> tuple[dict, bool]:
     record["CRM_ID__c"] = cached or str(uuid.uuid4())
     if sf_id:
         _pending_crm_ids[sf_id] = record["CRM_ID__c"]
+        while len(_pending_crm_ids) > _PENDING_CRM_IDS_CAP:
+            _pending_crm_ids.popitem(last=False)
     return record, True
 
 

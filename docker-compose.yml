@@ -16,6 +16,8 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+    mem_limit: 512m
+    memswap_limit: 512m
 
   rabbitmq:
     image: rabbitmq:3.13-management
@@ -27,3 +29,5 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    mem_limit: 512m
+    memswap_limit: 512m
